@@ -116,7 +116,9 @@ export function AuthRegisterPage() {
         return;
       }
 
-      if (data.user) {
+      if (data.session) {
+        navigate('/dashboard');
+      } else if (data.user) {
         setEmailSent(true);
         toast('Confirmation email sent! Check your inbox.', 'success');
       }
