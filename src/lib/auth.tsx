@@ -40,15 +40,23 @@ async function checkAndCreateProfile(sessionUser: import('@supabase/supabase-js'
     return { user: u, clinic: c };
   }
 
-  const metadata = sessionUser.user_metadata;
-  if (metadata && metadata.role === 'admin') {
+  const metadata = sessionUser.user_metadata || {};
+  
+  // Fallback for broken accounts that were registered without proper metadata
+  const role = metadata.role || 'admin';
+  const clinicName = metadata.clinic_name || 'My Clinic';
+  const ownerName = metadata.owner_name || sessionUser.email?.split('@')[0] || 'Admin';
+  const phone = metadata.phone || '0000000000';
+  const city = metadata.city || 'Unknown';
+
+  if (role === 'admin') {
     const { data: newClinic, error: clinicError } = await supabase
       .from('clinics')
       .insert({
-        name: metadata.clinic_name,
-        owner_name: metadata.owner_name,
-        phone: metadata.phone,
-        city: metadata.city,
+        name: clinicName,
+        owner_name: ownerName,
+        phone: phone,
+        city: city,
         email: sessionUser.email,
       })
       .select()
@@ -63,9 +71,9 @@ async function checkAndCreateProfile(sessionUser: import('@supabase/supabase-js'
       .insert({
         user_id: sessionUser.id,
         clinic_id: newClinic.clinic_id,
-        name: metadata.owner_name,
+        name: ownerName,
         email: sessionUser.email,
-        phone: metadata.phone,
+        phone: phone,
         role: 'admin',
         active: true,
         password_hash: 'supabase-auth',
