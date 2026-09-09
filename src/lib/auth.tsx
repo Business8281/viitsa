@@ -74,6 +74,10 @@ async function checkAndCreateProfile(sessionUser: import('@supabase/supabase-js'
       .single();
 
     if (userError || !newUser) {
+      const { user: fallbackUser, clinic: fallbackClinic } = await loadProfile(sessionUser.email ?? '');
+      if (fallbackUser) {
+        return { user: fallbackUser, clinic: fallbackClinic };
+      }
       return { user: null, clinic: null };
     }
 
