@@ -6,7 +6,7 @@ import { useAuth } from '../lib/auth';
 import { useClinicData } from '../lib/useClinicData';
 import { useToast } from '../lib/toast';
 import { Modal } from '../components/Modal';
-import { InvoicePrintView } from '../components/InvoicePrintView';
+import { InvoiceView } from '../components/InvoiceView';
 import { EmptyState, Loading } from '../components/ui';
 import { formatDate, formatTime, statusBadgeClass, todayISO } from '../lib/format';
 import type { Bill, Invoice, Patient, User as U } from '../lib/types';
