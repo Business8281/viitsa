@@ -13,7 +13,8 @@ import { FamilyVault } from './FamilyVault';
 import { HealthTimeline } from './HealthTimeline';
 import { PatientDoctorSearch } from './PatientDoctorSearch';
 import { PatientBottomNav, type PatientTab } from './PatientBottomNav';
-import { supabase } from '../lib/supabase';
+import { db } from '../lib/firebase';
+import { collection, query, where, getDocs } from 'firebase/firestore';
 import type { TriageSummary } from '../lib/aiService';
 
 type PatientScreen = 'landing' | 'auth' | 'app';
@@ -45,22 +46,20 @@ function PatientInner() {
 
   useEffect(() => {
     if (!account || !clinicId) return;
-    supabase
-      .from('patient_clinic_links')
-      .select('patient_id')
-      .eq('account_id', account.account_id)
-      .eq('clinic_id', clinicId)
-      .maybeSingle()
-      .then(({ data }) => {
-        if (data) setPatientId((data as { patient_id: string }).patient_id);
-      });
+    const q = query(collection(db, 'patient_clinic_links'), where('account_id', '==', account.account_id), where('clinic_id', '==', clinicId));
+    getDocs(q).then((snap) => {
+      if (!snap.empty) {
+        setPatientId(snap.docs[0].data().patient_id);
+      }
+    });
   }, [account, clinicId]);
 
   useEffect(() => {
     if (!patientId) return;
-    supabase.from('invoices').select('invoice_id', { count: 'exact' })
-      .eq('patient_id', patientId).eq('payment_status', 'pending')
-      .then(({ count }) => setPendingInvoiceCount(count ?? 0));
+    const q = query(collection(db, 'invoices'), where('patient_id', '==', patientId), where('payment_status', '==', 'pending'));
+    getDocs(q).then(snap => {
+      setPendingInvoiceCount(snap.size);
+    });
   }, [patientId]);
 
   useEffect(() => {

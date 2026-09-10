@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { Search, UserPlus, Phone, Droplet, AlertCircle, FileText, ChevronRight } from 'lucide-react';
-import { supabase } from '../lib/supabase';
+import { db } from '../lib/firebase';
+import { collection, addDoc } from 'firebase/firestore';
 import { useAuth } from '../lib/auth';
 import { useClinicData } from '../lib/useClinicData';
 import { useToast } from '../lib/toast';
@@ -185,12 +186,14 @@ function PatientFormModal({
       emergency_contact_name: form.emergency_name.trim() || null,
       emergency_contact_phone: form.emergency_phone.trim() || null,
     };
-    const { error } = await supabase.from('patients').insert(payload);
-    setSaving(false);
-    if (error) {
+    try {
+      await addDoc(collection(db, 'patients'), payload);
+    } catch (error) {
+      setSaving(false);
       toast('Unable to register patient. Please try again.', 'error');
       return;
     }
+    setSaving(false);
     toast(`${payload.name} registered successfully.`, 'success');
     reset();
     onSaved();

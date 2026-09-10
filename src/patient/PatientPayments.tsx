@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { ChevronLeft, Download, Share2, CheckCircle, Clock } from 'lucide-react';
-import { supabase } from '../lib/supabase';
+import { db } from '../lib/firebase';
+import { collection, query, where, orderBy, getDocs, updateDoc, doc, getDoc } from 'firebase/firestore';
 import { formatDate, formatRs } from '../lib/format';
 import type { Invoice, Clinic } from '../lib/types';
 import type { PatientTab } from './PatientBottomNav';
@@ -11,21 +12,30 @@ export function PatientPayments({ patientId, onTab }: Props) {
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [selected, setSelected] = useState<Invoice | null>(null);
 
-  useEffect(() => {
+  const fetchInvoices = async () => {
     if (!patientId) return;
-    supabase
-      .from('invoices')
-      .select('*, patient:patients(*), clinic:clinics(*)')
-      .eq('patient_id', patientId)
-      .order('created_at', { ascending: false })
-      .then(({ data }) => setInvoices((data as Invoice[] | null) ?? []));
+    const q = query(collection(db, 'invoices'), where('patient_id', '==', patientId), orderBy('created_at', 'desc'));
+    const snap = await getDocs(q);
+    const invs = snap.docs.map(d => d.data() as Invoice);
+    // Fetch clinic details for each invoice
+    for (const inv of invs) {
+      if (inv.clinic_id) {
+        const cSnap = await getDoc(doc(db, 'clinics', inv.clinic_id));
+        if (cSnap.exists()) {
+          inv.clinic = cSnap.data() as Clinic;
+        }
+      }
+    }
+    setInvoices(invs);
+  };
+
+  useEffect(() => {
+    fetchInvoices();
   }, [patientId]);
 
   if (selected) {
     return <InvoiceDetail invoice={selected} onBack={() => setSelected(null)} onRefresh={() => {
-      supabase.from('invoices').select('*, patient:patients(*), clinic:clinics(*)')
-        .eq('patient_id', patientId ?? '').order('created_at', { ascending: false })
-        .then(({ data }) => { setInvoices((data as Invoice[] | null) ?? []); setSelected(null); });
+      fetchInvoices().then(() => setSelected(null));
     }} />;
   }
 
@@ -80,8 +90,8 @@ function InvoiceDetail({ invoice, onBack, onRefresh }: { invoice: Invoice; onBac
     if (!upiRef.trim()) return;
     setMarking(true);
     // Update invoice status to 'partial' (pending verification)
-    await supabase.from('invoices').update({ payment_status: 'partial', upi_ref: upiRef, notes: 'Patient marked as paid via UPI - pending clinic verification' }).eq('invoice_id', invoice.invoice_id);
-    await supabase.from('billing').update({ payment_status: 'partial', upi_ref: upiRef, notes: 'Patient marked as paid via UPI - pending clinic verification' }).eq('bill_id', invoice.bill_id);
+    await updateDoc(doc(db, 'invoices', invoice.invoice_id), { payment_status: 'partial', upi_ref: upiRef, notes: 'Patient marked as paid via UPI - pending clinic verification' });
+    await updateDoc(doc(db, 'billing', invoice.bill_id), { payment_status: 'partial', upi_ref: upiRef, notes: 'Patient marked as paid via UPI - pending clinic verification' });
     setMarking(false);
     onRefresh();
   };

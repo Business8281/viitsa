@@ -21,7 +21,8 @@ import {
   ChevronDown,
   ChevronUp,
 } from 'lucide-react';
-import { supabase } from '../lib/supabase';
+import { db } from '../lib/firebase';
+import { collection, query, where, getDocs, orderBy, limit, addDoc, updateDoc, doc } from 'firebase/firestore';
 import { useAuth } from '../lib/auth';
 import { useClinicData } from '../lib/useClinicData';
 import { useToast } from '../lib/toast';
@@ -92,8 +93,12 @@ export function AINavigatorScreen() {
 
   useEffect(() => {
     if (!clinic) return;
-    supabase.from('users').select('user_id, name, specialisation').eq('clinic_id', clinic.clinic_id).eq('role', 'doctor').eq('active', true)
-      .then(({ data }) => setClinicContext({ doctors: (data ?? []) as { user_id: string; name: string; specialisation: string | null }[] }));
+    const fetchDoctors = async () => {
+      const q = query(collection(db, 'users'), where('clinic_id', '==', clinic.clinic_id), where('role', '==', 'doctor'), where('active', '==', true));
+      const snap = await getDocs(q);
+      setClinicContext({ doctors: snap.docs.map(d => { const dt = d.data(); return { user_id: d.id, name: dt.name, specialisation: dt.specialisation }; }) });
+    };
+    fetchDoctors();
   }, [clinic]);
 
   // Auto-select first patient
@@ -106,9 +111,13 @@ export function AINavigatorScreen() {
 
   useEffect(() => {
     if (!selectedPatient) return;
-    supabase.from('vitals').select('*').eq('patient_id', selectedPatient.patient_id)
-      .order('recorded_at', { ascending: false }).limit(1).maybeSingle()
-      .then(({ data }) => setVitals(data as Vital | null));
+    const fetchVitals = async () => {
+      const q = query(collection(db, 'vitals'), where('patient_id', '==', selectedPatient.patient_id), orderBy('recorded_at', 'desc'), limit(1));
+      const snap = await getDocs(q);
+      if (!snap.empty) setVitals(snap.docs[0].data() as Vital);
+      else setVitals(null);
+    };
+    fetchVitals();
     const latestAppt = appointments.filter((a) => a.patient_id === selectedPatient.patient_id)
       .sort((a, b) => (a.date > b.date ? -1 : 1))[0];
     setAppt(latestAppt ?? null);
@@ -155,32 +164,30 @@ export function AINavigatorScreen() {
     if (clinic && selectedPatient) {
       const allMessages = aiHistory.current.map((m) => ({ role: m.role, content: m.content }));
       if (!conversationId) {
-        const { data } = await supabase
-          .from('ai_conversations')
-          .insert({
-            clinic_id: clinic.clinic_id,
-            patient_id: selectedPatient.patient_id,
-            appt_id: appt?.appt_id ?? null,
-            messages: allMessages,
-            detected_language: language,
-            triage_level: response.rawLevel,
-            triage_summary: response.summary ?? null,
-          })
-          .select('conversation_id')
-          .maybeSingle();
-        if (data?.conversation_id) setConversationId(data.conversation_id);
+        const docRef = await addDoc(collection(db, 'ai_conversations'), {
+          clinic_id: clinic.clinic_id,
+          patient_id: selectedPatient.patient_id,
+          appointment_id: appt?.appointment_id ?? null,
+          messages: allMessages,
+          detected_language: language,
+          triage_level: response.rawLevel,
+          triage_summary: response.summary ?? null,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        });
+        setConversationId(docRef.id);
       } else {
-        await supabase.from('ai_conversations').update({
+        await updateDoc(doc(db, 'ai_conversations', conversationId), {
           messages: allMessages,
           triage_level: response.rawLevel,
           triage_summary: response.summary ?? null,
           updated_at: new Date().toISOString(),
-        }).eq('conversation_id', conversationId);
+        });
       }
 
       // Escalate appointment triage if urgent
-      if (response.rawLevel !== 'normal' && appt) {
-        await supabase.from('appointments').update({ triage_level: response.rawLevel }).eq('appt_id', appt.appt_id);
+      if (response.rawLevel !== 'normal' && appt && appt.appointment_id) {
+        await updateDoc(doc(db, 'appointments', appt.appointment_id), { triage_level: response.rawLevel });
         if (response.rawLevel === 'urgent') {
           toast('Doctor notified — patient moved to top of queue.', 'warning');
         }
@@ -246,10 +253,10 @@ export function AINavigatorScreen() {
 
   const saveReview = async () => {
     if (!reviewEdit || !conversationId) return;
-    await supabase.from('ai_conversations').update({
+    await updateDoc(doc(db, 'ai_conversations', conversationId), {
       doctor_review: { ...reviewEdit, reviewed_by: user?.name, reviewed_at: new Date().toISOString() },
       updated_at: new Date().toISOString(),
-    }).eq('conversation_id', conversationId);
+    });
     setTriage(reviewEdit);
     setReviewSaved(true);
     setShowReview(false);

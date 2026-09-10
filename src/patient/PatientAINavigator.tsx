@@ -18,7 +18,8 @@ import {
   User,
   Stethoscope,
 } from 'lucide-react';
-import { supabase } from '../lib/supabase';
+import { db } from '../lib/firebase';
+import { collection, query, where, getDocs, getDoc, doc, addDoc, updateDoc } from 'firebase/firestore';
 import { usePatientAuth } from '../lib/patientAuth';
 import {
   buildSystemPrompt,
@@ -104,15 +105,19 @@ export function PatientAINavigator({ onTab, clinicId, patientId, onBookWithSumma
   useEffect(() => {
     if (!clinicId) return;
     Promise.all([
-      supabase.from('clinics').select('name, city, working_hours').eq('clinic_id', clinicId).maybeSingle(),
-      supabase.from('users').select('user_id, name, specialisation').eq('clinic_id', clinicId).eq('role', 'doctor').eq('active', true),
-    ]).then(([clinicRes, doctorsRes]) => {
-      if (clinicRes.data) {
+      getDoc(doc(db, 'clinics', clinicId)),
+      getDocs(query(collection(db, 'users'), where('clinic_id', '==', clinicId), where('role', '==', 'doctor'), where('active', '==', true))),
+    ]).then(([clinicSnap, doctorsSnap]) => {
+      if (clinicSnap.exists()) {
+        const cData = clinicSnap.data();
         setClinicContext({
-          name: clinicRes.data.name,
-          city: clinicRes.data.city,
-          working_hours: clinicRes.data.working_hours,
-          doctors: (doctorsRes.data ?? []) as { user_id: string; name: string; specialisation: string | null }[],
+          name: cData.name,
+          city: cData.city,
+          working_hours: cData.working_hours,
+          doctors: doctorsSnap.docs.map(d => {
+            const data = d.data();
+            return { user_id: d.id, name: data.name, specialisation: data.specialisation };
+          }),
         });
       }
     });
@@ -164,37 +169,31 @@ export function PatientAINavigator({ onTab, clinicId, patientId, onBookWithSumma
     if (clinicId && patientId) {
       const allMessages = aiHistory.current.map((m) => ({ role: m.role, content: m.content }));
       if (!conversationId) {
-        const { data } = await supabase
-          .from('ai_conversations')
-          .insert({
-            clinic_id: clinicId,
-            patient_id: patientId,
-            account_id: account?.account_id ?? null,
-            messages: allMessages,
-            detected_language: language,
-            triage_level: response.rawLevel,
-            triage_summary: response.summary ?? null,
-          })
-          .select('conversation_id')
-          .maybeSingle();
-        if (data?.conversation_id) setConversationId(data.conversation_id);
+        const docRef = await addDoc(collection(db, 'ai_conversations'), {
+          clinic_id: clinicId,
+          patient_id: patientId,
+          account_id: account?.account_id ?? null,
+          messages: allMessages,
+          detected_language: language,
+          triage_level: response.rawLevel,
+          triage_summary: response.summary ?? null,
+        });
+        await updateDoc(docRef, { conversation_id: docRef.id });
+        setConversationId(docRef.id);
       } else {
-        await supabase
-          .from('ai_conversations')
-          .update({
-            messages: allMessages,
-            triage_level: response.rawLevel,
-            triage_summary: response.summary ?? null,
-            updated_at: new Date().toISOString(),
-          })
-          .eq('conversation_id', conversationId);
+        await updateDoc(doc(db, 'ai_conversations', conversationId), {
+          messages: allMessages,
+          triage_level: response.rawLevel,
+          triage_summary: response.summary ?? null,
+          updated_at: new Date().toISOString(),
+        });
       }
     }
 
     // Legacy ai_sessions save on definitive triage
     if (response.summary && !saved && clinicId && patientId) {
       setSaved(true);
-      await supabase.from('ai_sessions').insert({
+      await addDoc(collection(db, 'ai_sessions'), {
         patient_id: patientId,
         clinic_id: clinicId,
         symptoms_entered: userText,

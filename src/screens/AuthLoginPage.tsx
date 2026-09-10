@@ -1,12 +1,13 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import {
   Mail, Lock, ArrowRight, Zap, Shield, CheckCircle, Home, ArrowLeft, Eye, EyeOff,
   AlertCircle, Smartphone, KeyRound,
 } from 'lucide-react';
 import { useAuth } from '../lib/auth';
-import { supabase } from '../lib/supabase';
 import { ViitsaLogo } from '../components/ViitsaLogo';
+import { auth } from '../lib/firebase';
+import { RecaptchaVerifier, signInWithPhoneNumber, sendPasswordResetEmail, isSignInWithEmailLink } from 'firebase/auth';
 
 type LoginMode = 'password' | 'email-otp' | 'mobile-otp';
 
@@ -22,8 +23,28 @@ export function AuthLoginPage() {
   const [showForgot, setShowForgot] = useState(false);
   const [resetSent, setResetSent] = useState(false);
   const [otpSent, setOtpSent] = useState(false);
+  const [confirmationResult, setConfirmationResult] = useState<any>(null);
   const navigate = useNavigate();
   const { login, loginWithOtp, verifyEmailOtp } = useAuth();
+  
+  // Auto-verify email links on mount
+  useEffect(() => {
+    if (isSignInWithEmailLink(auth, window.location.href)) {
+      setMode('email-otp');
+      setOtpSent(true);
+      setLoading(true);
+      // Wait a tick to allow Firebase to initialize if needed
+      setTimeout(async () => {
+        const result = await verifyEmailOtp('', ''); // email/otp is handled inside verifyEmailOtp
+        if (result.ok) {
+          navigate('/dashboard');
+        } else {
+          setError(result.error || 'Invalid verification link');
+          setLoading(false);
+        }
+      }, 500);
+    }
+  }, []);
 
   const handlePasswordLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -74,14 +95,18 @@ export function AuthLoginPage() {
     }
     setLoading(true);
     const fullPhone = clean.length === 10 ? `+91${clean}` : `+${clean}`;
-    const { error: otpError } = await supabase.auth.signInWithOtp({
-      phone: fullPhone,
-      options: { channel: 'sms' },
-    });
-    if (otpError) {
-      setError('Unable to send login code.');
-    } else {
+    
+    try {
+      if (!(window as any).recaptchaVerifierAuthLogin) {
+        (window as any).recaptchaVerifierAuthLogin = new RecaptchaVerifier(auth, 'recaptcha-container-login', {
+          size: 'invisible'
+        });
+      }
+      const confirmation = await signInWithPhoneNumber(auth, fullPhone, (window as any).recaptchaVerifierAuthLogin);
+      setConfirmationResult(confirmation);
       setOtpSent(true);
+    } catch (err: any) {
+      setError(err.message || 'Unable to send login code.');
     }
     setLoading(false);
   };
@@ -89,21 +114,15 @@ export function AuthLoginPage() {
   const handleVerifyMobileOtp = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
-    const clean = phone.replace(/\D/g, '');
-    const fullPhone = clean.length === 10 ? `+91${clean}` : `+${clean}`;
+    if (!confirmationResult) return;
     setLoading(true);
-    const { data, error: verifyError } = await supabase.auth.verifyOtp({
-      phone: fullPhone,
-      token: otp,
-      type: 'sms',
-    });
-    if (verifyError || !data.user) {
+    try {
+      await confirmationResult.confirm(otp);
+      // Mobile OTP users go to patient portal
+      navigate('/patient');
+    } catch (err) {
       setError('Invalid verification code.');
-      setLoading(false);
-      return;
     }
-    // Mobile OTP users go to patient portal
-    navigate('/patient');
     setLoading(false);
   };
 
@@ -112,14 +131,10 @@ export function AuthLoginPage() {
     setError('');
     setLoading(true);
     try {
-      const { error: resetError } = await supabase.auth.resetPasswordForEmail(
-        email.trim().toLowerCase(),
-        { redirectTo: `${window.location.origin}/login` },
-      );
-      if (resetError) throw resetError;
+      await sendPasswordResetEmail(auth, email.trim().toLowerCase());
       setResetSent(true);
-    } catch (err) {
-      setError('Unable to send reset email. Please try again.');
+    } catch (err: any) {
+      setError(err.message || 'Unable to send reset email. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -133,12 +148,13 @@ export function AuthLoginPage() {
 
   const modeTabs: { key: LoginMode; label: string; icon: React.ComponentType<{ size?: number }> }[] = [
     { key: 'password', label: 'Password', icon: Lock },
-    { key: 'email-otp', label: 'Email OTP', icon: Mail },
+    { key: 'email-otp', label: 'Email Link', icon: Mail },
     { key: 'mobile-otp', label: 'Mobile OTP', icon: Smartphone },
   ];
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-emerald-50/30 flex">
+      <div id="recaptcha-container-login"></div>
       {/* Left Side - Login Form */}
       <div className="flex-1 flex items-center justify-center p-6 sm:p-8">
         <div className="w-full max-w-md">
@@ -267,7 +283,7 @@ export function AuthLoginPage() {
                     disabled={loading}
                     className="w-full inline-flex items-center justify-center gap-2 px-6 py-3.5 bg-gradient-to-r from-emerald-500 to-teal-500 text-white font-semibold rounded-xl shadow-lg shadow-emerald-500/25 hover:shadow-xl transition-all disabled:opacity-50"
                   >
-                    {loading ? 'Sending…' : <>Send Login Code <KeyRound className="w-5 h-5" /></>}
+                    {loading ? 'Sending…' : <>Send Login Link <KeyRound className="w-5 h-5" /></>}
                   </button>
                 </form>
               )}
@@ -276,10 +292,10 @@ export function AuthLoginPage() {
                 <form onSubmit={handleVerifyEmailOtp} className="space-y-5">
                   <div className="bg-emerald-50 border border-emerald-100 text-emerald-700 text-sm px-4 py-3 rounded-xl flex items-start gap-2">
                     <CheckCircle size={16} className="shrink-0 mt-0.5" />
-                    <span>Code sent to <strong>{email}</strong>. Check your inbox.</span>
+                    <span>Link sent to <strong>{email}</strong>. Check your inbox and click the link to sign in. (Leave this window open).</span>
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-slate-700 mb-1.5">Enter code</label>
+                    <label className="block text-sm font-medium text-slate-700 mb-1.5">Enter code (if applicable)</label>
                     <input
                       type="text"
                       value={otp}
@@ -289,12 +305,11 @@ export function AuthLoginPage() {
                       inputMode="numeric"
                       maxLength={6}
                       autoFocus
-                      required
                     />
                   </div>
                   <button
                     type="submit"
-                    disabled={loading || otp.length < 6}
+                    disabled={loading}
                     className="w-full inline-flex items-center justify-center gap-2 px-6 py-3.5 bg-gradient-to-r from-emerald-500 to-teal-500 text-white font-semibold rounded-xl shadow-lg shadow-emerald-500/25 hover:shadow-xl transition-all disabled:opacity-50"
                   >
                     {loading ? 'Verifying…' : <>Verify & Sign In <ArrowRight className="w-5 h-5" /></>}

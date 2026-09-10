@@ -1,6 +1,8 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
-import { supabase } from './supabase';
-import type { PatientAccount, Clinic } from './types';
+import { auth, db } from './firebase';
+import { RecaptchaVerifier, signInWithPhoneNumber, signOut, ConfirmationResult } from 'firebase/auth';
+import { doc, getDoc, setDoc, updateDoc, collection, query, where, getDocs, addDoc } from 'firebase/firestore';
+import type { PatientAccount, Clinic, Patient } from './types';
 
 const STORAGE_KEY = 'viitsa_patient_v1';
 
@@ -40,10 +42,20 @@ export function PatientAuthProvider({ children }: { children: React.ReactNode })
   const [clinic, setClinic] = useState<Clinic | null>(null);
   const [clinicId, setClinicIdState] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [confirmationResult, setConfirmationResult] = useState<ConfirmationResult | null>(null);
 
   const fetchAccount = useCallback(async (account_id: string) => {
-    const { data } = await supabase.from('patient_accounts').select('*').eq('account_id', account_id).maybeSingle();
-    setAccount((data as PatientAccount | null) ?? null);
+    try {
+      const docRef = doc(db, 'patient_accounts', account_id);
+      const docSnap = await getDoc(docRef);
+      if (docSnap.exists()) {
+        setAccount({ ...docSnap.data(), account_id: docSnap.id } as PatientAccount);
+      } else {
+        setAccount(null);
+      }
+    } catch (e) {
+      setAccount(null);
+    }
   }, []);
 
   useEffect(() => {
@@ -61,8 +73,12 @@ export function PatientAuthProvider({ children }: { children: React.ReactNode })
 
   useEffect(() => {
     if (!clinicId) return;
-    supabase.from('clinics').select('*').eq('clinic_id', clinicId).maybeSingle()
-      .then(({ data }) => setClinic((data as Clinic | null) ?? null));
+    getDoc(doc(db, 'clinics', clinicId))
+      .then((docSnap) => {
+        if (docSnap.exists()) {
+          setClinic({ ...docSnap.data(), clinic_id: docSnap.id } as Clinic);
+        }
+      });
   }, [clinicId]);
 
   const setClinicId = useCallback((id: string) => setClinicIdState(id), []);
@@ -71,64 +87,72 @@ export function PatientAuthProvider({ children }: { children: React.ReactNode })
     const clean = phone.replace(/\D/g, '');
     if (clean.length < 10) return { ok: false, error: 'Enter a valid 10-digit mobile number.' };
     const fullPhone = clean.length === 10 ? `+91${clean}` : `+${clean}`;
-    const { error: otpError } = await supabase.auth.signInWithOtp({
-      phone: fullPhone,
-      options: { channel: 'sms' },
-    });
-    if (otpError) return { ok: false, error: 'Unable to send OTP. Please try again.' };
-    return { ok: true };
+    
+    try {
+      if (!window.recaptchaVerifier) {
+        window.recaptchaVerifier = new RecaptchaVerifier(auth, 'recaptcha-container', {
+          size: 'invisible'
+        });
+      }
+      const confirmation = await signInWithPhoneNumber(auth, fullPhone, window.recaptchaVerifier);
+      setConfirmationResult(confirmation);
+      return { ok: true };
+    } catch (error: any) {
+      console.error(error);
+      return { ok: false, error: error.message || 'Unable to send OTP. Please try again.' };
+    }
   }, []);
 
   const verifyOtp = useCallback(async (phone: string, otp: string) => {
-    const clean = phone.replace(/\D/g, '');
-    const fullPhone = clean.length === 10 ? `+91${clean}` : `+${clean}`;
-    const { data: otpData, error: otpError } = await supabase.auth.verifyOtp({
-      phone: fullPhone,
-      token: otp,
-      type: 'sms',
-    });
-    if (otpError || !otpData.user) return { ok: false, error: 'Unable to verify OTP. Please try again.' };
+    if (!confirmationResult) return { ok: false, error: 'Session expired. Please request OTP again.' };
+    
+    try {
+      const result = await confirmationResult.confirm(otp);
+      const authUserId = result.user.uid;
+      const clean = phone.replace(/\D/g, '');
+      
+      const q = query(collection(db, 'patient_accounts'), where('phone', '==', clean));
+      const querySnapshot = await getDocs(q);
+      
+      let acc: PatientAccount;
+      if (!querySnapshot.empty) {
+        const existingDoc = querySnapshot.docs[0];
+        acc = { ...existingDoc.data(), account_id: existingDoc.id } as PatientAccount;
+        await updateDoc(doc(db, 'patient_accounts', acc.account_id), { otp_verified: true, auth_user_id: authUserId });
+        acc = { ...acc, otp_verified: true, auth_user_id: authUserId };
+      } else {
+        const newDocRef = await addDoc(collection(db, 'patient_accounts'), {
+          phone: clean,
+          name: 'New Patient',
+          otp_verified: true,
+          auth_user_id: authUserId,
+          created_at: new Date().toISOString()
+        });
+        const newDocSnap = await getDoc(newDocRef);
+        acc = { ...newDocSnap.data(), account_id: newDocSnap.id } as PatientAccount;
+      }
 
-    const authUserId = otpData.user.id;
-    const { data: existing } = await supabase
-      .from('patient_accounts')
-      .select('*')
-      .eq('phone', clean)
-      .maybeSingle();
-
-    let acc: PatientAccount;
-    if (existing) {
-      acc = existing as PatientAccount;
-      await supabase.from('patient_accounts').update({ otp_verified: true, auth_user_id: authUserId }).eq('account_id', acc.account_id);
-      acc = { ...acc, otp_verified: true, auth_user_id: authUserId };
-    } else {
-      const { data: newAcc, error: insertError } = await supabase
-        .from('patient_accounts')
-        .insert({ phone: clean, name: 'New Patient', otp_verified: true, auth_user_id: authUserId })
-        .select('*')
-        .single();
-      if (insertError || !newAcc) return { ok: false, error: 'Unable to create account. Please try again.' };
-      acc = newAcc as PatientAccount;
+      const isNew = acc.name === 'New Patient';
+      setAccount(acc);
+      const stored: Record<string, string> = { account_id: acc.account_id };
+      if (clinicId) stored.clinic_id = clinicId;
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(stored));
+      return { ok: true, isNew };
+    } catch (error) {
+      return { ok: false, error: 'Unable to verify OTP. Please try again.' };
     }
-
-    const isNew = acc.name === 'New Patient';
-    setAccount(acc);
-    const stored: Record<string, string> = { account_id: acc.account_id };
-    if (clinicId) stored.clinic_id = clinicId;
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(stored));
-    return { ok: true, isNew };
-  }, [clinicId]);
+  }, [confirmationResult, clinicId]);
 
   const register = useCallback(async (d: RegisterData) => {
+    if (!account) return { ok: false, error: 'Not verified' };
     const clean = d.phone.replace(/\D/g, '');
     const age = d.dob ? Math.floor((Date.now() - new Date(d.dob).getTime()) / (365.25 * 24 * 60 * 60 * 1000)) : undefined;
     const medications = d.current_medications
       ? d.current_medications.split(',').map(m => m.trim()).filter(Boolean)
       : [];
 
-    const { data, error } = await supabase
-      .from('patient_accounts')
-      .update({
+    try {
+      const updates = {
         name: d.name,
         email: d.email || null,
         dob: d.dob || null,
@@ -142,46 +166,48 @@ export function PatientAuthProvider({ children }: { children: React.ReactNode })
         emergency_contact_name: d.emergency_contact_name,
         emergency_contact_phone: d.emergency_contact_phone,
         otp_verified: true,
-      })
-      .eq('phone', clean)
-      .select('*')
-      .single();
-    if (error || !data) return { ok: false, error: 'Unable to create account. Please try again.' };
-    const acc = data as PatientAccount;
-    setAccount(acc);
+      };
 
-    if (clinicId) {
-      const { data: existing } = await supabase
-        .from('patients').select('patient_id').eq('phone', clean).eq('clinic_id', clinicId).maybeSingle();
-      if (!existing) {
-        const { data: newPat } = await supabase.from('patients').insert({
-          clinic_id: clinicId,
-          name: d.name,
-          email: d.email || null,
-          dob: d.dob || null,
-          age: age ?? null,
-          gender: d.gender,
-          phone: clean,
-          blood_group: d.blood_group,
-          address: d.address || null,
-          allergies: d.allergies,
-          chronic_conditions: d.chronic_conditions,
-          current_medications: medications,
-          emergency_contact_name: d.emergency_contact_name,
-          emergency_contact_phone: d.emergency_contact_phone,
-        }).select('patient_id').single();
-        if (newPat) {
-          await supabase.from('patient_clinic_links').insert({
+      await updateDoc(doc(db, 'patient_accounts', account.account_id), updates);
+      const updatedAccSnap = await getDoc(doc(db, 'patient_accounts', account.account_id));
+      const acc = { ...updatedAccSnap.data(), account_id: updatedAccSnap.id } as PatientAccount;
+      setAccount(acc);
+
+      if (clinicId) {
+        const q = query(collection(db, 'patients'), where('phone', '==', clean), where('clinic_id', '==', clinicId));
+        const pSnap = await getDocs(q);
+        if (pSnap.empty) {
+          const newPatRef = await addDoc(collection(db, 'patients'), {
+            clinic_id: clinicId,
+            name: d.name,
+            email: d.email || null,
+            dob: d.dob || null,
+            age: age ?? null,
+            gender: d.gender,
+            phone: clean,
+            blood_group: d.blood_group,
+            address: d.address || null,
+            allergies: d.allergies,
+            chronic_conditions: d.chronic_conditions,
+            current_medications: medications,
+            emergency_contact_name: d.emergency_contact_name,
+            emergency_contact_phone: d.emergency_contact_phone,
+            created_at: new Date().toISOString()
+          });
+          
+          await addDoc(collection(db, 'patient_clinic_links'), {
             account_id: acc.account_id,
-            patient_id: (newPat as { patient_id: string }).patient_id,
+            patient_id: newPatRef.id,
             clinic_id: clinicId,
           });
         }
       }
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({ account_id: acc.account_id, clinic_id: clinicId }));
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, error: 'Unable to create account. Please try again.' };
     }
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ account_id: acc.account_id, clinic_id: clinicId }));
-    return { ok: true };
-  }, [clinicId]);
+  }, [account, clinicId]);
 
   const updateProfile = useCallback(async (d: Partial<RegisterData>) => {
     if (!account) return { ok: false, error: 'Not logged in.' };
@@ -190,7 +216,7 @@ export function PatientAuthProvider({ children }: { children: React.ReactNode })
       : undefined;
     const age = d.dob ? Math.floor((Date.now() - new Date(d.dob).getTime()) / (365.25 * 24 * 60 * 60 * 1000)) : undefined;
 
-    const updates: Record<string, unknown> = {};
+    const updates: Record<string, any> = {};
     if (d.name !== undefined) updates.name = d.name;
     if (d.email !== undefined) updates.email = d.email || null;
     if (d.dob !== undefined) { updates.dob = d.dob || null; if (age !== undefined) updates.age = age; }
@@ -203,11 +229,14 @@ export function PatientAuthProvider({ children }: { children: React.ReactNode })
     if (d.emergency_contact_name !== undefined) updates.emergency_contact_name = d.emergency_contact_name;
     if (d.emergency_contact_phone !== undefined) updates.emergency_contact_phone = d.emergency_contact_phone;
 
-    const { data, error } = await supabase.from('patient_accounts').update(updates)
-      .eq('account_id', account.account_id).select('*').single();
-    if (error || !data) return { ok: false, error: 'Unable to update profile. Please try again.' };
-    setAccount(data as PatientAccount);
-    return { ok: true };
+    try {
+      await updateDoc(doc(db, 'patient_accounts', account.account_id), updates);
+      const updatedSnap = await getDoc(doc(db, 'patient_accounts', account.account_id));
+      setAccount({ ...updatedSnap.data(), account_id: updatedSnap.id } as PatientAccount);
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, error: 'Unable to update profile. Please try again.' };
+    }
   }, [account]);
 
   const refreshAccount = useCallback(async () => {
@@ -220,7 +249,7 @@ export function PatientAuthProvider({ children }: { children: React.ReactNode })
     setClinicIdState(null);
     setClinic(null);
     localStorage.removeItem(STORAGE_KEY);
-    void supabase.auth.signOut();
+    signOut(auth);
   }, []);
 
   const value = useMemo<PatientAuthState>(
@@ -228,7 +257,12 @@ export function PatientAuthProvider({ children }: { children: React.ReactNode })
     [account, clinic, clinicId, loading, sendOtp, verifyOtp, register, updateProfile, logout, setClinicId, refreshAccount],
   );
 
-  return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
+  return (
+    <Ctx.Provider value={value}>
+      <div id="recaptcha-container"></div>
+      {children}
+    </Ctx.Provider>
+  );
 }
 
 export function usePatientAuth(): PatientAuthState {

@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef } from 'react';
 import { ChevronLeft, ChevronRight, Check, MessageCircle, Calendar, CalendarPlus, Search, MapPin, Star, Clock, Navigation, SlidersHorizontal, X, Brain } from 'lucide-react';
-import { supabase } from '../lib/supabase';
+import { db } from '../lib/firebase';
+import { collection, query, where, getDocs, addDoc, doc, getDoc, orderBy, limit } from 'firebase/firestore';
 import { usePatientAuth } from '../lib/patientAuth';
 import { sendEmail } from '../lib/emailService';
 import { formatTime, formatDate, whatsappAppointmentConfirmation, localDateISO } from '../lib/format';
@@ -89,13 +90,15 @@ export function PatientBooking({ onTab, clinic: initialClinic, patientId, aiSumm
   useEffect(() => {
     if (step === 'clinic' && clinics.length === 0) {
       setLoadingClinics(true);
-      supabase.from('clinics').select('*')
-        .then(({ data, error }) => {
+      getDocs(collection(db, 'clinics'))
+        .then((snap) => {
           setLoadingClinics(false);
-          if (!error && data) {
-            setClinics(data as Clinic[]);
-            setFiltered(data as Clinic[]);
-          }
+          const data = snap.docs.map(d => d.data() as Clinic);
+          setClinics(data);
+          setFiltered(data);
+        })
+        .catch(() => {
+          setLoadingClinics(false);
         });
     }
   }, [step, clinics.length]);
@@ -143,19 +146,19 @@ export function PatientBooking({ onTab, clinic: initialClinic, patientId, aiSumm
   };
 
   // Load doctors when clinic is selected
-  useEffect(() => {
     if (!clinic) return;
-    supabase.from('users').select('*').eq('clinic_id', clinic.clinic_id).eq('role', 'doctor').eq('active', true)
-      .then(({ data }) => setDoctors((data as User[] | null) ?? []));
+    const q = query(collection(db, 'users'), where('clinic_id', '==', clinic.clinic_id), where('role', '==', 'doctor'), where('active', '==', true));
+    getDocs(q).then((snap) => setDoctors(snap.docs.map(d => d.data() as User)));
   }, [clinic]);
 
   // Load taken slots
-  useEffect(() => {
     if (!selectedDoctor || !clinic) return;
     const iso = localDateISO(selectedDate);
-    supabase.from('appointments').select('time_slot').eq('doctor_id', selectedDoctor.user_id).eq('date', iso)
-      .neq('status', 'cancelled')
-      .then(({ data }) => setTakenSlots((data as { time_slot: string }[] | null)?.map(r => r.time_slot) ?? []));
+    const q = query(collection(db, 'appointments'), where('doctor_id', '==', selectedDoctor.user_id), where('date', '==', iso));
+    getDocs(q).then((snap) => {
+      const data = snap.docs.map(d => d.data());
+      setTakenSlots(data.filter(r => r.status !== 'cancelled').map(r => r.time_slot));
+    });
   }, [selectedDoctor, selectedDate, clinic]);
 
   const selectClinic = (c: Clinic) => {
@@ -168,52 +171,65 @@ export function PatientBooking({ onTab, clinic: initialClinic, patientId, aiSumm
     if (!clinic || !selectedDoctor || !selectedSlot || !patientId) return;
     setSaving(true);
     const iso = localDateISO(selectedDate);
-    const { data: existing } = await supabase
-      .from('appointments').select('token_number').eq('clinic_id', clinic.clinic_id).eq('date', iso)
-      .order('token_number', { ascending: false }).limit(1);
-    const nextToken = ((existing?.[0] as { token_number?: number } | undefined)?.token_number ?? 0) + 1;
-    const { data, error } = await supabase.from('appointments').insert({
-      clinic_id: clinic.clinic_id,
-      patient_id: patientId,
-      doctor_id: selectedDoctor.user_id,
-      date: iso,
-      time_slot: selectedSlot,
-      type: 'scheduled',
-      status: 'waiting',
-      reason: reason || null,
-      triage_level: aiSummary?.level?.toLowerCase() ?? 'normal',
-      token_number: nextToken,
-      booked_via: 'patient',
-      visit_type: visitType,
-      online_booking: true,
-      ai_summary: aiSummary ?? null,
-    }).select('appt_id').single();
-    setSaving(false);
-    if (error) {
-      const isDuplicate = error.code === '23505';
-      setBookingError(isDuplicate
-        ? 'This time slot was just booked by another patient. Please choose a different time.'
-        : 'Unable to book your appointment. Please try again or contact the clinic directly.');
-      return;
-    }
-
-    // Send confirmation email if patient has an email on file
-    if (account?.email) {
-      sendEmail({
-        to: account.email,
-        template: "appointment_confirmed",
-        data: {
-          patientName: account.name ?? 'Patient',
-          clinicName: clinic.name,
-          doctorName: selectedDoctor.name,
-          date: formatDate(selectedDate),
-          time: formatTime(selectedSlot),
-          token: String(nextToken),
-        },
+    
+    try {
+      const q = query(collection(db, 'appointments'), where('clinic_id', '==', clinic.clinic_id), where('date', '==', iso), orderBy('token_number', 'desc'), limit(1));
+      const snap = await getDocs(q);
+      const existing = snap.docs.map(d => d.data());
+      const nextToken = (existing?.[0]?.token_number ?? 0) + 1;
+      
+      // Check for duplicate slot
+      const dupQ = query(collection(db, 'appointments'), where('doctor_id', '==', selectedDoctor.user_id), where('date', '==', iso), where('time_slot', '==', selectedSlot));
+      const dupSnap = await getDocs(dupQ);
+      const dupData = dupSnap.docs.map(d => d.data()).filter(d => d.status !== 'cancelled');
+      if (dupData.length > 0) {
+        setSaving(false);
+        setBookingError('This time slot was just booked by another patient. Please choose a different time.');
+        return;
+      }
+      
+      const apptRef = await addDoc(collection(db, 'appointments'), {
+        clinic_id: clinic.clinic_id,
+        patient_id: patientId,
+        doctor_id: selectedDoctor.user_id,
+        date: iso,
+        time_slot: selectedSlot,
+        type: 'scheduled',
+        status: 'waiting',
+        reason: reason || null,
+        triage_level: aiSummary?.level?.toLowerCase() ?? 'normal',
+        token_number: nextToken,
+        booked_via: 'patient',
+        visit_type: visitType,
+        online_booking: true,
+        ai_summary: aiSummary ?? null,
       });
-    }
+      // also update the id to match firestore structure
+      await updateDoc(apptRef, { appt_id: apptRef.id });
 
-    setStep('done');
+      setSaving(false);
+
+      // Send confirmation email if patient has an email on file
+      if (account?.email) {
+        sendEmail({
+          to: account.email,
+          template: "appointment_confirmed",
+          data: {
+            patientName: account.name ?? 'Patient',
+            clinicName: clinic.name,
+            doctorName: selectedDoctor.name,
+            date: formatDate(selectedDate),
+            time: formatTime(selectedSlot),
+            token: String(nextToken),
+          },
+        });
+      }
+
+      setStep('done');
+    } catch (error) {
+      setSaving(false);
+      setBookingError('Unable to book your appointment. Please try again or contact the clinic directly.');
+    }
   };
 
   const goBack = () => {

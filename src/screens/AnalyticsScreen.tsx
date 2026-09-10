@@ -3,7 +3,8 @@ import { useAuth } from '../lib/auth';
 import { Loading, SectionHeader } from '../components/ui';
 import { BarChart, LineChart, HBarChart, DonutChart, ProgressRing, ProgressBar } from '../components/Charts';
 import { formatRs, localDateISO } from '../lib/format';
-import { supabase as sb } from '../lib/supabase';
+import { db } from '../lib/firebase';
+import { collection, query, where, getDocs, orderBy } from 'firebase/firestore';
 import type { Appointment, Bill, Patient, Consultation } from '../lib/types';
 import { Calendar, AlertTriangle } from 'lucide-react';
 
@@ -39,20 +40,28 @@ export function AnalyticsScreen() {
   useEffect(() => {
     if (!clinic) return;
     setLoading(true);
-    Promise.all([
-      sb.from('appointments').select('*, patient:patients(*)').eq('clinic_id', clinic.clinic_id).gte('date', localDateISO(start)).lte('date', localDateISO(end)),
-      sb.from('billing').select('*, patient:patients(*)').eq('clinic_id', clinic.clinic_id).gte('created_at', startISO).lte('created_at', endISO),
-      sb.from('patients').select('*').eq('clinic_id', clinic.clinic_id),
-      sb.from('consultations').select('*').eq('clinic_id', clinic.clinic_id).gte('created_at', startISO).lte('created_at', endISO),
-      sb.from('billing').select('*, patient:patients(*)').eq('clinic_id', clinic.clinic_id),
-    ]).then(([a, b, p, c, ab]) => {
-      setAppointments((a.data as Appointment[] | null) ?? []);
-      setBills((b.data as Bill[] | null) ?? []);
-      setPatients((p.data as Patient[] | null) ?? []);
-      setConsults((c.data as Consultation[] | null) ?? []);
-      setAllBills((ab.data as Bill[] | null) ?? []);
-      setLoading(false);
-    });
+    const fetchAnalytics = async () => {
+      try {
+        const [apptsSnap, billsSnap, patientsSnap, consultsSnap, allBillsSnap] = await Promise.all([
+          getDocs(query(collection(db, 'appointments'), where('clinic_id', '==', clinic.clinic_id), where('date', '>=', localDateISO(start)), where('date', '<=', localDateISO(end)))),
+          getDocs(query(collection(db, 'billing'), where('clinic_id', '==', clinic.clinic_id), where('created_at', '>=', startISO), where('created_at', '<=', endISO))),
+          getDocs(query(collection(db, 'patients'), where('clinic_id', '==', clinic.clinic_id))),
+          getDocs(query(collection(db, 'consultations'), where('clinic_id', '==', clinic.clinic_id), where('created_at', '>=', startISO), where('created_at', '<=', endISO))),
+          getDocs(query(collection(db, 'billing'), where('clinic_id', '==', clinic.clinic_id)))
+        ]);
+
+        setAppointments(apptsSnap.docs.map(d => d.data() as Appointment));
+        setBills(billsSnap.docs.map(d => d.data() as Bill));
+        setPatients(patientsSnap.docs.map(d => d.data() as Patient));
+        setConsults(consultsSnap.docs.map(d => d.data() as Consultation));
+        setAllBills(allBillsSnap.docs.map(d => d.data() as Bill));
+      } catch (e) {
+        console.error("Error fetching analytics", e);
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchAnalytics();
   }, [clinic, startISO, endISO, start, end]);
 
   const stats = useMemo(() => {
@@ -126,12 +135,13 @@ export function AnalyticsScreen() {
   const pendingCollections = useMemo(() => {
     const byPatient: Record<string, { name: string; amount: number }> = {};
     allBills.filter(b => b.payment_status !== 'paid').forEach(b => {
-      const name = b.patient?.name ?? 'Unknown';
+      const p = patients.find(pat => pat.patient_id === b.patient_id);
+      const name = p?.name ?? 'Unknown';
       if (!byPatient[name]) byPatient[name] = { name, amount: 0 };
       byPatient[name].amount += Number(b.amount);
     });
     return Object.values(byPatient).sort((a, b) => b.amount - a.amount).slice(0, 5);
-  }, [allBills]);
+  }, [allBills, patients]);
 
   const totalPending = allBills.filter(b => b.payment_status !== 'paid').reduce((s, b) => s + Number(b.amount), 0);
 

@@ -4,7 +4,8 @@ import {
   Activity, AlertTriangle, Pill, Phone, Heart, ChevronLeft, Share2, Users,
   Star, MapPin, UserCircle, ShieldCheck, Clock3, Sparkles,
 } from 'lucide-react';
-import { supabase } from '../lib/supabase';
+import { db } from '../lib/firebase';
+import { collection, query, where, getDocs, getDoc, doc, orderBy, limit } from 'firebase/firestore';
 import { usePatientAuth } from '../lib/patientAuth';
 import { formatDate, formatTime, localDateISO } from '../lib/format';
 import type { Appointment, Consultation, Invoice } from '../lib/types';
@@ -30,35 +31,46 @@ export function PatientHome({ onTab, clinicId }: Props) {
 
   useEffect(() => {
     if (!account || !clinicId) return;
-    supabase
-      .from('patient_clinic_links')
-      .select('patient_id')
-      .eq('account_id', account.account_id)
-      .eq('clinic_id', clinicId)
-      .maybeSingle()
-      .then(({ data }) => {
-        if (!data) return;
-        const pid = (data as { patient_id: string }).patient_id;
-        supabase.from('appointments').select('*, doctor:users(*)')
-          .eq('patient_id', pid).gte('date', localDateISO()).neq('status', 'cancelled')
-          .order('date').limit(3)
-          .then(({ data: a }) => setAppointments((a as Appointment[] | null) ?? []));
-        supabase.from('consultations').select('*').eq('patient_id', pid)
-          .order('created_at', { ascending: false }).limit(3)
-          .then(({ data: c }) => setRecentConsults((c as Consultation[] | null) ?? []));
-        supabase.from('invoices').select('*').eq('patient_id', pid).eq('payment_status', 'pending')
-          .then(({ data: inv }) => setPendingInvoices((inv as Invoice[] | null) ?? []));
-      });
+    const fetchHomeData = async () => {
+      const q = query(collection(db, 'patient_clinic_links'), where('account_id', '==', account.account_id), where('clinic_id', '==', clinicId));
+      const snap = await getDocs(q);
+      if (snap.empty) return;
+      const pid = snap.docs[0].data().patient_id;
+
+      // Appointments
+      const apptQ = query(collection(db, 'appointments'), where('patient_id', '==', pid), where('date', '>=', localDateISO()), orderBy('date'), limit(3));
+      const apptSnap = await getDocs(apptQ);
+      const appts = apptSnap.docs.map(d => d.data() as Appointment).filter(a => a.status !== 'cancelled');
+      for (const appt of appts) {
+        if (appt.doctor_id) {
+          const docSnap = await getDoc(doc(db, 'users', appt.doctor_id));
+          if (docSnap.exists()) {
+            appt.doctor = docSnap.data();
+          }
+        }
+      }
+      setAppointments(appts);
+
+      // Consultations
+      const consQ = query(collection(db, 'consultations'), where('patient_id', '==', pid), orderBy('created_at', 'desc'), limit(3));
+      const consSnap = await getDocs(consQ);
+      setRecentConsults(consSnap.docs.map(d => d.data() as Consultation));
+
+      // Invoices
+      const invQ = query(collection(db, 'invoices'), where('patient_id', '==', pid), where('payment_status', '==', 'pending'));
+      const invSnap = await getDocs(invQ);
+      setPendingInvoices(invSnap.docs.map(d => d.data() as Invoice));
+    };
+    fetchHomeData();
   }, [account, clinicId]);
 
   useEffect(() => {
     if (!account) return;
-    supabase.from('patient_reward_points').select('points')
-      .eq('account_id', account.account_id)
-      .then(({ data }) => {
-        const total = (data as { points: number }[] | null)?.reduce((s, r) => s + r.points, 0) ?? 0;
-        setRewardPoints(total);
-      });
+    const q = query(collection(db, 'patient_reward_points'), where('account_id', '==', account.account_id));
+    getDocs(q).then((snap) => {
+      const total = snap.docs.reduce((s, r) => s + (r.data().points || 0), 0);
+      setRewardPoints(total);
+    });
   }, [account]);
 
   const nextAppt = appointments[0];

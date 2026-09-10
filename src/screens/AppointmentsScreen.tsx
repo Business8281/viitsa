@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { CalendarDays, Plus, Zap, MessageCircle, X, Clock, User as UserIcon, Stethoscope, Sparkles } from 'lucide-react';
-import { supabase } from '../lib/supabase';
+import { db } from '../lib/firebase';
+import { collection, query, where, getDocs, getDoc, doc, addDoc, updateDoc, orderBy, limit } from 'firebase/firestore';
 import { useAuth } from '../lib/auth';
 import { useClinicData } from '../lib/useClinicData';
 import { useToast } from '../lib/toast';
@@ -39,9 +40,15 @@ function generateSlots(openTime: string, closeTime: string, durationMin: number)
 const SLOT_CACHE: Record<string, string[]> = {};
 
 async function fetchClinicHours(clinicId: string): Promise<{ open: string; close: string; slot: number }> {
-  const { data } = await supabase.from('clinic_settings').select('*').eq('clinic_id', clinicId).maybeSingle();
-  const slot = (data as { slot_duration_minutes?: number } | null)?.slot_duration_minutes ?? 20;
-  return { open: '09:00', close: '19:00', slot };
+  try {
+    const docSnap = await getDoc(doc(db, 'clinic_settings', clinicId));
+    if (docSnap.exists()) {
+      const data = docSnap.data();
+      const slot = data.slot_duration_minutes ?? 20;
+      return { open: '09:00', close: '19:00', slot };
+    }
+  } catch (e) {}
+  return { open: '09:00', close: '19:00', slot: 20 };
 }
 
 export function AppointmentsScreen() {
@@ -63,13 +70,10 @@ export function AppointmentsScreen() {
   useEffect(() => {
     if (!clinic) return;
     fetchClinicHours(clinic.clinic_id).then(setHours);
-    supabase
-      .from('users')
-      .select('*')
-      .eq('clinic_id', clinic.clinic_id)
-      .eq('role', 'doctor')
-      .eq('active', true)
-      .then(({ data }) => setDoctors((data as U[] | null) ?? []));
+    const q = query(collection(db, 'users'), where('clinic_id', '==', clinic.clinic_id), where('role', '==', 'doctor'), where('active', '==', true));
+    getDocs(q).then((snap) => {
+      setDoctors(snap.docs.map(d => ({ ...d.data(), id: d.id } as U)));
+    }).catch(console.error);
   }, [clinic]);
 
   const dates = useMemo(() => generateDates(8), [shift]);
@@ -171,7 +175,7 @@ export function AppointmentsScreen() {
             {selectedAppts.map((a) => {
               const patient = patients.find((p) => p.patient_id === a.patient_id);
               return (
-                <div key={a.appt_id} className="rounded-lg border border-black/5 p-3 hover:border-primary/30 transition">
+                <div key={a.appointment_id} className="rounded-lg border border-black/5 p-3 hover:border-primary/30 transition">
                   <div className="flex items-start gap-3">
                     <div className="inline-flex h-10 w-10 items-center justify-center rounded-lg bg-primary-50 text-primary font-bold text-xs flex-shrink-0">
                       {formatTime(a.time_slot).slice(0, 5)}
@@ -262,10 +266,13 @@ function CancelApptButton({ appt, onDone }: { appt: Appointment; onDone: () => v
   return (
     <button
       onClick={async () => {
-        const { error } = await supabase.from('appointments').update({ status: 'cancelled' }).eq('appt_id', appt.appt_id);
-        if (error) return toast('Unable to cancel. Please try again.', 'error');
-        toast('Appointment cancelled.', 'success');
-        onDone();
+        try {
+          await updateDoc(doc(db, 'appointments', appt.appointment_id!), { status: 'cancelled' });
+          toast('Appointment cancelled.', 'success');
+          onDone();
+        } catch(error) {
+          toast('Unable to cancel. Please try again.', 'error');
+        }
       }}
       className="btn-ghost text-xs py-1 px-2 text-danger"
     >
@@ -305,12 +312,16 @@ function RescheduleApptButton({ appt, onDone }: { appt: Appointment; onDone: () 
               disabled={saving}
               onClick={async () => {
                 setSaving(true);
-                const { error } = await supabase.from('appointments').update({ date, time_slot: time }).eq('appt_id', appt.appt_id);
-                setSaving(false);
-                if (error) return toast('Unable to reschedule. Please try again.', 'error');
-                toast('Appointment rescheduled.', 'success');
-                setOpen(false);
-                onDone();
+                try {
+                  await updateDoc(doc(db, 'appointments', appt.appointment_id!), { date, time_slot: time });
+                  toast('Appointment rescheduled.', 'success');
+                  setOpen(false);
+                  onDone();
+                } catch(error) {
+                  toast('Unable to reschedule. Please try again.', 'error');
+                } finally {
+                  setSaving(false);
+                }
               }}
               className="btn-primary"
             >
@@ -370,7 +381,7 @@ function BookingModal({ open, onClose, onSaved, patients, doctors, clinicId, def
   // Set default doctor when doctors list loads
   useEffect(() => {
     if (doctors.length > 0 && !doctorId) {
-      setDoctorId(doctors[0].user_id);
+      setDoctorId(doctors[0].id!);
     }
   }, [doctors, doctorId]);
 
@@ -384,33 +395,36 @@ function BookingModal({ open, onClose, onSaved, patients, doctors, clinicId, def
     if (!patientId) return toast('Select a patient.', 'error');
     if (!doctorId) return toast('Select a doctor.', 'error');
     setSaving(true);
-    const { data: existing } = await supabase
-      .from('appointments')
-      .select('token_number')
-      .eq('clinic_id', clinicId)
-      .eq('date', date)
-      .order('token_number', { ascending: false })
-      .limit(1);
-    const nextToken = ((existing?.[0] as { token_number?: number } | undefined)?.token_number ?? 0) + 1;
-    const { error } = await supabase.from('appointments').insert({
-      clinic_id: clinicId,
-      patient_id: patientId,
-      doctor_id: doctorId || null,
-      date,
-      time_slot: time,
-      type,
-      status: 'waiting',
-      reason: reason || null,
-      token_number: nextToken,
-      triage_level: 'normal',
-    });
-    setSaving(false);
-    if (error) return toast('Unable to book appointment. Please try again.', 'error');
-    toast('Appointment booked.', 'success');
-    setPatientQuery('');
-    setPatientId('');
-    setReason('');
-    onSaved();
+    
+    try {
+      const q = query(collection(db, 'appointments'), where('clinic_id', '==', clinicId), where('date', '==', date), orderBy('token_number', 'desc'), limit(1));
+      const existing = await getDocs(q);
+      const nextToken = existing.empty ? 1 : ((existing.docs[0].data()?.token_number ?? 0) + 1);
+
+      await addDoc(collection(db, 'appointments'), {
+        clinic_id: clinicId,
+        patient_id: patientId,
+        doctor_id: doctorId || null,
+        date,
+        time_slot: time,
+        type,
+        status: 'waiting',
+        reason: reason || null,
+        token_number: nextToken,
+        triage_level: 'normal',
+        created_at: new Date().toISOString()
+      });
+
+      toast('Appointment booked.', 'success');
+      setPatientQuery('');
+      setPatientId('');
+      setReason('');
+      onSaved();
+    } catch (error) {
+      toast('Unable to book appointment. Please try again.', 'error');
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -494,7 +508,7 @@ function BookingModal({ open, onClose, onSaved, patients, doctors, clinicId, def
             <select className="select" value={doctorId} onChange={(e) => setDoctorId(e.target.value)}>
               {doctors.length === 0 && <option value="">No doctors added yet</option>}
               {doctors.map((d) => (
-                <option key={d.user_id} value={d.user_id}>{d.name}</option>
+                <option key={d.id} value={d.id}>{d.name}</option>
               ))}
             </select>
           </div>
@@ -524,7 +538,7 @@ function WalkInModal({ open, onClose, onSaved, patients, clinicId, doctors, curr
   // Set default doctor when doctors list loads
   useEffect(() => {
     if (doctors.length > 0 && !doctorId) {
-      setDoctorId(doctors[0].user_id);
+      setDoctorId(doctors[0].id!);
     }
   }, [doctors, doctorId]);
 
@@ -538,33 +552,36 @@ function WalkInModal({ open, onClose, onSaved, patients, clinicId, doctors, curr
     const now = new Date();
     const timeSlot = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
     const today = localDateISO(now);
-    const { data: existing } = await supabase
-      .from('appointments')
-      .select('token_number')
-      .eq('clinic_id', clinicId)
-      .eq('date', today)
-      .order('token_number', { ascending: false })
-      .limit(1);
-    const nextToken = ((existing?.[0] as { token_number?: number } | undefined)?.token_number ?? 0) + 1;
-    const { error } = await supabase.from('appointments').insert({
-      clinic_id: clinicId,
-      patient_id: patientId,
-      doctor_id: doctorId || null,
-      date: today,
-      time_slot: timeSlot,
-      type: 'walk-in',
-      status: 'waiting',
-      reason: reason || null,
-      token_number: nextToken,
-      triage_level: 'normal',
-    });
-    setSaving(false);
-    if (error) return toast('Unable to book appointment. Please try again.', 'error');
-    toast('Walk-in added to queue.', 'success');
-    setQuery('');
-    setPatientId('');
-    setReason('');
-    onSaved();
+
+    try {
+      const q = query(collection(db, 'appointments'), where('clinic_id', '==', clinicId), where('date', '==', today), orderBy('token_number', 'desc'), limit(1));
+      const existing = await getDocs(q);
+      const nextToken = existing.empty ? 1 : ((existing.docs[0].data()?.token_number ?? 0) + 1);
+
+      await addDoc(collection(db, 'appointments'), {
+        clinic_id: clinicId,
+        patient_id: patientId,
+        doctor_id: doctorId || null,
+        date: today,
+        time_slot: timeSlot,
+        type: 'walk-in',
+        status: 'waiting',
+        reason: reason || null,
+        token_number: nextToken,
+        triage_level: 'normal',
+        created_at: new Date().toISOString()
+      });
+
+      toast('Walk-in added to queue.', 'success');
+      setQuery('');
+      setPatientId('');
+      setReason('');
+      onSaved();
+    } catch (error) {
+      toast('Unable to book appointment. Please try again.', 'error');
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -617,7 +634,7 @@ function WalkInModal({ open, onClose, onSaved, patients, clinicId, doctors, curr
           <select className="select" value={doctorId} onChange={(e) => setDoctorId(e.target.value)}>
             {doctors.length === 0 && <option value="">No doctors added yet</option>}
             {doctors.map((d) => (
-              <option key={d.user_id} value={d.user_id}>{d.name}</option>
+              <option key={d.id} value={d.id}>{d.name}</option>
             ))}
           </select>
         </div>

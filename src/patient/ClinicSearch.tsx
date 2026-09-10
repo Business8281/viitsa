@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef } from 'react';
 import { ChevronLeft, Search, MapPin, Star, Clock, Navigation, SlidersHorizontal, X } from 'lucide-react';
-import { supabase } from '../lib/supabase';
+import { db } from '../lib/firebase';
+import { collection, getDocs } from 'firebase/firestore';
 import type { Clinic } from '../lib/types';
 
 const DEPARTMENTS = [
@@ -39,15 +40,15 @@ export function ClinicSearch({ onSelectClinic, onBack }: Props) {
 
   // Load clinics from database
   useEffect(() => {
-    supabase
-      .from('clinics')
-      .select('*')
-      .then(({ data, error }) => {
+    getDocs(collection(db, 'clinics'))
+      .then((snap) => {
         setLoading(false);
-        if (!error && data) {
-          setClinics(data as Clinic[]);
-          setFiltered(data as Clinic[]);
-        }
+        const data = snap.docs.map(d => d.data() as Clinic);
+        setClinics(data);
+        setFiltered(data);
+      })
+      .catch(() => {
+        setLoading(false);
       });
   }, []);
 

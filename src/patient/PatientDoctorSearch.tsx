@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react';
 import {
   ChevronLeft, Search, Star, MapPin, X, Stethoscope, Calendar, SlidersHorizontal,
 } from 'lucide-react';
-import { supabase } from '../lib/supabase';
+import { db } from '../lib/firebase';
+import { collection, query, where, getDocs } from 'firebase/firestore';
 import type { PatientTab } from './PatientBottomNav';
 import type { User, Clinic } from '../lib/types';
 
@@ -29,16 +30,29 @@ export function PatientDoctorSearch({ onTab, onSelectDoctor }: Props) {
   const [selectedSpec, setSelectedSpec] = useState<string | null>(null);
 
   useEffect(() => {
-    supabase
-      .from('users')
-      .select('*, clinic:clinics(clinic_id, name, address, city, phone, working_hours)')
-      .eq('role', 'doctor')
-      .eq('active', true)
-      .then(({ data }) => {
-        setDoctors((data as DoctorWithClinic[] | null) ?? []);
-        setFiltered((data as DoctorWithClinic[] | null) ?? []);
-        setLoading(false);
+    const fetchData = async () => {
+      const q = query(collection(db, 'users'), where('role', '==', 'doctor'), where('active', '==', true));
+      const [usersSnap, clinicsSnap] = await Promise.all([
+        getDocs(q),
+        getDocs(collection(db, 'clinics'))
+      ]);
+
+      const clinicsMap = new Map(clinicsSnap.docs.map(d => [d.id, d.data() as Clinic]));
+      
+      const docs = usersSnap.docs.map(d => {
+        const u = d.data() as User;
+        return {
+          ...u,
+          user_id: d.id, // Ensure user_id is the document ID if not already
+          clinic: u.clinic_id ? clinicsMap.get(u.clinic_id) : undefined
+        } as DoctorWithClinic;
       });
+
+      setDoctors(docs);
+      setFiltered(docs);
+      setLoading(false);
+    };
+    fetchData();
   }, []);
 
   useEffect(() => {

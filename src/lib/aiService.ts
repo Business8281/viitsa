@@ -1,3 +1,6 @@
+import { getFunctions, httpsCallable } from 'firebase/functions';
+import { app } from './firebase';
+
 export type Language = 'en' | 'hi' | 'te';
 
 export interface AIMessage {
@@ -35,7 +38,7 @@ export interface ClinicContext {
   name: string;
   city?: string;
   departments?: string[];
-  doctors?: { user_id: string; name: string; specialisation: string | null }[];
+  doctors?: { id: string; name: string; specialisation: string | null }[];
   working_hours?: { open: string; close: string };
 }
 
@@ -128,35 +131,11 @@ export async function sendToAI(
   messages: AIMessage[],
   systemPrompt: string,
 ): Promise<AIResponse> {
-  const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined;
-  const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
-
-  if (!supabaseUrl || !anonKey) {
-    return unavailableResponse();
-  }
-
   try {
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${anonKey}`,
-    };
-
-    const res = await fetch(`${supabaseUrl}/functions/v1/ai-chat`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ messages, systemPrompt }),
-    });
-
-    if (!res.ok) {
-      const err = await res.text().catch(() => res.statusText);
-      console.warn('AI chat error:', err);
-      return unavailableResponse();
-    }
-
-    const json = (await res.json()) as { choices: { message: { content: string } }[] };
-    const raw = json.choices?.[0]?.message?.content ?? '';
-
-    return parseAIResponse(raw);
+    const functions = getFunctions(app);
+    const aiChat = httpsCallable<{ messages: AIMessage[], systemPrompt: string }, { raw: string }>(functions, 'aiChat');
+    const result = await aiChat({ messages, systemPrompt });
+    return parseAIResponse(result.data.raw || '');
   } catch (e) {
     console.warn('AI chat fetch failed:', e);
     return unavailableResponse();
@@ -168,10 +147,6 @@ export async function translateSummary(
   target: Language,
 ): Promise<TriageSummary> {
   if (target === 'en') return summary;
-
-  const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined;
-  const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
-  if (!supabaseUrl || !anonKey) return summary;
 
   const fields: (keyof TriageSummary)[] = [
     'chief_complaint', 'symptom_timeline', 'severity', 'body_location',
@@ -187,23 +162,13 @@ export async function translateSummary(
   );
 
   try {
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${anonKey}`,
-    };
-
-    const res = await fetch(`${supabaseUrl}/functions/v1/ai-chat`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        messages: [{ role: 'user', content: `Translate this JSON to ${langName}: ${payload}` }],
-        systemPrompt,
-      }),
+    const functions = getFunctions(app);
+    const aiChat = httpsCallable<{ messages: AIMessage[], systemPrompt: string }, { raw: string }>(functions, 'aiChat');
+    const result = await aiChat({
+      messages: [{ role: 'user', content: `Translate this JSON to ${langName}: ${payload}` }],
+      systemPrompt,
     });
-    if (!res.ok) return summary;
-
-    const json = (await res.json()) as { choices: { message: { content: string } }[] };
-    const raw = json.choices?.[0]?.message?.content ?? '';
+    const raw = result.data.raw;
     const start = raw.indexOf('{');
     const end = raw.lastIndexOf('}');
     if (start === -1 || end === -1) return summary;
@@ -255,8 +220,8 @@ function unavailableResponse(): AIResponse {
 
 declare global {
   interface Window {
-    SpeechRecognition: typeof SpeechRecognition;
-    webkitSpeechRecognition: typeof SpeechRecognition;
+    SpeechRecognition: any;
+    webkitSpeechRecognition: any;
   }
 }
 
@@ -291,7 +256,7 @@ export function startListening(
   recognition.continuous = false;
   recognition.maxAlternatives = 1;
 
-  recognition.onresult = (event: SpeechRecognitionEvent) => {
+  recognition.onresult = (event: any) => {
     let interim = '';
     let final = '';
     for (let i = event.resultIndex; i < event.results.length; i++) {

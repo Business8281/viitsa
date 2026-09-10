@@ -3,7 +3,8 @@ import {
   ChevronLeft, Calendar, Stethoscope, FileText, Brain, Activity, Filter,
   ChevronDown, ChevronUp, Pill, AlertTriangle,
 } from 'lucide-react';
-import { supabase } from '../lib/supabase';
+import { db } from '../lib/firebase';
+import { collection, query, where, getDocs, orderBy, limit, getDoc, doc } from 'firebase/firestore';
 import { usePatientAuth } from '../lib/patientAuth';
 import { formatDate } from '../lib/format';
 import type { PatientTab } from './PatientBottomNav';
@@ -61,25 +62,32 @@ export function HealthTimeline({ onTab, patientId, clinicId }: Props) {
 
     if (patientId) {
       promises.push(
-        supabase.from('appointments').select('*, doctor:users(name, specialisation)')
-          .eq('patient_id', patientId).order('date', { ascending: false }).limit(20)
-          .then(({ data }) => {
-            (data ?? []).forEach((a: Record<string, unknown>) => {
+        getDocs(query(collection(db, 'appointments'), where('patient_id', '==', patientId), orderBy('date', 'desc'), limit(20)))
+          .then(async (snap) => {
+            const appts = snap.docs.map(d => d.data());
+            for (const a of appts) {
+              let docName = 'Doctor';
+              if (a.doctor_id) {
+                const docSnap = await getDoc(doc(db, 'users', a.doctor_id));
+                if (docSnap.exists()) docName = docSnap.data().name || 'Doctor';
+              }
               all.push({
                 id: a.appt_id as string,
                 type: 'appointment',
                 date: a.date as string,
                 title: `Appointment`,
-                subtitle: (a.doctor as { name?: string } | null)?.name ?? 'Doctor',
+                subtitle: docName,
                 status: a.status as string,
                 detail: a.reason as string | undefined,
               });
-            });
-          }),
-        supabase.from('consultations').select('*')
-          .eq('patient_id', patientId).order('created_at', { ascending: false }).limit(20)
-          .then(({ data }) => {
-            (data ?? []).forEach((c: Record<string, unknown>) => {
+            }
+          })
+      );
+      promises.push(
+        getDocs(query(collection(db, 'consultations'), where('patient_id', '==', patientId), orderBy('created_at', 'desc'), limit(20)))
+          .then((snap) => {
+            snap.docs.forEach((d) => {
+              const c = d.data();
               all.push({
                 id: c.consult_id as string,
                 type: 'consultation',
@@ -89,11 +97,13 @@ export function HealthTimeline({ onTab, patientId, clinicId }: Props) {
                 detail: c.prescription as string | undefined,
               });
             });
-          }),
-        supabase.from('health_reports').select('*')
-          .eq('patient_id', patientId).order('created_at', { ascending: false }).limit(10)
-          .then(({ data }) => {
-            (data ?? []).forEach((r: Record<string, unknown>) => {
+          })
+      );
+      promises.push(
+        getDocs(query(collection(db, 'health_reports'), where('patient_id', '==', patientId), orderBy('created_at', 'desc'), limit(10)))
+          .then((snap) => {
+            snap.docs.forEach((d) => {
+              const r = d.data();
               all.push({
                 id: r.report_id as string,
                 type: 'report',
@@ -103,16 +113,16 @@ export function HealthTimeline({ onTab, patientId, clinicId }: Props) {
                 detail: r.summary as string | undefined,
               });
             });
-          }),
+          })
       );
     }
 
     if (account) {
       promises.push(
-        supabase.from('ai_conversations').select('*')
-          .eq('account_id', account.account_id).order('created_at', { ascending: false }).limit(10)
-          .then(({ data }) => {
-            (data ?? []).forEach((s: Record<string, unknown>) => {
+        getDocs(query(collection(db, 'ai_conversations'), where('account_id', '==', account.account_id), orderBy('created_at', 'desc'), limit(10)))
+          .then((snap) => {
+            snap.docs.forEach((d) => {
+              const s = d.data();
               all.push({
                 id: s.conversation_id as string,
                 type: 'ai',
@@ -122,7 +132,7 @@ export function HealthTimeline({ onTab, patientId, clinicId }: Props) {
                 detail: (s.triage_summary as { chief_complaint?: string } | null)?.chief_complaint ?? undefined,
               });
             });
-          }),
+          })
       );
     }
 

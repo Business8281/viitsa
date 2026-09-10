@@ -3,7 +3,8 @@ import {
   ChevronLeft, Plus, Users, Trash2, ChevronDown, ChevronUp,
   User, Calendar, Droplets, Heart, AlertTriangle, Pill, X, Check,
 } from 'lucide-react';
-import { supabase } from '../lib/supabase';
+import { db } from '../lib/firebase';
+import { collection, query, where, getDocs, addDoc, updateDoc, deleteDoc, doc, orderBy } from 'firebase/firestore';
 import { usePatientAuth } from '../lib/patientAuth';
 import type { PatientTab } from './PatientBottomNav';
 
@@ -43,12 +44,9 @@ export function FamilyVault({ onTab }: Props) {
 
   const load = async () => {
     if (!account) return;
-    const { data } = await supabase
-      .from('family_members')
-      .select('*')
-      .eq('patient_account_id', account.id)
-      .order('name');
-    setMembers((data as FamilyMember[] | null) ?? []);
+    const q = query(collection(db, 'family_members'), where('patient_account_id', '==', account.account_id), orderBy('name'));
+    const snap = await getDocs(q);
+    setMembers(snap.docs.map(d => d.data() as FamilyMember));
     setLoading(false);
   };
 
@@ -70,26 +68,32 @@ export function FamilyVault({ onTab }: Props) {
       setError('Name and relationship are required'); return;
     }
     setSaving(true); setError('');
-    const { error: err } = await supabase.from('family_members').insert({
-      patient_account_id: account.id,
-      name: form.name.trim(),
-      relationship: form.relationship,
-      dob: form.dob || null,
-      gender: form.gender || null,
-      blood_group: form.blood_group || null,
-      chronic_conditions: form.conditions.includes('None') ? 'None' : form.conditions.join(', '),
-      allergies: form.allergies.trim() || null,
-      current_medications: form.medications.trim() || null,
-    });
-    setSaving(false);
-    if (err) { setError('Unable to save family member. Please try again.'); return; }
+    try {
+      const docRef = await addDoc(collection(db, 'family_members'), {
+        patient_account_id: account.account_id,
+        name: form.name.trim(),
+        relationship: form.relationship,
+        dob: form.dob || null,
+        gender: form.gender || null,
+        blood_group: form.blood_group || null,
+        chronic_conditions: form.conditions.includes('None') ? 'None' : form.conditions.join(', '),
+        allergies: form.allergies.trim() || null,
+        current_medications: form.medications.trim() || null,
+      });
+      await updateDoc(docRef, { id: docRef.id });
+      setSaving(false);
+    } catch(err) {
+      setSaving(false);
+      setError('Unable to save family member. Please try again.');
+      return;
+    }
     setForm({ ...emptyForm });
     setShowAdd(false);
     load();
   };
 
   const remove = async (id: string) => {
-    await supabase.from('family_members').delete().eq('id', id);
+    await deleteDoc(doc(db, 'family_members', id));
     setMembers(prev => prev.filter(m => m.id !== id));
   };
 

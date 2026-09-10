@@ -1,6 +1,7 @@
 import { useState, useRef } from 'react';
 import { Camera, Upload, FileText, Loader2, AlertTriangle, CheckCircle, ChevronLeft, Save, Eye } from 'lucide-react';
-import { supabase } from '../lib/supabase';
+import { db } from '../lib/firebase';
+import { collection, addDoc, updateDoc } from 'firebase/firestore';
 import { formatDate, localDateISO } from '../lib/format';
 import type { HealthReport, HealthFinding } from '../lib/types';
 
@@ -63,9 +64,8 @@ export function ReportScanner({ patientId, accountId, clinicId, onBack, onSaved 
     if (!patientId || !extractedData) return;
     setSaving(true);
 
-    const { data, error } = await supabase
-      .from('health_reports')
-      .insert({
+    try {
+      const docRef = await addDoc(collection(db, 'health_reports'), {
         patient_id: patientId,
         account_id: accountId,
         clinic_id: clinicId,
@@ -77,15 +77,14 @@ export function ReportScanner({ patientId, accountId, clinicId, onBack, onSaved 
         summary: extractedData.summary,
         urgent_flags: extractedData.urgent_flags || [],
         ai_processed: true,
-      })
-      .select('report_id')
-      .single();
-
-    setSaving(false);
-    if (!error) {
+      });
+      await updateDoc(docRef, { report_id: docRef.id });
       setMode('done');
       onSaved();
+    } catch(error) {
+      console.error(error);
     }
+    setSaving(false);
   };
 
   // Choose mode screen

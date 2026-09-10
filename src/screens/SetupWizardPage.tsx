@@ -15,7 +15,10 @@ import {
   X,
   User,
 } from 'lucide-react';
-import { supabase } from '../lib/supabase';
+import { db, firebaseConfig } from '../lib/firebase';
+import { updateDoc, doc, setDoc } from 'firebase/firestore';
+import { initializeApp } from "firebase/app";
+import { getAuth, createUserWithEmailAndPassword } from "firebase/auth";
 import { useToast } from '../lib/toast';
 import { useAuth } from '../lib/auth';
 import { ViitsaLogo } from '../components/ViitsaLogo';
@@ -169,39 +172,37 @@ export function SetupWizardPage() {
 
     try {
       // Update clinic details
-      await supabase
-        .from('clinics')
-        .update({
-          address: clinicDetails.address,
-          city: clinicDetails.city,
-          phone: clinicDetails.phone,
-          email: clinicDetails.email,
-          working_hours: workingHours,
-          departments: clinicDetails.departments.length > 0 ? clinicDetails.departments : undefined,
-        })
-        .eq('clinic_id', user.clinic_id);
+      await updateDoc(doc(db, 'clinics', user.clinic_id), {
+        address: clinicDetails.address,
+        city: clinicDetails.city,
+        phone: clinicDetails.phone,
+        email: clinicDetails.email,
+        working_hours: workingHours,
+        departments: clinicDetails.departments.length > 0 ? clinicDetails.departments : null,
+      });
+
+      // Use a secondary app to create users without logging out
+      const secondaryApp = initializeApp(firebaseConfig, "Secondary");
+      const secondaryAuth = getAuth(secondaryApp);
 
       // Add doctors
-      for (const doc of doctors) {
-        if (doc.name.trim()) {
-          if (!doc.email?.trim()) continue;
+      for (const docUser of doctors) {
+        if (docUser.name.trim()) {
+          if (!docUser.email?.trim()) continue;
           const tempPassword = crypto.randomUUID();
-          const { data: signUpData } = await supabase.auth.signUp({
-            email: doc.email.toLowerCase(),
-            password: tempPassword,
-            options: { data: { role: 'doctor', clinic_id: user.clinic_id, name: doc.name } },
-          });
-          await supabase.from('users').insert({
-            user_id: signUpData?.user?.id ?? crypto.randomUUID(),
+          const userCredential = await createUserWithEmailAndPassword(secondaryAuth, docUser.email.toLowerCase(), tempPassword);
+          const userId = userCredential.user.uid;
+          await setDoc(doc(db, 'users', userId), {
+            user_id: userId,
             clinic_id: user.clinic_id,
-            name: doc.name,
-            email: doc.email.toLowerCase(),
-            phone: doc.phone,
-            password_hash: 'supabase-auth',
+            name: docUser.name,
+            email: docUser.email.toLowerCase(),
+            phone: docUser.phone,
             role: 'doctor',
-            specialisation: doc.specialization,
-            avatar_color: doc.color,
+            specialisation: docUser.specialization,
+            avatar_color: docUser.color,
             active: true,
+            created_at: new Date().toISOString()
           });
         }
       }
@@ -211,24 +212,23 @@ export function SetupWizardPage() {
         if (member.name.trim()) {
           if (!member.email?.trim()) continue;
           const tempPassword = crypto.randomUUID();
-          const { data: signUpData } = await supabase.auth.signUp({
-            email: member.email.toLowerCase(),
-            password: tempPassword,
-            options: { data: { role: 'staff', clinic_id: user.clinic_id, name: member.name } },
-          });
-          await supabase.from('users').insert({
-            user_id: signUpData?.user?.id ?? crypto.randomUUID(),
+          const userCredential = await createUserWithEmailAndPassword(secondaryAuth, member.email.toLowerCase(), tempPassword);
+          const userId = userCredential.user.uid;
+          await setDoc(doc(db, 'users', userId), {
+            user_id: userId,
             clinic_id: user.clinic_id,
             name: member.name,
             email: member.email.toLowerCase(),
             phone: member.phone,
-            password_hash: 'supabase-auth',
             role: 'staff',
             avatar_color: member.color,
             active: true,
+            created_at: new Date().toISOString()
           });
         }
       }
+      
+      await secondaryAuth.signOut();
 
       showToast('Setup completed successfully!', 'success');
       navigate('/dashboard');

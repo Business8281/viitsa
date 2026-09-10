@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { Search, Plus, AlertTriangle, Package, Pill, Stethoscope, RefreshCw } from 'lucide-react';
-import { supabase } from '../lib/supabase';
+import { db } from '../lib/firebase';
+import { collection, addDoc, doc, updateDoc } from 'firebase/firestore';
 import { useAuth } from '../lib/auth';
 import { useClinicData } from '../lib/useClinicData';
 import { useToast } from '../lib/toast';
@@ -160,21 +161,26 @@ function AddItemModal({ open, onClose, onSaved, clinicId }: { open: boolean; onC
     if (!form.name.trim()) return toast('Item name is required.', 'error');
     if (!form.quantity) return toast('Enter quantity.', 'error');
     setSaving(true);
-    const { error } = await supabase.from('inventory').insert({
-      clinic_id: clinicId,
-      name: form.name.trim(),
-      category: form.category,
-      quantity: parseFloat(form.quantity) || 0,
-      unit: form.unit,
-      reorder_level: parseFloat(form.reorder) || 10,
-      supplier: form.supplier || null,
-      cost_per_unit: parseFloat(form.cost) || 0,
-    });
-    setSaving(false);
-    if (error) return toast('Unable to update inventory. Please try again.', 'error');
-    toast('Item added to inventory.', 'success');
-    setForm({ name: '', category: 'Medicine', quantity: '', unit: 'strips', reorder: '', supplier: '', cost: '' });
-    onSaved();
+    try {
+      await addDoc(collection(db, 'inventory'), {
+        clinic_id: clinicId,
+        name: form.name.trim(),
+        category: form.category,
+        quantity: parseFloat(form.quantity) || 0,
+        unit: form.unit,
+        reorder_level: parseFloat(form.reorder) || 10,
+        supplier: form.supplier || null,
+        cost_per_unit: parseFloat(form.cost) || 0,
+        created_at: new Date().toISOString()
+      });
+      setSaving(false);
+      toast('Item added to inventory.', 'success');
+      setForm({ name: '', category: 'Medicine', quantity: '', unit: 'strips', reorder: '', supplier: '', cost: '' });
+      onSaved();
+    } catch(error) {
+      setSaving(false);
+      toast('Unable to update inventory. Please try again.', 'error');
+    }
   };
 
   return (
@@ -217,13 +223,16 @@ function RestockModal({ item, onClose, onSaved }: { item: InventoryItem | null; 
         <button onClick={onClose} className="btn-ghost">Cancel</button>
         <button
           onClick={async () => {
-            setSaving(true);
-            const { error } = await supabase.from('inventory').update({ quantity: parseFloat(newQty) }).eq('item_id', item.item_id);
-            setSaving(false);
-            if (error) return toast('Failed.', 'error');
-            toast(`Restocked. New quantity: ${newQty} ${item.unit}.`, 'success');
-            setQty('0');
-            onSaved();
+            try {
+              await updateDoc(doc(db, 'inventory', item.item_id!), { quantity: parseFloat(newQty) });
+              setSaving(false);
+              toast(`Restocked. New quantity: ${newQty} ${item.unit}.`, 'success');
+              setQty('0');
+              onSaved();
+            } catch(error) {
+              setSaving(false);
+              toast('Failed.', 'error');
+            }
           }}
           disabled={saving}
           className="btn-primary"

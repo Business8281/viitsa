@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { Save, Building2, Clock, Stethoscope, Users, Bell, Plus, AlertCircle, RefreshCw, QrCode, Link2, Share2 } from 'lucide-react';
-import { supabase } from '../lib/supabase';
-import { useAuth } from '../lib/auth';
+import { db, firebaseConfig } from '../lib/firebase';
+import { collection, query, where, getDocs, updateDoc, doc, setDoc, orderBy, getDoc } from 'firebase/firestore';
+import { initializeApp } from "firebase/app";
+import { getAuth, createUserWithEmailAndPassword, sendPasswordResetEmail } from "firebase/auth";
 import { useToast } from '../lib/toast';
 import { Modal } from '../components/Modal';
 import { Loading, SectionHeader, Avatar } from '../components/ui';
@@ -42,87 +44,117 @@ export function SettingsScreen() {
       setCloseHours(clinic.working_hours.close ?? '19:00');
       setWorkingDays(clinic.working_hours.days ?? ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']);
     }
-    Promise.all([
-      supabase.from('clinic_settings').select('*').eq('clinic_id', clinic.clinic_id).maybeSingle(),
-      supabase.from('users').select('*').eq('clinic_id', clinic.clinic_id).order('role'),
-    ]).then(([s, u]) => {
-      setSettings((s.data as ClinicSettings | null) ?? null);
-      if (s.data) {
-        setSlotDuration((s.data as ClinicSettings).slot_duration_minutes);
-        setUpiId((s.data as ClinicSettings & { upi_id?: string }).upi_id ?? '');
+    const fetchSettingsAndUsers = async () => {
+      try {
+        const settingsSnap = await getDoc(doc(db, 'clinic_settings', clinic.clinic_id));
+        const settingsData = settingsSnap.exists() ? settingsSnap.data() as ClinicSettings : null;
+        setSettings(settingsData);
+        if (settingsData) {
+          setSlotDuration(settingsData.slot_duration_minutes);
+          setUpiId((settingsData as any).upi_id ?? '');
+        }
+
+        const usersQ = query(collection(db, 'users'), where('clinic_id', '==', clinic.clinic_id), orderBy('role'));
+        const usersSnap = await getDocs(usersQ);
+        setUsers(usersSnap.docs.map(d => d.data() as User));
+      } catch(e) {
+        console.error(e);
+      } finally {
+        setLoading(false);
       }
-      setUsers((u.data as User[] | null) ?? []);
-      setLoading(false);
-    });
+    };
+    fetchSettingsAndUsers();
   }, [clinic]);
 
   const saveProfile = async () => {
     setSavingProfile(true);
-    const { error } = await supabase.from('clinics').update({ name: clinicName, address: clinicAddress, phone: clinicPhone, email: clinicEmail }).eq('clinic_id', clinic!.clinic_id);
-    setSavingProfile(false);
-    if (error) return toast('Unable to update clinic profile. Please try again.', 'error');
-    toast('Clinic profile updated.', 'success');
+    try {
+      await updateDoc(doc(db, 'clinics', clinic!.clinic_id), { name: clinicName, address: clinicAddress, phone: clinicPhone, email: clinicEmail });
+      toast('Clinic profile updated.', 'success');
+    } catch(error) {
+      toast('Unable to update clinic profile. Please try again.', 'error');
+    } finally {
+      setSavingProfile(false);
+    }
   };
 
   const saveHours = async () => {
     setSavingHours(true);
     const wh = { open: openHours, close: closeHours, days: workingDays };
-    await supabase.from('clinics').update({ working_hours: wh }).eq('clinic_id', clinic!.clinic_id);
-    const upsertData = { clinic_id: clinic!.clinic_id, slot_duration_minutes: slotDuration, upi_id: upiId || null };
-    if (settings) {
-      await supabase.from('clinic_settings').update(upsertData).eq('setting_id', settings.setting_id);
-    } else {
-      const { data } = await supabase.from('clinic_settings').insert(upsertData).select('*').single();
-      if (data) setSettings(data as ClinicSettings);
+    try {
+      await updateDoc(doc(db, 'clinics', clinic!.clinic_id), { working_hours: wh });
+      const upsertData = { clinic_id: clinic!.clinic_id, setting_id: clinic!.clinic_id, slot_duration_minutes: slotDuration, upi_id: upiId || null };
+      await setDoc(doc(db, 'clinic_settings', clinic!.clinic_id), upsertData, { merge: true });
+      setSettings(prev => prev ? { ...prev, ...upsertData } : upsertData as any);
+      toast('Working hours & slots updated.', 'success');
+    } catch (e) {
+      toast('Unable to save configuration.', 'error');
+    } finally {
+      setSavingHours(false);
     }
-    setSavingHours(false);
-    toast('Working hours & slots updated.', 'success');
   };
 
   const toggleDay = (d: string) => setWorkingDays(prev => prev.includes(d) ? prev.filter(x => x !== d) : [...prev, d]);
 
   const toggleReminder = async (key: 'whatsapp_reminders_enabled' | 'sms_reminders_enabled', val: boolean) => {
     if (!settings) return;
-    const { error } = await supabase.from('clinic_settings').update({ [key]: val }).eq('setting_id', settings.setting_id);
-    if (error) return toast('Unable to update settings. Please try again.', 'error');
-    setSettings({ ...settings, [key]: val });
-    toast(`${key === 'whatsapp_reminders_enabled' ? 'WhatsApp' : 'SMS'} reminders ${val ? 'enabled' : 'disabled'}.`, 'success');
+    try {
+      await updateDoc(doc(db, 'clinic_settings', clinic!.clinic_id), { [key]: val });
+      setSettings({ ...settings, [key]: val });
+      toast(`${key === 'whatsapp_reminders_enabled' ? 'WhatsApp' : 'SMS'} reminders ${val ? 'enabled' : 'disabled'}.`, 'success');
+    } catch(e) {
+      toast('Unable to update settings. Please try again.', 'error');
+    }
   };
 
   const addUser = async (data: { name: string; email: string; role: Role; phone: string; specialisation: string; password: string }) => {
-    const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
-      email: data.email.toLowerCase(),
-      password: data.password,
-      options: { data: { role: data.role, clinic_id: clinic!.clinic_id, name: data.name } },
-    });
-    if (signUpError) return toast('Unable to create this account. Please try again.', 'error');
-    const { error } = await supabase.from('users').insert({
-      user_id: signUpData?.user?.id ?? crypto.randomUUID(),
-      clinic_id: clinic!.clinic_id, name: data.name, email: data.email.toLowerCase(),
-      password_hash: 'supabase-auth', role: data.role, phone: data.phone || null,
-      specialisation: data.specialisation || null, active: true,
-      avatar_color: data.role === 'doctor' ? '#05C994' : data.role === 'staff' ? '#E08600' : '#0F6E56',
-    });
-    if (error) return toast('Unable to add this user. Please try again.', 'error');
-    toast(`${data.name} added. Verification email sent.`, 'success');
-    setAddUserOpen(false);
-    const { data: refresh } = await supabase.from('users').select('*').eq('clinic_id', clinic!.clinic_id).order('role');
-    setUsers((refresh as User[] | null) ?? []);
+    try {
+      // create user with secondary app to avoid logging out the current user
+      const secondaryApp = initializeApp(firebaseConfig, "Secondary");
+      const secondaryAuth = getAuth(secondaryApp);
+      
+      const userCredential = await createUserWithEmailAndPassword(secondaryAuth, data.email.toLowerCase(), data.password);
+      
+      const userId = userCredential.user.uid;
+      const newUser = {
+        user_id: userId,
+        clinic_id: clinic!.clinic_id, name: data.name, email: data.email.toLowerCase(),
+        role: data.role, phone: data.phone || null,
+        specialisation: data.specialisation || null, active: true,
+        avatar_color: data.role === 'doctor' ? '#05C994' : data.role === 'staff' ? '#E08600' : '#0F6E56',
+        created_at: new Date().toISOString()
+      };
+      
+      await setDoc(doc(db, 'users', userId), newUser);
+      
+      await secondaryAuth.signOut();
+      
+      toast(`${data.name} added.`, 'success');
+      setAddUserOpen(false);
+      setUsers(prev => [...prev, newUser as User].sort((a,b) => a.role.localeCompare(b.role)));
+    } catch (e) {
+      toast('Unable to add this user. Please try again.', 'error');
+    }
   };
 
   const resetPassword = async (u: User) => {
-    const { error } = await supabase.auth.resetPasswordForEmail(u.email, {
-      redirectTo: `${window.location.origin}/login`,
-    });
-    if (error) return toast('Unable to send reset email. Please try again.', 'error');
-    toast('Password reset email sent.', 'success');
+    try {
+      const auth = getAuth();
+      await sendPasswordResetEmail(auth, u.email);
+      toast('Password reset email sent.', 'success');
+    } catch (e) {
+      toast('Unable to send reset email. Please try again.', 'error');
+    }
   };
 
   const toggleActive = async (u: User) => {
-    const { error } = await supabase.from('users').update({ active: !u.active }).eq('user_id', u.user_id);
-    if (error) return toast('Unable to update user status. Please try again.', 'error');
-    setUsers(users.map(x => x.user_id === u.user_id ? { ...x, active: !x.active } : x));
-    toast(`${u.name} ${u.active ? 'deactivated' : 'activated'}.`, 'success');
+    try {
+      await updateDoc(doc(db, 'users', u.user_id), { active: !u.active });
+      setUsers(users.map(x => x.user_id === u.user_id ? { ...x, active: !x.active } : x));
+      toast(`${u.name} ${u.active ? 'deactivated' : 'activated'}.`, 'success');
+    } catch(e) {
+      toast('Unable to update user status. Please try again.', 'error');
+    }
   };
 
   if (loading || !clinic) return <Loading label="Loading settings…" />;

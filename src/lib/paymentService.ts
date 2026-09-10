@@ -1,5 +1,5 @@
-import { supabase } from './supabase';
-import { localDateISO } from './format';
+import { db } from './firebase';
+import { collection, doc, writeBatch } from 'firebase/firestore';
 import type { BillLineItem, PaymentMethod } from './types';
 
 export interface ProcessPaymentInput {
@@ -32,7 +32,6 @@ export async function processPayment(input: ProcessPaymentInput): Promise<Proces
   // Cash is marked 'paid' immediately (collected in person by staff).
   // UPI is 'paid' only if a transaction reference is provided as proof.
   // Card is 'pending' until a payment gateway verifies the transaction.
-  // This avoids faking payment success without verification.
   const status: string =
     input.paymentMethod === 'cash' ? 'paid'
     : input.paymentMethod === 'upi' && input.upiRef ? 'paid'
@@ -44,36 +43,51 @@ export async function processPayment(input: ProcessPaymentInput): Promise<Proces
   ];
 
   try {
-    const { data, error } = await supabase.rpc('process_payment_atomic', {
-      p_clinic_id: input.clinicId,
-      p_patient_id: input.patientId,
-      p_appt_id: input.apptId,
-      p_doctor_id: input.doctorId,
-      p_amount: total,
-      p_payment_method: input.paymentMethod,
-      p_payment_status: status,
-      p_upi_ref: input.upiRef ?? null,
-      p_consultation_fee: input.consultationFee,
-      p_visit_type: input.visitType ?? 'new-visit',
-      p_discount_amount: input.discountAmount,
-      p_discount_percent: input.discountPercent,
-      p_notes: input.notes ?? null,
-      p_line_items: JSON.stringify(allLineItems),
+    const batch = writeBatch(db);
+
+    const billRef = doc(collection(db, 'billing'));
+    const invoiceRef = doc(collection(db, 'invoices'));
+
+    const invoiceNumber = `INV-${Date.now()}`;
+    const timestamp = new Date().toISOString();
+
+    batch.set(billRef, {
+      clinic_id: input.clinicId,
+      patient_id: input.patientId,
+      appointment_id: input.apptId,
+      amount: total,
+      payment_method: input.paymentMethod,
+      payment_status: status,
+      upi_ref: input.upiRef ?? null,
+      created_at: timestamp
     });
 
-    if (error) {
-      return { ok: false, error: 'Unable to process payment. Please try again.' };
-    }
+    batch.set(invoiceRef, {
+      clinic_id: input.clinicId,
+      patient_id: input.patientId,
+      appointment_id: input.apptId,
+      doctor_id: input.doctorId,
+      invoice_number: invoiceNumber,
+      amount: total,
+      consultation_fee: input.consultationFee,
+      visit_type: input.visitType ?? 'new-visit',
+      discount_amount: input.discountAmount,
+      discount_percent: input.discountPercent,
+      line_items: allLineItems,
+      notes: input.notes ?? null,
+      created_at: timestamp
+    });
 
-    const result = data as { bill_id: string; invoice_id: string; invoice_number: string; payment_status: string };
+    await batch.commit();
 
     return {
       ok: true,
-      billId: result.bill_id,
-      invoiceId: result.invoice_id,
-      invoiceNumber: result.invoice_number,
+      billId: billRef.id,
+      invoiceId: invoiceRef.id,
+      invoiceNumber: invoiceNumber,
     };
-  } catch {
+  } catch (e) {
+    console.error('Payment Error', e);
     return { ok: false, error: 'Unable to process payment. Please try again.' };
   }
 }

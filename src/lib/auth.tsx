@@ -1,6 +1,25 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
-import { supabase, DEMO_CLINIC_ID } from './supabase';
-import type { Clinic, Role, User } from './types';
+import { auth, db, DEMO_CLINIC_ID } from './firebase';
+import { 
+  signInWithEmailAndPassword, 
+  signOut, 
+  onAuthStateChanged,
+  User as FirebaseUser,
+  sendSignInLinkToEmail,
+  isSignInWithEmailLink,
+  signInWithEmailLink
+} from 'firebase/auth';
+import { 
+  collection, 
+  doc, 
+  getDoc, 
+  setDoc, 
+  query, 
+  where, 
+  getDocs,
+  addDoc
+} from 'firebase/firestore';
+import type { Clinic, User } from './types';
 
 interface AuthState {
   user: User | null;
@@ -17,82 +36,33 @@ interface AuthState {
 const AuthContext = createContext<AuthState | undefined>(undefined);
 
 async function loadProfile(email: string): Promise<{ user: User | null; clinic: Clinic | null }> {
-  const { data } = await supabase
-    .from('users')
-    .select('*')
-    .eq('email', email.trim().toLowerCase())
-    .eq('active', true)
-    .maybeSingle();
-  if (!data) return { user: null, clinic: null };
+  try {
+    const usersRef = collection(db, 'users');
+    const q = query(usersRef, where('email', '==', email.trim().toLowerCase()), where('active', '==', true));
+    const querySnapshot = await getDocs(q);
+    
+    if (querySnapshot.empty) return { user: null, clinic: null };
+    
+    const userData = querySnapshot.docs[0].data() as User;
+    userData.user_id = querySnapshot.docs[0].id; // Ensure ID is mapped if needed
 
-  const { data: clinicData } = await supabase
-    .from('clinics')
-    .select('*')
-    .eq('clinic_id', data.clinic_id)
-    .single();
+    const clinicRef = doc(db, 'clinics', userData.clinic_id);
+    const clinicSnap = await getDoc(clinicRef);
+    
+    let clinicData: Clinic | null = null;
+    if (clinicSnap.exists()) {
+      clinicData = { ...clinicSnap.data(), clinic_id: clinicSnap.id } as Clinic;
+    }
 
-  return { user: data as User, clinic: clinicData as Clinic };
+    return { user: userData, clinic: clinicData };
+  } catch (err) {
+    console.error("Error loading profile:", err);
+    return { user: null, clinic: null };
+  }
 }
 
-async function checkAndCreateProfile(sessionUser: import('@supabase/supabase-js').User): Promise<{ user: User | null; clinic: Clinic | null }> {
-  const { user: u, clinic: c } = await loadProfile(sessionUser.email ?? '');
-  if (u) {
-    return { user: u, clinic: c };
-  }
-
-  const metadata = sessionUser.user_metadata || {};
-  
-  // Fallback for broken accounts that were registered without proper metadata
-  const role = metadata.role || 'admin';
-  const clinicName = metadata.clinic_name || 'My Clinic';
-  const ownerName = metadata.owner_name || sessionUser.email?.split('@')[0] || 'Admin';
-  const phone = metadata.phone || '0000000000';
-  const city = metadata.city || 'Unknown';
-
-  if (role === 'admin') {
-    const { data: newClinic, error: clinicError } = await supabase
-      .from('clinics')
-      .insert({
-        name: clinicName,
-        owner_name: ownerName,
-        phone: phone,
-        city: city,
-        email: sessionUser.email,
-      })
-      .select()
-      .single();
-
-    if (clinicError || !newClinic) {
-      return { user: null, clinic: null };
-    }
-
-    const { data: newUser, error: userError } = await supabase
-      .from('users')
-      .insert({
-        user_id: sessionUser.id,
-        clinic_id: newClinic.clinic_id,
-        name: ownerName,
-        email: sessionUser.email,
-        phone: phone,
-        role: 'admin',
-        active: true,
-        password_hash: 'supabase-auth',
-      })
-      .select()
-      .single();
-
-    if (userError || !newUser) {
-      const { user: fallbackUser, clinic: fallbackClinic } = await loadProfile(sessionUser.email ?? '');
-      if (fallbackUser) {
-        return { user: fallbackUser, clinic: fallbackClinic };
-      }
-      return { user: null, clinic: null };
-    }
-
-    return { user: newUser as User, clinic: newClinic as Clinic };
-  }
-
-  return { user: null, clinic: null };
+async function checkAndCreateProfile(sessionUser: FirebaseUser): Promise<{ user: User | null; clinic: Clinic | null }> {
+  return await loadProfile(sessionUser.email ?? '');
 }
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
@@ -102,61 +72,33 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    let mounted = true;
-
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      if (!mounted) return;
-      if (session?.user) {
-        checkAndCreateProfile(session.user).then(({ user: u, clinic: c }) => {
-          if (!mounted) return;
-          setUser(u);
-          setClinic(c);
-          setLoading(false);
-          if (!u) supabase.auth.signOut();
-        });
-      } else {
+    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+      if (!firebaseUser) {
+        setUser(null);
+        setClinic(null);
         setLoading(false);
+        return;
       }
+      
+      const { user: u, clinic: c } = await checkAndCreateProfile(firebaseUser);
+      setUser(u);
+      setClinic(c);
+      setLoading(false);
     });
 
-    const { data: authListener } = supabase.auth.onAuthStateChange((_event, session) => {
-      (async () => {
-        if (!session?.user) {
-          setUser(null);
-          setClinic(null);
-          setLoading(false);
-          return;
-        }
-        const { user: u, clinic: c } = await checkAndCreateProfile(session.user);
-        setUser(u);
-        setClinic(c);
-        setLoading(false);
-        if (!u) await supabase.auth.signOut();
-      })();
-    });
-
-    return () => {
-      mounted = false;
-      authListener.subscription.unsubscribe();
-    };
+    return () => unsubscribe();
   }, []);
 
   const login = useCallback(async (email: string, password: string) => {
     setLoading(true);
     setError(null);
     try {
-      const { data, error: signInError } = await supabase.auth.signInWithPassword({
-        email: email.trim().toLowerCase(),
-        password,
-      });
-      if (signInError) {
-        setLoading(false);
-        return { ok: false, error: 'Invalid email or password.' };
-      }
-      if (data.user) {
-        const { user: u, clinic: c } = await checkAndCreateProfile(data.user);
+      const userCredential = await signInWithEmailAndPassword(auth, email.trim().toLowerCase(), password);
+      
+      if (userCredential.user) {
+        const { user: u, clinic: c } = await checkAndCreateProfile(userCredential.user);
         if (!u) {
-          await supabase.auth.signOut();
+          await signOut(auth);
           setLoading(false);
           return { ok: false, error: 'User profile not found or inactive.' };
         }
@@ -165,8 +107,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
       setLoading(false);
       return { ok: true };
-    } catch (err) {
-      setError('Login failed. Please try again.');
+    } catch (err: any) {
+      setError(err.message || 'Login failed. Please try again.');
       setLoading(false);
       return { ok: false, error: 'Login failed. Please try again.' };
     }
@@ -175,61 +117,66 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const loginWithOtp = useCallback(async (email: string) => {
     setError(null);
     try {
-      const { error: otpError } = await supabase.auth.signInWithOtp({
-        email: email.trim().toLowerCase(),
-        options: { shouldCreateUser: false },
-      });
-      if (otpError) {
-        return { ok: false, error: 'Unable to send login code.' };
-      }
+      const actionCodeSettings = {
+        url: window.location.origin + '/login',
+        handleCodeInApp: true,
+      };
+      await sendSignInLinkToEmail(auth, email.trim().toLowerCase(), actionCodeSettings);
+      window.localStorage.setItem('emailForSignIn', email.trim().toLowerCase());
       return { ok: true };
-    } catch (err) {
-      return { ok: false, error: 'Unable to send login code.' };
+    } catch (err: any) {
+      return { ok: false, error: err.message || 'Unable to send login link.' };
     }
   }, []);
 
   const verifyEmailOtp = useCallback(async (email: string, token: string) => {
+    // Firebase auth email links do not use a separate token, they rely on the URL.
+    // If you actually use OTPs, Firebase Phone Auth is the native solution.
+    // Here we will implement the email link login check.
     setLoading(true);
     setError(null);
     try {
-      const { data, error: verifyError } = await supabase.auth.verifyOtp({
-        email: email.trim().toLowerCase(),
-        token,
-        type: 'email',
-      });
-      if (verifyError) {
-        setLoading(false);
-        return { ok: false, error: 'Invalid verification code.' };
-      }
-      if (data.user) {
-        const { user: u, clinic: c } = await checkAndCreateProfile(data.user);
-        if (!u) {
-          await supabase.auth.signOut();
-          setLoading(false);
-          return { ok: false, error: 'User profile not found or inactive.' };
+      if (isSignInWithEmailLink(auth, window.location.href)) {
+        let storedEmail = window.localStorage.getItem('emailForSignIn');
+        if (!storedEmail) {
+           storedEmail = window.prompt('Please provide your email for confirmation');
         }
-        setUser(u);
-        setClinic(c);
+        if (!storedEmail) throw new Error("Email required");
+        
+        const result = await signInWithEmailLink(auth, storedEmail, window.location.href);
+        window.localStorage.removeItem('emailForSignIn');
+        
+        if (result.user) {
+          const { user: u, clinic: c } = await checkAndCreateProfile(result.user);
+          if (!u) {
+            await signOut(auth);
+            setLoading(false);
+            return { ok: false, error: 'User profile not found.' };
+          }
+          setUser(u);
+          setClinic(c);
+        }
+        setLoading(false);
+        return { ok: true };
       }
+      return { ok: false, error: 'Invalid verification link.' };
+    } catch (err: any) {
+      setError('Invalid verification link.');
       setLoading(false);
-      return { ok: true };
-    } catch (err) {
-      setError('Invalid verification code.');
-      setLoading(false);
-      return { ok: false, error: 'Invalid verification code.' };
+      return { ok: false, error: 'Invalid verification link.' };
     }
   }, []);
 
   const logout = useCallback(() => {
     setUser(null);
     setClinic(null);
-    void supabase.auth.signOut();
+    signOut(auth);
   }, []);
 
   const refreshSession = useCallback(async () => {
-    const { data: { session } } = await supabase.auth.getSession();
-    if (session?.user) {
-      const { user: u, clinic: c } = await loadProfile(session.user.email ?? '');
+    const currentUser = auth.currentUser;
+    if (currentUser) {
+      const { user: u, clinic: c } = await loadProfile(currentUser.email ?? '');
       setUser(u);
       setClinic(c);
     } else {

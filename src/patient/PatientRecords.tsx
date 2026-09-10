@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { ChevronDown, ChevronUp, ChevronLeft, FileText, Bell, Pill, Share2, BellRing, Plus, Camera, AlertTriangle, CheckCircle } from 'lucide-react';
-import { supabase } from '../lib/supabase';
+import { db } from '../lib/firebase';
+import { collection, query, where, orderBy, getDocs, limit } from 'firebase/firestore';
 import { formatDate } from '../lib/format';
 import { usePatientAuth } from '../lib/patientAuth';
 import { ReportScanner } from './ReportScanner';
@@ -24,16 +25,16 @@ export function PatientRecords({ patientId, onTab }: Props) {
     if (!patientId) return;
 
     // Load consultations
-    supabase.from('consultations').select('*').eq('patient_id', patientId).order('created_at', { ascending: false })
-      .then(({ data }) => setConsults((data as Consultation[] | null) ?? []));
+    const cQ = query(collection(db, 'consultations'), where('patient_id', '==', patientId), orderBy('created_at', 'desc'));
+    getDocs(cQ).then(snap => setConsults(snap.docs.map(d => d.data() as Consultation)));
 
     // Load vitals
-    supabase.from('vitals').select('*').eq('patient_id', patientId).order('recorded_at', { ascending: false }).limit(5)
-      .then(({ data }) => setVitals((data as Vital[] | null) ?? []));
+    const vQ = query(collection(db, 'vitals'), where('patient_id', '==', patientId), orderBy('recorded_at', 'desc'), limit(5));
+    getDocs(vQ).then(snap => setVitals(snap.docs.map(d => d.data() as Vital)));
 
     // Load health reports
-    supabase.from('health_reports').select('*').eq('patient_id', patientId).order('created_at', { ascending: false })
-      .then(({ data }) => setReports((data as HealthReport[] | null) ?? []));
+    const rQ = query(collection(db, 'health_reports'), where('patient_id', '==', patientId), orderBy('created_at', 'desc'));
+    getDocs(rQ).then(snap => setReports(snap.docs.map(d => d.data() as HealthReport)));
   }, [patientId]);
 
   const latest = vitals[0];
@@ -42,8 +43,8 @@ export function PatientRecords({ patientId, onTab }: Props) {
 
   const refreshReports = () => {
     if (!patientId) return;
-    supabase.from('health_reports').select('*').eq('patient_id', patientId).order('created_at', { ascending: false })
-      .then(({ data }) => setReports((data as HealthReport[] | null) ?? []));
+    const rQ = query(collection(db, 'health_reports'), where('patient_id', '==', patientId), orderBy('created_at', 'desc'));
+    getDocs(rQ).then(snap => setReports(snap.docs.map(d => d.data() as HealthReport)));
   };
 
   // Show scanner

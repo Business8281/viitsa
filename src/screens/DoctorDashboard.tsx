@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Stethoscope, Siren, Clock, User, ArrowRight, FileText, Printer, Save, Sparkles, AlertTriangle, Activity } from 'lucide-react';
-import { supabase } from '../lib/supabase';
+import { db } from '../lib/firebase';
+import { collection, query, where, orderBy, limit, getDocs, addDoc, updateDoc, doc } from 'firebase/firestore';
 import { useAuth } from '../lib/auth';
 import { useClinicData } from '../lib/useClinicData';
 import { useToast } from '../lib/toast';
@@ -48,7 +49,7 @@ export function DoctorDashboard() {
           ) : (
             <div className="space-y-2">
               {myQueue.map((a) => (
-                <DoctorQueueRow key={a.appt_id} appt={a} patient={a.patient} onOpen={() => setOpenAppt(a)} />
+                <DoctorQueueRow key={a.appointment_id} appt={a} patient={a.patient} onOpen={() => setOpenAppt(a)} />
               ))}
             </div>
           )}
@@ -125,22 +126,18 @@ function NextPatientPanel({ appt, patient }: { appt: Appointment; patient?: Pati
 
   useEffect(() => {
     if (!patient) return;
-    supabase
-      .from('ai_sessions')
-      .select('*')
-      .eq('patient_id', patient.patient_id)
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle()
-      .then(({ data }) => setAiSession(data as AISession | null));
-    supabase
-      .from('vitals')
-      .select('*')
-      .eq('patient_id', patient.patient_id)
-      .order('recorded_at', { ascending: false })
-      .limit(1)
-      .maybeSingle()
-      .then(({ data }) => setVitals(data as Vital | null));
+    const fetchAiSession = async () => {
+      const q = query(collection(db, 'ai_sessions'), where('patient_id', '==', patient.patient_id), orderBy('created_at', 'desc'), limit(1));
+      const snap = await getDocs(q);
+      if (!snap.empty) setAiSession(snap.docs[0].data() as AISession);
+    };
+    const fetchVitals = async () => {
+      const q = query(collection(db, 'vitals'), where('patient_id', '==', patient.patient_id), orderBy('recorded_at', 'desc'), limit(1));
+      const snap = await getDocs(q);
+      if (!snap.empty) setVitals(snap.docs[0].data() as Vital);
+    };
+    fetchAiSession();
+    fetchVitals();
   }, [patient]);
 
   if (!patient) {
@@ -252,16 +249,24 @@ function ConsultationModal({ appt, onClose, onSaved }: { appt: Appointment; onCl
 
   useEffect(() => {
     if (!patient) return;
-    supabase.from('ai_sessions').select('*').eq('patient_id', patient.patient_id).order('created_at', { ascending: false }).limit(1).maybeSingle()
-      .then(({ data }) => {
-        const s = data as AISession | null;
+    const fetchAll = async () => {
+      const q1 = query(collection(db, 'ai_sessions'), where('patient_id', '==', patient.patient_id), orderBy('created_at', 'desc'), limit(1));
+      const snap1 = await getDocs(q1);
+      if (!snap1.empty) {
+        const s = snap1.docs[0].data() as AISession;
         setAiSession(s);
-        if (s?.symptoms_entered) setSymptoms(s.symptoms_entered);
-      });
-    supabase.from('consultations').select('*').eq('patient_id', patient.patient_id).order('created_at', { ascending: false }).limit(3)
-      .then(({ data }) => setPrevConsults((data as Consultation[] | null) ?? []));
-    supabase.from('vitals').select('*').eq('patient_id', patient.patient_id).order('recorded_at', { ascending: false }).limit(1).maybeSingle()
-      .then(({ data }) => setVitals(data as Vital | null));
+        if (s.symptoms_entered) setSymptoms(s.symptoms_entered);
+      }
+
+      const q2 = query(collection(db, 'consultations'), where('patient_id', '==', patient.patient_id), orderBy('created_at', 'desc'), limit(3));
+      const snap2 = await getDocs(q2);
+      setPrevConsults(snap2.docs.map(d => d.data() as Consultation));
+
+      const q3 = query(collection(db, 'vitals'), where('patient_id', '==', patient.patient_id), orderBy('recorded_at', 'desc'), limit(1));
+      const snap3 = await getDocs(q3);
+      if (!snap3.empty) setVitals(snap3.docs[0].data() as Vital);
+    };
+    fetchAll();
   }, [patient]);
 
   if (!patient) {
@@ -276,7 +281,7 @@ function ConsultationModal({ appt, onClose, onSaved }: { appt: Appointment; onCl
     if (!diagnosis.trim()) return toast('Diagnosis is required.', 'error');
     setSaving(true);
     const payload = {
-      appt_id: appt.appt_id,
+      appointment_id: appt.appointment_id,
       patient_id: patient.patient_id,
       doctor_id: user!.user_id,
       symptoms: symptoms.trim(),
@@ -284,18 +289,20 @@ function ConsultationModal({ appt, onClose, onSaved }: { appt: Appointment; onCl
       prescription: prescription.trim(),
       follow_up_date: followUp || null,
       notes: notes.trim(),
+      created_at: new Date().toISOString()
     };
-    const { error: consErr } = await supabase.from('consultations').insert(payload);
-    if (consErr) {
+    try {
+      await addDoc(collection(db, 'consultations'), payload);
+      if (markDone) {
+        await updateDoc(doc(db, 'appointments', appt.appointment_id!), { status: 'done' });
+      }
+      toast(markDone ? 'Consultation saved & marked done.' : 'Consultation saved.', 'success');
+      onSaved();
+    } catch(error) {
+      toast('Unable to save consultation. Please try again.', 'error');
+    } finally {
       setSaving(false);
-      return toast('Unable to save consultation. Please try again.', 'error');
     }
-    if (markDone) {
-      await supabase.from('appointments').update({ status: 'done' }).eq('appt_id', appt.appt_id);
-    }
-    setSaving(false);
-    toast(markDone ? 'Consultation saved & marked done.' : 'Consultation saved.', 'success');
-    onSaved();
   };
 
   const printPrescription = () => {
@@ -375,8 +382,8 @@ function ConsultationModal({ appt, onClose, onSaved }: { appt: Appointment; onCl
               <p className="text-xs text-ink-subtle">No previous consultations on record.</p>
             ) : (
               <div className="space-y-2">
-                {prevConsults.map((c) => (
-                  <div key={c.consult_id} className="rounded-lg bg-primary-50/40 p-3">
+                {prevConsults.map((c, i) => (
+                  <div key={i} className="rounded-lg bg-primary-50/40 p-3">
                     <div className="flex items-center justify-between mb-1">
                       <p className="text-xs font-semibold text-ink">{formatDate(c.created_at)}</p>
                       {c.follow_up_date && (

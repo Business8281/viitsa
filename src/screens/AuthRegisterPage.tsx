@@ -4,9 +4,12 @@ import {
   Building2, Mail, Lock, User, Phone, ArrowRight, Zap, Shield, CheckCircle,
   Home, AlertCircle, MailCheck, Loader2,
 } from 'lucide-react';
-import { supabase } from '../lib/supabase';
 import { useToast } from '../lib/toast';
 import { ViitsaLogo } from '../components/ViitsaLogo';
+import { auth, db } from '../lib/firebase';
+import { createUserWithEmailAndPassword, sendEmailVerification } from 'firebase/auth';
+import { collection, addDoc, query, where, getDocs, setDoc, doc } from 'firebase/firestore';
+import { useAuth } from '../lib/auth';
 
 type CheckState = 'idle' | 'checking' | 'exists' | 'available';
 
@@ -17,6 +20,7 @@ export function AuthRegisterPage() {
   const [emailCheck, setEmailCheck] = useState<CheckState>('idle');
   const navigate = useNavigate();
   const { toast } = useToast();
+  const { refreshSession } = useAuth();
 
   const [formData, setFormData] = useState({
     clinicName: '',
@@ -34,18 +38,10 @@ export function AuthRegisterPage() {
 
   const checkEmailExists = async (email: string): Promise<boolean> => {
     try {
-      const fnUrl = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/check-email`;
-      const resp = await fetch(fnUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
-        },
-        body: JSON.stringify({ email }),
-      });
-      if (!resp.ok) return false;
-      const data = await resp.json();
-      return Boolean(data.exists);
+      const usersRef = collection(db, 'users');
+      const q = query(usersRef, where('email', '==', email.toLowerCase()));
+      const snap = await getDocs(q);
+      return !snap.empty;
     } catch {
       return false;
     }
@@ -91,40 +87,41 @@ export function AuthRegisterPage() {
         return;
       }
 
-      const { data, error: signUpError } = await supabase.auth.signUp({
+      // Create User in Firebase Auth
+      const userCredential = await createUserWithEmailAndPassword(auth, formData.email.trim().toLowerCase(), formData.password);
+      
+      // Create Clinic in Firestore
+      const newClinicRef = await addDoc(collection(db, 'clinics'), {
+        name: formData.clinicName,
+        phone: formData.phone,
+        city: formData.city,
+        type: 'General',
         email: formData.email.trim().toLowerCase(),
-        password: formData.password,
-        options: {
-          data: {
-            clinic_name: formData.clinicName,
-            owner_name: formData.ownerName,
-            phone: formData.phone,
-            city: formData.city,
-            role: 'admin',
-          },
-          emailRedirectTo: `${window.location.origin}/login`,
-        },
+        created_at: new Date().toISOString()
       });
 
-      if (signUpError) {
-        if (signUpError.message.toLowerCase().includes('already') || signUpError.message.toLowerCase().includes('exists')) {
-          setError('An account with this email already exists. Please sign in instead.');
-        } else {
-          setError(signUpError.message);
-        }
-        setLoading(false);
-        return;
-      }
+      // Create User in Firestore
+      await setDoc(doc(db, 'users', userCredential.user.uid), {
+        email: formData.email.trim().toLowerCase(),
+        name: formData.ownerName,
+        role: 'admin',
+        clinic_id: newClinicRef.id,
+        active: true,
+        created_at: new Date().toISOString()
+      });
 
-      if (data.session) {
-        navigate('/dashboard');
-      } else if (data.user) {
-        setEmailSent(true);
-        toast('Confirmation email sent! Check your inbox.', 'success');
+      await refreshSession(); // Update app state with the new Firestore profile
+
+      await sendEmailVerification(userCredential.user);
+      setEmailSent(true);
+
+    } catch (err: any) {
+      const msg = err.message || String(err);
+      if (msg.includes('email-already-in-use')) {
+        setError('An account with this email already exists. Please sign in instead.');
+      } else {
+        setError('Registration failed: ' + msg);
       }
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      setError('Registration failed: ' + msg);
     } finally {
       setLoading(false);
     }
@@ -298,7 +295,7 @@ export function AuthRegisterPage() {
                 </>
               ) : (
                 <>
-                  Register & Send Verification
+                  Register & Sign In
                   <ArrowRight className="w-5 h-5" />
                 </>
               )}
@@ -328,7 +325,7 @@ export function AuthRegisterPage() {
             </p>
           </div>
           <div className="space-y-4">
-            {['Secure email verification', 'AI-powered patient triage', 'Real-time analytics & insights', 'WhatsApp patient reminders'].map((feature) => (
+            {['Secure authentication', 'AI-powered patient triage', 'Real-time analytics & insights', 'WhatsApp patient reminders'].map((feature) => (
               <div key={feature} className="flex items-center gap-3">
                 <div className="w-6 h-6 rounded-full bg-white/20 flex items-center justify-center flex-shrink-0">
                   <CheckCircle className="w-4 h-4" />
