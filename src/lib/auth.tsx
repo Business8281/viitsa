@@ -7,7 +7,9 @@ import {
   User as FirebaseUser,
   sendSignInLinkToEmail,
   isSignInWithEmailLink,
-  signInWithEmailLink
+  signInWithEmailLink,
+  signInWithPopup,
+  GoogleAuthProvider
 } from 'firebase/auth';
 import { 
   collection, 
@@ -27,6 +29,7 @@ interface AuthState {
   loading: boolean;
   error: string | null;
   login: (email: string, password: string) => Promise<{ ok: boolean; error?: string }>;
+  loginWithGoogle: () => Promise<{ ok: boolean; error?: string }>;
   loginWithOtp: (email: string) => Promise<{ ok: boolean; error?: string }>;
   verifyEmailOtp: (email: string, token: string) => Promise<{ ok: boolean; error?: string }>;
   logout: () => void;
@@ -98,7 +101,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (userCredential.user) {
         const { user: u, clinic: c } = await checkAndCreateProfile(userCredential.user);
         if (!u) {
-          await signOut(auth);
           setLoading(false);
           return { ok: false, error: 'User profile not found or inactive.' };
         }
@@ -111,6 +113,73 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setError(err.message || 'Login failed. Please try again.');
       setLoading(false);
       return { ok: false, error: 'Login failed. Please try again.' };
+    }
+  }, []);
+
+  const loginWithGoogle = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const provider = new GoogleAuthProvider();
+      const userCredential = await signInWithPopup(auth, provider);
+      
+      if (userCredential.user) {
+        let { user: u, clinic: c } = await loadProfile(userCredential.user.email ?? '');
+        
+        if (!u) {
+          // Auto-register Google users
+          const email = userCredential.user.email || '';
+          const ownerName = userCredential.user.displayName || email.split('@')[0] || 'Admin';
+          
+          const newClinicRef = await addDoc(collection(db, 'clinics'), {
+            name: `${ownerName}'s Clinic`,
+            owner_name: ownerName,
+            phone: '0000000000',
+            city: 'Unknown',
+            email: email,
+            created_at: new Date().toISOString()
+          });
+
+          const newUser: User = {
+            user_id: userCredential.user.uid,
+            clinic_id: newClinicRef.id,
+            name: ownerName,
+            email: email,
+            phone: '0000000000',
+            role: 'admin',
+            active: true,
+            password_hash: 'google-oauth',
+            avatar_color: '#0F6E56',
+            created_at: new Date().toISOString(),
+            specialisation: null
+          };
+
+          await setDoc(doc(db, 'users', userCredential.user.uid), newUser);
+          
+          u = newUser;
+          c = {
+            clinic_id: newClinicRef.id,
+            name: `${ownerName}'s Clinic`,
+            address: '',
+            city: 'Unknown',
+            phone: '0000000000',
+            email: email,
+            logo_url: null,
+            owner_name: ownerName,
+            working_hours: { open: '09:00', close: '19:00', days: ['Mon','Tue','Wed','Thu','Fri','Sat'] },
+            created_at: new Date().toISOString()
+          } as Clinic;
+        }
+        
+        setUser(u);
+        setClinic(c);
+      }
+      setLoading(false);
+      return { ok: true };
+    } catch (err: any) {
+      setError(err.message || 'Google Login failed.');
+      setLoading(false);
+      return { ok: false, error: 'Google Login failed.' };
     }
   }, []);
 
@@ -186,8 +255,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const value = useMemo<AuthState>(
-    () => ({ user, clinic, loading, error, login, loginWithOtp, verifyEmailOtp, logout, refreshSession }),
-    [user, clinic, loading, error, login, loginWithOtp, verifyEmailOtp, logout, refreshSession],
+    () => ({ user, clinic, loading, error, login, loginWithGoogle, loginWithOtp, verifyEmailOtp, logout, refreshSession }),
+    [user, clinic, loading, error, login, loginWithGoogle, loginWithOtp, verifyEmailOtp, logout, refreshSession],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
