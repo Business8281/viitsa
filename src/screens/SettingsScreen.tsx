@@ -5,6 +5,7 @@ import { collection, query, where, getDocs, updateDoc, doc, setDoc, orderBy, get
 import { initializeApp } from "firebase/app";
 import { getAuth, createUserWithEmailAndPassword, sendPasswordResetEmail } from "firebase/auth";
 import { useToast } from '../lib/toast';
+import { useAuth } from '../lib/auth';
 import { Modal } from '../components/Modal';
 import { Loading, SectionHeader, Avatar } from '../components/ui';
 import type { ClinicSettings, User, Role } from '../lib/types';
@@ -159,7 +160,7 @@ export function SettingsScreen() {
 
   if (loading || !clinic) return <Loading label="Loading settings…" />;
 
-  const tabs: { key: Tab; label: string; Icon: React.ComponentType<{ size?: number }> }[] = [
+  const tabs: { key: Tab; label: string; Icon: any }[] = [
     { key: 'profile', label: 'Clinic profile', Icon: Building2 },
     { key: 'hours', label: 'Working hours', Icon: Clock },
     { key: 'doctors', label: 'Doctors', Icon: Stethoscope },

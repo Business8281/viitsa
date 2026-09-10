@@ -756,7 +756,7 @@ export function LandingPage() {
             <div>
               <h4 className="text-white font-bold mb-4 text-sm uppercase tracking-wider">Products</h4>
               <ul className="space-y-2.5 text-sm">
-                {[['Clinic Dashboard', '/dashboard'], ['Patient Portal', '/patient'], ['AI Navigator', '#ai'], ['Analytics', '#features'], ['Mobile App', '#features']].map(([label, href]) => (
+                {[['Clinic Dashboard', '/clinic/dashboard'], ['Patient Portal', '/patient'], ['AI Navigator', '#ai'], ['Analytics', '#features'], ['Mobile App', '#features']].map(([label, href]) => (
                   <li key={label}>
                     {href.startsWith('/') ? (
                       <button onClick={() => goTo(href)} className="text-slate-400 hover:text-emerald-400 transition-colors">{label}</button>

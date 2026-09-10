@@ -1,10 +1,51 @@
-import { useState, useEffect, lazy, Suspense } from 'react';
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { useState, useEffect, lazy, Suspense, Component, type ReactNode, type ErrorInfo } from 'react';
+import { BrowserRouter, Routes, Route, Navigate, Outlet } from 'react-router-dom';
 import { AuthProvider, useAuth } from './lib/auth';
 import { ToastProvider } from './lib/toast';
 import { AppShell } from './components/AppShell';
-import { NAV_ITEMS, type NavKey } from './lib/nav';
-import type { Role } from './lib/types';
+
+class ErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean; error: Error | null }> {
+  constructor(props: { children: ReactNode }) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error: Error, errorInfo: ErrorInfo) {
+    console.error('ErrorBoundary caught error:', error, errorInfo);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="min-h-screen bg-[#F5FAFA] flex flex-col items-center justify-center p-6 text-center">
+          <div className="max-w-md w-full bg-white rounded-2xl shadow-sm border border-gray-100 p-8">
+            <div className="w-12 h-12 bg-red-100 text-red-600 rounded-full flex items-center justify-center mx-auto mb-4 font-bold text-xl">
+              !
+            </div>
+            <h2 className="text-xl font-bold text-gray-900 mb-2">Something went wrong</h2>
+            <p className="text-sm text-gray-600 mb-6">
+              We encountered an issue loading this page. Please return home or try refreshing.
+            </p>
+            <button
+              onClick={() => {
+                this.setState({ hasError: false, error: null });
+                window.location.href = '/login';
+              }}
+              className="w-full py-2.5 px-4 bg-teal-600 hover:bg-teal-700 text-white font-medium rounded-xl transition"
+            >
+              Return to Login
+            </button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 const LandingPage = lazy(() => import('./screens/LandingPage').then(m => ({ default: m.LandingPage })));
 const AuthLoginPage = lazy(() => import('./screens/AuthLoginPage').then(m => ({ default: m.AuthLoginPage })));
@@ -20,6 +61,7 @@ const AnalyticsScreen = lazy(() => import('./screens/AnalyticsScreen').then(m =>
 const SettingsScreen = lazy(() => import('./screens/SettingsScreen').then(m => ({ default: m.SettingsScreen })));
 const DoctorDashboard = lazy(() => import('./screens/DoctorDashboard').then(m => ({ default: m.DoctorDashboard })));
 const PatientApp = lazy(() => import('./patient/PatientApp').then(m => ({ default: m.PatientApp })));
+const EmergencyPage = lazy(() => import('./screens/EmergencyPage').then(m => ({ default: m.EmergencyPage })));
 
 function PageLoader() {
   return (
@@ -47,46 +89,36 @@ function PublicOnlyRoute({ children }: { children: React.ReactNode }) {
 
   if (loading) return <PageLoader />;
 
-  if (user) return <Navigate to="/dashboard" replace />;
+  if (user) {
+    if (user.role === 'patient') return <Navigate to="/patient/dashboard" replace />;
+    return <Navigate to="/clinic/dashboard" replace />;
+  }
 
   return <>{children}</>;
 }
 
-function ClinicDashboard() {
+function ClinicLayout() {
   const { user, loading } = useAuth();
-  const [active, setActive] = useState<NavKey>('dashboard');
-
-  useEffect(() => { if (user) setActive('dashboard'); }, [user]);
 
   if (loading) return <PageLoader />;
 
   if (!user) return <Navigate to="/login" replace />;
 
-  const allowed = NAV_ITEMS.find(n => n.key === active)?.roles.includes(user.role as Role);
-  const effectiveKey: NavKey = allowed ? active : 'dashboard';
-
-  const renderScreen = (key: NavKey) => {
-    if (key === 'dashboard' && user.role === 'doctor') return <DoctorDashboard />;
-    switch (key) {
-      case 'dashboard':     return <DashboardScreen />;
-      case 'patients':      return <PatientsScreen />;
-      case 'appointments':  return <AppointmentsScreen />;
-      case 'billing':       return <BillingScreen />;
-      case 'inventory':     return <InventoryScreen />;
-      case 'ai-navigator':  return <AINavigatorScreen />;
-      case 'analytics':     return <AnalyticsScreen />;
-      case 'settings':      return <SettingsScreen />;
-      default:              return <DashboardScreen />;
-    }
-  };
+  if (user.role === 'patient') return <Navigate to="/patient/dashboard" replace />;
 
   return (
-    <AppShell activeKey={effectiveKey} onNavigate={setActive}>
+    <AppShell>
       <Suspense fallback={<PageLoader />}>
-        {renderScreen(effectiveKey)}
+        <Outlet />
       </Suspense>
     </AppShell>
   );
+}
+
+function RoleBasedDashboard() {
+  const { user } = useAuth();
+  if (user?.role === 'doctor') return <DoctorDashboard />;
+  return <DashboardScreen />;
 }
 
 function AppRoutes() {
@@ -95,18 +127,28 @@ function AppRoutes() {
       <Routes>
         {/* Public routes */}
         <Route path="/" element={<LandingPage />} />
-        <Route path="/login" element={<PublicOnlyRoute><AuthLoginPage /></PublicOnlyRoute>} />
-        <Route path="/register" element={<PublicOnlyRoute><AuthRegisterPage /></PublicOnlyRoute>} />
+        <Route path="/login" element={<AuthLoginPage />} />
+        <Route path="/register" element={<Navigate to="/login?mode=register" replace />} />
 
         {/* Protected clinic routes */}
         <Route
-          path="/dashboard"
+          path="/clinic"
           element={
             <ProtectedRoute>
-              <ClinicDashboard />
+              <ClinicLayout />
             </ProtectedRoute>
           }
-        />
+        >
+          <Route index element={<Navigate to="/clinic/dashboard" replace />} />
+          <Route path="dashboard" element={<RoleBasedDashboard />} />
+          <Route path="patients" element={<PatientsScreen />} />
+          <Route path="appointments" element={<AppointmentsScreen />} />
+          <Route path="billing" element={<BillingScreen />} />
+          <Route path="inventory" element={<InventoryScreen />} />
+          <Route path="ai-navigator" element={<AINavigatorScreen />} />
+          <Route path="analytics" element={<AnalyticsScreen />} />
+          <Route path="settings" element={<SettingsScreen />} />
+        </Route>
         <Route
           path="/setup"
           element={
@@ -119,6 +161,9 @@ function AppRoutes() {
         {/* Patient portal */}
         <Route path="/patient/*" element={<PatientApp />} />
 
+        {/* Emergency page */}
+        <Route path="/emergency" element={<EmergencyPage />} />
+
         {/* Catch all */}
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
@@ -128,12 +173,14 @@ function AppRoutes() {
 
 export default function App() {
   return (
-    <BrowserRouter>
-      <ToastProvider>
-        <AuthProvider>
-          <AppRoutes />
-        </AuthProvider>
-      </ToastProvider>
-    </BrowserRouter>
+    <ErrorBoundary>
+      <BrowserRouter>
+        <ToastProvider>
+          <AuthProvider>
+            <AppRoutes />
+          </AuthProvider>
+        </ToastProvider>
+      </BrowserRouter>
+    </ErrorBoundary>
   );
 }

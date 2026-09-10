@@ -244,7 +244,7 @@ export function BillingScreen() {
 
       {viewInvoice && (
         <Modal open onClose={() => setViewInvoice(null)} title="Invoice" size="md">
-          <InvoicePrintView invoice={viewInvoice} />
+          <InvoiceView invoice={viewInvoice} onClose={() => setViewInvoice(null)} />
         </Modal>
       )}
     </div>
@@ -264,7 +264,7 @@ function CreateBillModal({ open, onClose, onSaved, clinicId, patients }: { open:
     if (!open) return;
     const q = query(collection(db, 'users'), where('clinic_id', '==', clinicId), where('role', '==', 'doctor'), where('active', '==', true));
     getDocs(q).then((snap) => {
-      setDoctors(snap.docs.map(d => ({ ...d.data(), id: d.id } as U)));
+      setDoctors(snap.docs.map(d => ({ ...d.data(), id: d.id, user_id: d.id } as U)));
     }).catch(console.error);
   }, [open, clinicId]);
 
@@ -276,7 +276,7 @@ function CreateBillModal({ open, onClose, onSaved, clinicId, patients }: { open:
       clinicId,
       patientId,
       apptId: null, // manual bill
-      doctorId: doctors[0]?.id ?? null,
+      doctorId: doctors[0]?.user_id || doctors[0]?.id || null,
       consultationFee: Number(amount),
       lineItems: [],
       discountAmount: 0,

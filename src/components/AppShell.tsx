@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { LogOut, Menu, X, Bell, ChevronDown, CalendarDays, Home } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../lib/auth';
 import { useClinicData } from '../lib/useClinicData';
 import { NAV_ITEMS, type NavKey } from '../lib/nav';
@@ -10,16 +10,16 @@ import { formatLongDate } from '../lib/format';
 import type { Role } from '../lib/types';
 
 interface AppShellProps {
-  activeKey: NavKey;
-  onNavigate: (key: NavKey) => void;
   children: React.ReactNode;
 }
 
-export function AppShell({ activeKey, onNavigate, children }: AppShellProps) {
+export function AppShell({ children }: AppShellProps) {
   const { user, clinic, logout } = useAuth();
   const { urgentQueue, pendingBills, criticalInventory } = useClinicData();
   const [mobileOpen, setMobileOpen] = useState(false);
   const navigate = useNavigate();
+  const location = useLocation();
+  const currentPath = location.pathname.split('/').pop();
 
   if (!user || !clinic) return null;
 
@@ -37,15 +37,13 @@ export function AppShell({ activeKey, onNavigate, children }: AppShellProps) {
     <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
       {items.map((item) => {
         const Icon = item.icon;
-        const active = activeKey === item.key;
+        const active = currentPath === item.key;
         const badge = badgeFor(item.key);
         return (
-          <button
+          <Link
             key={item.key}
-            onClick={() => {
-              onNavigate(item.key);
-              setMobileOpen(false);
-            }}
+            to={`/clinic/${item.key}`}
+            onClick={() => setMobileOpen(false)}
             className={`nav-item w-full text-left ${active ? 'nav-item-active' : ''}`}
           >
             <Icon size={18} />
@@ -55,7 +53,7 @@ export function AppShell({ activeKey, onNavigate, children }: AppShellProps) {
                 {badge}
               </span>
             )}
-          </button>
+          </Link>
         );
       })}
     </nav>

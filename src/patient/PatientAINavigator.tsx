@@ -89,7 +89,7 @@ export function PatientAINavigator({ onTab, clinicId, patientId, onBookWithSumma
   const [clinicContext, setClinicContext] = useState<{
     name: string; city?: string;
     departments?: string[];
-    doctors?: { user_id: string; name: string; specialisation: string | null }[];
+    doctors?: { id: string; user_id?: string; name: string; specialisation: string | null }[];
     working_hours?: { open: string; close: string };
   } | null>(null);
 
@@ -116,7 +116,7 @@ export function PatientAINavigator({ onTab, clinicId, patientId, onBookWithSumma
           working_hours: cData.working_hours,
           doctors: doctorsSnap.docs.map(d => {
             const data = d.data();
-            return { user_id: d.id, name: data.name, specialisation: data.specialisation };
+            return { id: d.id, user_id: d.id, name: data.name, specialisation: data.specialisation };
           }),
         });
       }

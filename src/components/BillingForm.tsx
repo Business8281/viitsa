@@ -23,11 +23,11 @@ interface Props {
   upiId?: string | null;
 }
 
-const METHOD_CONFIG: { method: PaymentMethod; label: string; Icon: React.ComponentType<{ size?: number; className?: string }> }[] = [
+const METHOD_CONFIG: { method: PaymentMethod; label: string; Icon: any }[] = [
   { method: 'cash',    label: 'Cash',    Icon: Banknote },
   { method: 'upi',     label: 'UPI',     Icon: Smartphone },
   { method: 'card',    label: 'Card',    Icon: CreditCard },
-  { method: 'pending', label: 'Pending', Icon: Clock } as unknown as { method: PaymentMethod; label: string; Icon: React.ComponentType<{ size?: number; className?: string }> },
+  { method: 'pending', label: 'Pending', Icon: Clock } as unknown as { method: PaymentMethod; label: string; Icon: any },
 ];
 
 export function BillingForm({ patientName, doctorName, defaultFee = 500, onChange, value, upiId }: Props) {

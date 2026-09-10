@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef } from 'react';
-import { ChevronLeft, ChevronRight, Check, MessageCircle, Calendar, CalendarPlus, Search, MapPin, Star, Clock, Navigation, SlidersHorizontal, X, Brain } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Check, MessageCircle, Calendar, CalendarPlus, Search, MapPin, Star, Clock, Navigation, SlidersHorizontal, X, Brain, Building2, Stethoscope } from 'lucide-react';
 import { db } from '../lib/firebase';
-import { collection, query, where, getDocs, addDoc, doc, getDoc, orderBy, limit } from 'firebase/firestore';
+import { collection, query, where, getDocs, addDoc, doc, getDoc, updateDoc, orderBy, limit } from 'firebase/firestore';
 import { usePatientAuth } from '../lib/patientAuth';
 import { sendEmail } from '../lib/emailService';
 import { formatTime, formatDate, whatsappAppointmentConfirmation, localDateISO } from '../lib/format';
@@ -48,7 +48,7 @@ function generateSlots(open = '09:00', close = '19:00', dur = 20): string[] {
 interface Props { onTab: (t: PatientTab) => void; clinic: Clinic | null; patientId: string | null; aiSummary?: TriageSummary | null; }
 
 export function PatientBooking({ onTab, clinic: initialClinic, patientId, aiSummary }: Props) {
-  const { account } = usePatientAuth();
+  const { account, selectClinic: authSelectClinic } = usePatientAuth();
   const [step, setStep] = useState<BookStep>(initialClinic ? 'doctor' : 'clinic');
   const [clinic, setClinic] = useState<Clinic | null>(initialClinic);
   const [doctors, setDoctors] = useState<User[]>([]);
@@ -93,7 +93,7 @@ export function PatientBooking({ onTab, clinic: initialClinic, patientId, aiSumm
       getDocs(collection(db, 'clinics'))
         .then((snap) => {
           setLoadingClinics(false);
-          const data = snap.docs.map(d => d.data() as Clinic);
+          const data = snap.docs.map(d => ({ ...d.data(), clinic_id: d.id } as Clinic));
           setClinics(data);
           setFiltered(data);
         })
@@ -148,8 +148,12 @@ export function PatientBooking({ onTab, clinic: initialClinic, patientId, aiSumm
   // Load doctors when clinic is selected
   useEffect(() => {
     if (!clinic) return;
-    const q = query(collection(db, 'users'), where('clinic_id', '==', clinic.clinic_id), where('role', '==', 'doctor'), where('active', '==', true));
-    getDocs(q).then((snap) => setDoctors(snap.docs.map(d => d.data() as User)));
+    const q = query(collection(db, 'users'), where('clinic_id', '==', clinic.clinic_id), where('active', '==', true));
+    getDocs(q).then((snap) => {
+      const allUsers = snap.docs.map(d => ({ ...d.data(), user_id: d.id, id: d.id } as User));
+      const docList = allUsers.filter(u => u.role === 'doctor' || u.role === 'admin' || u.user_type === 'clinic_admin');
+      setDoctors(docList);
+    });
   }, [clinic]);
 
   // Load taken slots
@@ -165,14 +169,19 @@ export function PatientBooking({ onTab, clinic: initialClinic, patientId, aiSumm
 
   const selectClinic = (c: Clinic) => {
     setClinic(c);
+    if (authSelectClinic) {
+      authSelectClinic(c).catch(console.warn);
+    }
     setStep('doctor');
   };
 
   const confirmBooking = async () => {
     setBookingError('');
-    if (!clinic || !selectedDoctor || !selectedSlot || !patientId) return;
+    const effectivePatientId = patientId || account?.account_id;
+    if (!clinic || !selectedDoctor || !selectedSlot || !effectivePatientId) return;
     setSaving(true);
     const iso = localDateISO(selectedDate);
+    const nowIso = new Date().toISOString();
     
     try {
       const q = query(collection(db, 'appointments'), where('clinic_id', '==', clinic.clinic_id), where('date', '==', iso), orderBy('token_number', 'desc'), limit(1));
@@ -192,7 +201,7 @@ export function PatientBooking({ onTab, clinic: initialClinic, patientId, aiSumm
       
       const apptRef = await addDoc(collection(db, 'appointments'), {
         clinic_id: clinic.clinic_id,
-        patient_id: patientId,
+        patient_id: effectivePatientId,
         doctor_id: selectedDoctor.user_id,
         date: iso,
         time_slot: selectedSlot,
@@ -205,9 +214,14 @@ export function PatientBooking({ onTab, clinic: initialClinic, patientId, aiSumm
         visit_type: visitType,
         online_booking: true,
         ai_summary: aiSummary ?? null,
+        created_at: nowIso,
+        updated_at: nowIso,
       });
       // also update the id to match firestore structure
-      await updateDoc(apptRef, { appt_id: apptRef.id });
+      await updateDoc(apptRef, { 
+        appt_id: apptRef.id,
+        appointment_id: apptRef.id,
+      });
 
       setSaving(false);
 
@@ -375,12 +389,18 @@ export function PatientBooking({ onTab, clinic: initialClinic, patientId, aiSumm
               </div>
             ) : filtered.length === 0 ? (
               <div className="bg-white rounded-2xl border border-gray-100 p-10 text-center">
-                <Search size={40} className="text-gray-300 mx-auto mb-3" />
-                <p className="text-sm font-semibold text-gray-700">No clinics found</p>
-                <p className="text-xs text-gray-500 mt-1">Try adjusting your filters</p>
-                <button onClick={() => { setSearch(''); setSelectedDept(null); }} className="mt-4 rounded-xl px-4 py-2 text-sm font-semibold text-white" style={{ backgroundColor: '#0F6E56' }}>
-                  Clear filters
-                </button>
+                <Building2 size={40} className="text-gray-300 mx-auto mb-3" />
+                <p className="text-sm font-semibold text-gray-700">
+                  {clinics.length === 0 ? 'No clinics registered yet' : 'No clinics found'}
+                </p>
+                <p className="text-xs text-gray-500 mt-1">
+                  {clinics.length === 0 ? 'Clinics will appear here once they register on VIITSA.' : 'Try adjusting your search filters.'}
+                </p>
+                {clinics.length > 0 && (
+                  <button onClick={() => { setSearch(''); setSelectedDept(null); }} className="mt-4 rounded-xl px-4 py-2 text-sm font-semibold text-white" style={{ backgroundColor: '#0F6E56' }}>
+                    Clear filters
+                  </button>
+                )}
               </div>
             ) : (
               filtered.map(c => (
@@ -432,14 +452,27 @@ export function PatientBooking({ onTab, clinic: initialClinic, patientId, aiSumm
       {step === 'doctor' && (
         <div className="px-4 py-5 space-y-3">
           {clinic && (
-            <div className="bg-primary/5 rounded-xl px-3 py-2 mb-4">
-              <p className="text-xs text-gray-500">Selected clinic</p>
-              <p className="text-sm font-semibold text-gray-900">{clinic.name}</p>
+            <div className="bg-primary/5 rounded-xl px-4 py-3 mb-4 flex items-center justify-between">
+              <div>
+                <p className="text-[11px] font-medium text-gray-500">Selected Clinic</p>
+                <p className="text-sm font-bold text-gray-900">{clinic.name}</p>
+                <p className="text-xs text-gray-500">{clinic.address || clinic.city}</p>
+              </div>
+              <button onClick={() => setStep('clinic')} className="text-xs font-semibold text-primary underline">
+                Change clinic
+              </button>
             </div>
           )}
           <h2 className="text-lg font-bold text-gray-900">Choose your doctor</h2>
           {doctors.length === 0 ? (
-            <p className="text-sm text-gray-500">No doctors available at this clinic.</p>
+            <div className="bg-white rounded-2xl border border-gray-100 p-8 text-center space-y-3">
+              <Stethoscope size={36} className="text-gray-300 mx-auto" />
+              <p className="text-sm font-semibold text-gray-800">No doctors available at this clinic</p>
+              <p className="text-xs text-gray-400">There are currently no doctors registered under this clinic.</p>
+              <button onClick={() => setStep('clinic')} className="rounded-xl px-4 py-2 text-xs font-semibold text-white" style={{ backgroundColor: '#0F6E56' }}>
+                Choose another clinic
+              </button>
+            </div>
           ) : doctors.map(d => (
             <button key={d.user_id} onClick={() => { setSelectedDoctor(d); setStep('date'); }} className="w-full bg-white rounded-2xl border border-gray-100 p-4 flex items-center gap-4 text-left shadow-sm">
               <div className="h-12 w-12 rounded-xl flex items-center justify-center text-white font-bold text-lg shrink-0" style={{ backgroundColor: d.avatar_color ?? '#0F6E56' }}>

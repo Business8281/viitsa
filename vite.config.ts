@@ -7,11 +7,36 @@ export default defineConfig({
     exclude: ['lucide-react'],
   },
   build: {
+    chunkSizeWarningLimit: 800,
     rollupOptions: {
       output: {
-        manualChunks: {
-          'react-vendor': ['react', 'react-dom', 'react-router-dom'],
-          'supabase': ['@supabase/supabase-js'],
+        manualChunks(id) {
+          if (
+            id.includes('@firebase/firestore') ||
+            id.includes('firebase/firestore') ||
+            id.includes('@firebase/webchannel-wrapper')
+          ) {
+            return 'firebase-firestore';
+          }
+          if (id.includes('@firebase/auth') || id.includes('firebase/auth')) {
+            return 'firebase-auth';
+          }
+          if (id.includes('node_modules/firebase') || id.includes('node_modules/@firebase')) {
+            return 'firebase-core';
+          }
+          if (
+            id.includes('node_modules/react') ||
+            id.includes('node_modules/react-dom') ||
+            id.includes('node_modules/react-router')
+          ) {
+            return 'react-vendor';
+          }
+          if (id.includes('node_modules/@supabase')) {
+            return 'supabase-vendor';
+          }
+          if (id.includes('node_modules/lucide-react')) {
+            return 'lucide-vendor';
+          }
         },
       },
     },

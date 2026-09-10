@@ -2,13 +2,13 @@ import { useEffect, useState } from 'react';
 import {
   ChevronRight, CalendarClock, Stethoscope, BrainCircuit, FolderOpen, Receipt, Calendar,
   Activity, AlertTriangle, Pill, Phone, Heart, ChevronLeft, Share2, Users,
-  Star, MapPin, UserCircle, ShieldCheck, Clock3, Sparkles,
+  Star, MapPin, UserCircle, ShieldCheck, Clock3, Sparkles, Building2, X, Check,
 } from 'lucide-react';
 import { db } from '../lib/firebase';
-import { collection, query, where, getDocs, getDoc, doc, orderBy, limit } from 'firebase/firestore';
+import { collection, query, where, getDoc, getDocs, doc, orderBy, limit, onSnapshot } from 'firebase/firestore';
 import { usePatientAuth } from '../lib/patientAuth';
 import { formatDate, formatTime, localDateISO } from '../lib/format';
-import type { Appointment, Consultation, Invoice } from '../lib/types';
+import type { Appointment, Consultation, Invoice, User, Clinic } from '../lib/types';
 import type { PatientTab } from './PatientBottomNav';
 import { ViitsaLogo } from '../components/ViitsaLogo';
 
@@ -22,56 +22,82 @@ function greeting(): string {
 interface Props { onTab: (t: PatientTab) => void; clinicId: string | null; }
 
 export function PatientHome({ onTab, clinicId }: Props) {
-  const { account, logout } = usePatientAuth();
+  const { account, clinic, selectClinic, logout } = usePatientAuth();
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [recentConsults, setRecentConsults] = useState<Consultation[]>([]);
   const [pendingInvoices, setPendingInvoices] = useState<Invoice[]>([]);
   const [rewardPoints, setRewardPoints] = useState(0);
   const [showEmergency, setShowEmergency] = useState(false);
+  const [showClinicPicker, setShowClinicPicker] = useState(false);
+  const [availableClinics, setAvailableClinics] = useState<Clinic[]>([]);
+  const [loadingClinics, setLoadingClinics] = useState(false);
 
+  const fetchClinics = async () => {
+    setLoadingClinics(true);
+    try {
+      const snap = await getDocs(collection(db, 'clinics'));
+      setAvailableClinics(snap.docs.map(d => ({ ...d.data(), clinic_id: d.id } as Clinic)));
+    } catch (e) {
+      console.warn('fetchClinics error:', e);
+    } finally {
+      setLoadingClinics(false);
+    }
+  };
+
+  // Real-time live onSnapshot listeners for patient appointments, consultations, and invoices
   useEffect(() => {
-    if (!account || !clinicId) return;
-    const fetchHomeData = async () => {
-      const q = query(collection(db, 'patient_clinic_links'), where('account_id', '==', account.account_id), where('clinic_id', '==', clinicId));
-      const snap = await getDocs(q);
-      if (snap.empty) return;
-      const pid = snap.docs[0].data().patient_id;
+    if (!account?.account_id) return;
+    const pid = account.account_id;
 
-      // Appointments
-      const apptQ = query(collection(db, 'appointments'), where('patient_id', '==', pid), where('date', '>=', localDateISO()), orderBy('date'), limit(3));
-      const apptSnap = await getDocs(apptQ);
-      const appts = apptSnap.docs.map(d => d.data() as Appointment).filter(a => a.status !== 'cancelled');
+    // Appointments listener (live real-time)
+    const apptQ = query(
+      collection(db, 'appointments'),
+      where('patient_id', '==', pid),
+      where('date', '>=', localDateISO()),
+      orderBy('date'),
+      limit(5)
+    );
+    const unsubAppt = onSnapshot(apptQ, async (apptSnap) => {
+      const appts = apptSnap.docs.map(d => ({ ...d.data(), appointment_id: d.id } as Appointment)).filter(a => a.status !== 'cancelled');
       for (const appt of appts) {
-        if (appt.doctor_id) {
-          const docSnap = await getDoc(doc(db, 'users', appt.doctor_id));
-          if (docSnap.exists()) {
-            appt.doctor = docSnap.data();
-          }
+        if (appt.doctor_id && !appt.doctor) {
+          try {
+            const docSnap = await getDoc(doc(db, 'users', appt.doctor_id));
+            if (docSnap.exists()) {
+              appt.doctor = docSnap.data() as User;
+            }
+          } catch {}
         }
       }
       setAppointments(appts);
+    }, (err) => console.warn('Live patient appts snapshot error:', err));
 
-      // Consultations
-      const consQ = query(collection(db, 'consultations'), where('patient_id', '==', pid), orderBy('created_at', 'desc'), limit(3));
-      const consSnap = await getDocs(consQ);
-      setRecentConsults(consSnap.docs.map(d => d.data() as Consultation));
+    // Consultations listener (live real-time)
+    const consQ = query(collection(db, 'consultations'), where('patient_id', '==', pid), orderBy('created_at', 'desc'), limit(5));
+    const unsubCons = onSnapshot(consQ, (consSnap) => {
+      setRecentConsults(consSnap.docs.map(d => ({ ...d.data(), consult_id: d.id } as Consultation)));
+    }, (err) => console.warn('Live patient consults snapshot error:', err));
 
-      // Invoices
-      const invQ = query(collection(db, 'invoices'), where('patient_id', '==', pid), where('payment_status', '==', 'pending'));
-      const invSnap = await getDocs(invQ);
-      setPendingInvoices(invSnap.docs.map(d => d.data() as Invoice));
-    };
-    fetchHomeData();
-  }, [account, clinicId]);
+    // Invoices listener (live real-time)
+    const invQ = query(collection(db, 'invoices'), where('patient_id', '==', pid), where('payment_status', '==', 'pending'));
+    const unsubInv = onSnapshot(invQ, (invSnap) => {
+      setPendingInvoices(invSnap.docs.map(d => ({ ...d.data(), invoice_id: d.id } as Invoice)));
+    }, (err) => console.warn('Live patient invoices snapshot error:', err));
 
-  useEffect(() => {
-    if (!account) return;
-    const q = query(collection(db, 'patient_reward_points'), where('account_id', '==', account.account_id));
-    getDocs(q).then((snap) => {
+    // Reward points listener (live real-time)
+    const ptsQ = query(collection(db, 'patient_reward_points'), where('account_id', '==', account.account_id));
+    const unsubPts = onSnapshot(ptsQ, (snap) => {
       const total = snap.docs.reduce((s, r) => s + (r.data().points || 0), 0);
       setRewardPoints(total);
-    });
-  }, [account]);
+    }, (err) => console.warn('Live patient reward points error:', err));
+
+    return () => {
+      unsubAppt();
+      unsubCons();
+      unsubInv();
+      unsubPts();
+    };
+  }, [account?.account_id]);
 
   const nextAppt = appointments[0];
 
@@ -201,6 +227,46 @@ export function PatientHome({ onTab, clinicId }: Props) {
       </div>
 
       <div className="px-4 mt-5 space-y-5">
+        {/* Clinic Status & Selection Card */}
+        {clinic ? (
+          <div className="bg-white rounded-2xl border border-gray-100 p-4 flex items-center justify-between shadow-sm">
+            <div className="flex items-center gap-3">
+              <div className="h-11 w-11 rounded-xl bg-primary/10 flex items-center justify-center text-primary shrink-0">
+                <Building2 size={22} />
+              </div>
+              <div>
+                <p className="text-[10px] uppercase font-bold text-gray-400 tracking-wider">Your Connected Clinic</p>
+                <p className="text-sm font-bold text-gray-900">{clinic.name}</p>
+                <p className="text-xs text-gray-500">{clinic.city || clinic.address || 'Clinic registered'}</p>
+              </div>
+            </div>
+            <button
+              onClick={() => { setShowClinicPicker(true); fetchClinics(); }}
+              className="text-xs font-semibold text-primary px-3 py-1.5 rounded-xl border border-primary/20 hover:bg-primary/5 transition-colors"
+            >
+              Switch
+            </button>
+          </div>
+        ) : (
+          <div className="bg-gradient-to-r from-teal-50 to-emerald-50 rounded-2xl border border-teal-100 p-4 flex items-center justify-between shadow-sm">
+            <div className="flex items-center gap-3">
+              <div className="h-11 w-11 rounded-xl bg-primary/15 flex items-center justify-center text-primary shrink-0">
+                <Building2 size={22} />
+              </div>
+              <div>
+                <p className="text-sm font-bold text-gray-900">Select Your Clinic</p>
+                <p className="text-xs text-gray-600">Choose a clinic to connect with doctors and book visits.</p>
+              </div>
+            </div>
+            <button
+              onClick={() => { setShowClinicPicker(true); fetchClinics(); }}
+              className="text-xs font-semibold text-white bg-primary px-3.5 py-2 rounded-xl shadow-sm hover:opacity-90 transition shrink-0"
+            >
+              Choose Clinic
+            </button>
+          </div>
+        )}
+
         {/* Alerts */}
         {pendingInvoices.length > 0 && (
           <button onClick={() => onTab('payments')} className="w-full flex items-start gap-3 bg-yellow-50 rounded-2xl px-4 py-3 border border-yellow-100 text-left">
@@ -358,6 +424,79 @@ export function PatientHome({ onTab, clinicId }: Props) {
           </div>
         </div>
       </div>
+
+      {/* Clinic Picker Modal */}
+      {showClinicPicker && (
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/50 p-0 sm:p-4">
+          <div className="w-full max-w-md bg-white rounded-t-3xl sm:rounded-3xl p-6 shadow-2xl max-h-[85vh] flex flex-col animate-fade-in">
+            <div className="flex items-center justify-between mb-4 pb-3 border-b border-gray-100">
+              <div>
+                <h3 className="text-base font-bold text-gray-900">Choose Your Clinic</h3>
+                <p className="text-xs text-gray-500">Connect to a clinic for doctor visits and appointments</p>
+              </div>
+              <button onClick={() => setShowClinicPicker(false)} className="p-2 rounded-full hover:bg-gray-100 text-gray-400">
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto space-y-3 py-1">
+              {loadingClinics ? (
+                <div className="py-8 text-center text-xs text-gray-400 space-y-2">
+                  <div className="h-5 w-5 border-2 border-primary border-t-transparent rounded-full animate-spin mx-auto" />
+                  <p>Loading clinics from database...</p>
+                </div>
+              ) : availableClinics.length === 0 ? (
+                <div className="py-10 text-center space-y-2">
+                  <Building2 size={36} className="text-gray-300 mx-auto" />
+                  <p className="text-sm font-bold text-gray-800">No Clinics Registered Yet</p>
+                  <p className="text-xs text-gray-500 max-w-xs mx-auto">
+                    There are currently no clinics registered on the platform. When a clinic signs up, it will appear here.
+                  </p>
+                </div>
+              ) : (
+                availableClinics.map((c) => {
+                  const isSelected = clinic?.clinic_id === c.clinic_id;
+                  return (
+                    <div
+                      key={c.clinic_id}
+                      className={`p-4 rounded-2xl border transition-all ${
+                        isSelected ? 'border-primary bg-primary/5' : 'border-gray-100 hover:border-gray-200 bg-white'
+                      }`}
+                    >
+                      <div className="flex items-start justify-between">
+                        <div>
+                          <p className="text-sm font-bold text-gray-900">{c.name}</p>
+                          <p className="text-xs text-gray-500 mt-0.5">{c.address || c.city || 'Clinic'}</p>
+                          {c.phone && <p className="text-xs text-gray-400 mt-0.5">{c.phone}</p>}
+                        </div>
+                        <button
+                          onClick={() => {
+                            selectClinic(c);
+                            setShowClinicPicker(false);
+                          }}
+                          className={`px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1 ${
+                            isSelected
+                              ? 'bg-primary text-white'
+                              : 'bg-primary/10 text-primary hover:bg-primary hover:text-white'
+                          }`}
+                        >
+                          {isSelected ? (
+                            <>
+                              <Check size={12} /> Selected
+                            </>
+                          ) : (
+                            'Select'
+                          )}
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

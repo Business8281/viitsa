@@ -1,6 +1,6 @@
 import type { TriageSummary } from './aiService';
 
-export type Role = 'admin' | 'doctor' | 'staff';
+export type Role = 'company_admin' | 'admin' | 'doctor' | 'staff' | 'patient';
 export type TriageLevel = 'normal' | 'moderate' | 'urgent';
 export type ApptStatus = 'waiting' | 'in-progress' | 'done' | 'cancelled';
 export type PaymentStatus = 'paid' | 'pending' | 'partial';
@@ -11,34 +11,57 @@ export type AppointmentVisitType = 'new-visit' | 'follow-up' | 'report-discussio
 export interface Clinic {
   clinic_id: string;
   name: string;
+  clinic_code?: string;
+  id_number?: string;
+  display_id?: string;
   address: string;
   city: string;
   phone: string;
   email: string;
   logo_url: string | null;
   owner_name: string | null;
+  owner_user_id?: string | null;
+  departments?: string[];
+  rating?: number;
   working_hours: { open: string; close: string; days: string[] };
   created_at: string;
+  updated_at?: string;
 }
 
 export interface User {
+  id?: string;
   user_id: string;
-  clinic_id: string;
+  clinic_id?: string | null;
   name: string;
+  full_name?: string;
   email: string;
-  password_hash: string;
+  password_hash?: string;
   role: Role;
+  user_type?: 'patient' | 'clinic_admin' | 'company_admin' | 'doctor' | 'staff';
+  id_number?: string;
+  display_id?: string;
+  clinic_name?: string;
   phone: string | null;
   specialisation: string | null;
   active: boolean;
   avatar_color: string;
   created_at: string;
+  updated_at?: string;
+  linked_uids?: string[];
+  auth_providers?: string[];
+  patient_account_id?: string | null;
+  profile_completed?: boolean;
+  role_selected?: boolean;
 }
 
 export interface Patient {
   patient_id: string;
+  id_number?: string;
+  display_id?: string;
+  patient_code?: string;
   clinic_id: string;
   name: string;
+  full_name?: string;
   age: number | null;
   gender: 'Male' | 'Female' | 'Other' | null;
   phone: string | null;
@@ -51,12 +74,17 @@ export interface Patient {
   emergency_contact_phone: string | null;
   token_number: number | null;
   created_at: string;
+  updated_at?: string;
 }
 
 export interface PatientAccount {
   account_id: string;
+  id_number?: string;
+  display_id?: string;
+  patient_code?: string;
   phone: string;
   name: string;
+  full_name?: string;
   email: string | null;
   age: number | null;
   dob: string | null;
@@ -71,11 +99,16 @@ export interface PatientAccount {
   otp_code: string;
   otp_verified: boolean;
   auth_user_id: string | null;
+  clinic_id?: string | null;
+  clinic_name?: string | null;
+  profile_completed?: boolean;
   created_at: string;
+  updated_at?: string;
 }
 
 export interface Appointment {
   appt_id: string;
+  appointment_id?: string;
   clinic_id: string;
   patient_id: string;
   doctor_id: string | null;
@@ -119,6 +152,7 @@ export interface Bill {
   clinic_id: string;
   patient_id: string;
   appt_id: string | null;
+  appointment_id?: string | null;
   amount: number;
   payment_status: PaymentStatus;
   payment_method: PaymentMethod;
@@ -143,6 +177,8 @@ export interface Invoice {
   clinic_id: string;
   patient_id: string;
   doctor_id: string | null;
+  appt_id?: string | null;
+  appointment_id?: string | null;
   subtotal: number;
   discount_amount: number;
   total: number;

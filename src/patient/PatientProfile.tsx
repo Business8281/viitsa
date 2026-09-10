@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   ChevronLeft, User, Phone, Mail, MapPin, Calendar, Droplets, Heart,
   Pill, AlertTriangle, Shield, Edit3, Check, X, LogOut, UserCircle,
@@ -12,6 +13,7 @@ const CHRONIC_OPTIONS = ['Diabetes', 'Hypertension', 'Heart disease', 'Asthma', 
 interface Props { onTab: (t: PatientTab) => void; }
 
 export function PatientProfile({ onTab }: Props) {
+  const navigate = useNavigate();
   const { account, updateProfile, logout } = usePatientAuth();
   const [editing, setEditing] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -228,8 +230,11 @@ export function PatientProfile({ onTab }: Props) {
 
         {/* Logout */}
         <button
-          onClick={() => { logout(); onTab('home'); }}
-          className="w-full py-4 rounded-2xl border-2 border-red-100 bg-red-50 text-red-600 font-semibold text-sm flex items-center justify-center gap-2"
+          onClick={() => {
+            logout();
+            navigate('/login', { replace: true });
+          }}
+          className="w-full py-4 rounded-2xl border-2 border-red-100 bg-red-50 text-red-600 font-semibold text-sm flex items-center justify-center gap-2 hover:bg-red-100 transition-colors"
         >
           <LogOut size={16} /> Sign Out
         </button>

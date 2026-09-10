@@ -19,12 +19,12 @@ export interface NavItem {
 }
 
 export const NAV_ITEMS: NavItem[] = [
-  { key: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, roles: ['admin', 'doctor', 'staff'] },
-  { key: 'patients', label: 'Patients', icon: Users, roles: ['admin', 'doctor', 'staff'] },
-  { key: 'appointments', label: 'Appointments', icon: Calendar, roles: ['admin', 'doctor', 'staff'] },
-  { key: 'billing', label: 'Billing', icon: Receipt, roles: ['admin', 'staff'] },
-  { key: 'inventory', label: 'Inventory', icon: Pill, roles: ['admin', 'staff'] },
-  { key: 'ai-navigator', label: 'AI Navigator', icon: BrainCircuit, roles: ['admin', 'doctor'] },
-  { key: 'analytics', label: 'Analytics', icon: BarChart3, roles: ['admin'] },
-  { key: 'settings', label: 'Settings', icon: Settings, roles: ['admin'] },
+  { key: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, roles: ['company_admin', 'admin', 'doctor', 'staff'] },
+  { key: 'patients', label: 'Patients', icon: Users, roles: ['company_admin', 'admin', 'doctor', 'staff'] },
+  { key: 'appointments', label: 'Appointments', icon: Calendar, roles: ['company_admin', 'admin', 'doctor', 'staff'] },
+  { key: 'billing', label: 'Billing', icon: Receipt, roles: ['company_admin', 'admin', 'staff'] },
+  { key: 'inventory', label: 'Inventory', icon: Pill, roles: ['company_admin', 'admin', 'staff'] },
+  { key: 'ai-navigator', label: 'AI Navigator', icon: BrainCircuit, roles: ['company_admin', 'admin', 'doctor'] },
+  { key: 'analytics', label: 'Analytics', icon: BarChart3, roles: ['company_admin', 'admin'] },
+  { key: 'settings', label: 'Settings', icon: Settings, roles: ['company_admin', 'admin'] },
 ];

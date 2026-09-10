@@ -1,16 +1,14 @@
-import { useState } from 'react';
+import { Link, useLocation } from 'react-router-dom';
 import { Home, BrainCircuit, Calendar, FolderOpen, Receipt } from 'lucide-react';
 
 export type PatientTab = 'home' | 'ai' | 'book' | 'records' | 'payments' | 'profile' | 'family' | 'timeline' | 'doctors';
 
 interface PatientBottomNavProps {
-  active: PatientTab;
-  onTab: (t: PatientTab) => void;
   aiBadge?: boolean;
   paymentBadge?: number;
 }
 
-const TABS: { key: PatientTab; label: string; Icon: React.ComponentType<{ size?: number; className?: string }> }[] = [
+const TABS: { key: PatientTab; label: string; Icon: any }[] = [
   { key: 'home',     label: 'Home',     Icon: Home },
   { key: 'ai',       label: 'AI Check', Icon: BrainCircuit },
   { key: 'book',     label: 'Book',     Icon: Calendar },
@@ -18,18 +16,22 @@ const TABS: { key: PatientTab; label: string; Icon: React.ComponentType<{ size?:
   { key: 'payments', label: 'Payments', Icon: Receipt },
 ];
 
-export function PatientBottomNav({ active, onTab, aiBadge, paymentBadge }: PatientBottomNavProps) {
+export function PatientBottomNav({ aiBadge, paymentBadge }: PatientBottomNavProps) {
+  const location = useLocation();
+  const currentPath = location.pathname.split('/').pop() || 'dashboard';
+
   return (
     <nav className="fixed bottom-0 left-0 right-0 z-40 bg-white border-t border-gray-100 safe-bottom">
       <div className="grid grid-cols-5">
         {TABS.map(({ key, label, Icon }) => {
-          const isActive = active === key;
+          // 'home' tab maps to 'dashboard' path
+          const isActive = currentPath === (key === 'home' ? 'dashboard' : key);
           const showBadge = key === 'ai' ? aiBadge : key === 'payments' && paymentBadge && paymentBadge > 0;
           const badgeCount = key === 'payments' ? paymentBadge : undefined;
           return (
-            <button
+            <Link
               key={key}
-              onClick={() => onTab(key)}
+              to={`/patient/${key === 'home' ? 'dashboard' : key}`}
               className={`relative flex flex-col items-center pt-2 pb-safe pb-3 gap-0.5 transition-colors ${
                 isActive ? 'text-primary' : 'text-gray-400'
               }`}
@@ -49,7 +51,7 @@ export function PatientBottomNav({ active, onTab, aiBadge, paymentBadge }: Patie
                 )}
               </div>
               <span className={`text-[10px] font-semibold ${isActive ? 'text-primary' : 'text-gray-400'}`}>{label}</span>
-            </button>
+            </Link>
           );
         })}
       </div>

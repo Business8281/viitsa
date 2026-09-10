@@ -136,8 +136,11 @@ export function AINavigatorScreen() {
           clinic_id: clinic.clinic_id,
           name: clinic.name,
           city: clinic.city,
-          working_hours: clinic.working_hours,
-          doctors: clinicContext.doctors,
+          doctors: (clinicContext.doctors || []).map((d: any) => ({
+            id: d.id || d.user_id,
+            name: d.name,
+            specialisation: d.specialisation,
+          })),
         }
       : null;
 

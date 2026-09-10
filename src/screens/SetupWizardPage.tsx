@@ -48,7 +48,7 @@ export function SetupWizardPage() {
   const [step, setStep] = useState(1);
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
-  const { showToast } = useToast();
+  const { toast: showToast } = useToast();
   const { user, clinic } = useAuth();
 
   const [clinicDetails, setClinicDetails] = useState({
@@ -231,7 +231,7 @@ export function SetupWizardPage() {
       await secondaryAuth.signOut();
 
       showToast('Setup completed successfully!', 'success');
-      navigate('/dashboard');
+      navigate('/clinic/dashboard');
     } catch (error) {
       showToast('Setup could not be completed. Please check your connection and try again.', 'error');
     } finally {

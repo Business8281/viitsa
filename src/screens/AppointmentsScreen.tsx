@@ -529,7 +529,7 @@ function BookingModal({ open, onClose, onSaved, patients, doctors, clinicId, def
 
 function WalkInModal({ open, onClose, onSaved, patients, clinicId, doctors, currentUser }: WalkInProps) {
   const { toast } = useToast();
-  const [query, setQuery] = useState('');
+  const [patientSearch, setPatientSearch] = useState('');
   const [patientId, setPatientId] = useState('');
   const [reason, setReason] = useState('');
   const [doctorId, setDoctorId] = useState('');
@@ -542,8 +542,8 @@ function WalkInModal({ open, onClose, onSaved, patients, clinicId, doctors, curr
     }
   }, [doctors, doctorId]);
 
-  const filtered = query
-    ? patients.filter((p) => p.name.toLowerCase().includes(query.toLowerCase()) || p.phone?.includes(query)).slice(0, 5)
+  const filtered = patientSearch
+    ? patients.filter((p) => p.name.toLowerCase().includes(patientSearch.toLowerCase()) || p.phone?.includes(patientSearch)).slice(0, 5)
     : [];
 
   const submit = async () => {
@@ -556,7 +556,7 @@ function WalkInModal({ open, onClose, onSaved, patients, clinicId, doctors, curr
     try {
       const q = query(collection(db, 'appointments'), where('clinic_id', '==', clinicId), where('date', '==', today), orderBy('token_number', 'desc'), limit(1));
       const existing = await getDocs(q);
-      const nextToken = existing.empty ? 1 : ((existing.docs[0].data()?.token_number ?? 0) + 1);
+      const nextToken = existing.empty ? 1 : (((existing.docs[0].data() as any)?.token_number ?? 0) + 1);
 
       await addDoc(collection(db, 'appointments'), {
         clinic_id: clinicId,
@@ -573,7 +573,7 @@ function WalkInModal({ open, onClose, onSaved, patients, clinicId, doctors, curr
       });
 
       toast('Walk-in added to queue.', 'success');
-      setQuery('');
+      setPatientSearch('');
       setPatientId('');
       setReason('');
       onSaved();
@@ -611,11 +611,11 @@ function WalkInModal({ open, onClose, onSaved, patients, clinicId, doctors, curr
             </div>
           ) : (
             <>
-              <input value={query} onChange={(e) => setQuery(e.target.value)} className="input" placeholder="Search patient…" />
+              <input value={patientSearch} onChange={(e) => setPatientSearch(e.target.value)} className="input" placeholder="Search patient…" />
               {filtered.length > 0 && (
                 <div className="mt-1 border border-black/5 rounded-lg divide-y divide-black/5">
                   {filtered.map((p) => (
-                    <button key={p.patient_id} onClick={() => { setPatientId(p.patient_id); setQuery(''); }} className="w-full text-left px-3 py-2 hover:bg-primary-50 transition text-sm">
+                    <button key={p.patient_id} onClick={() => { setPatientId(p.patient_id); setPatientSearch(''); }} className="w-full text-left px-3 py-2 hover:bg-primary-50 transition text-sm">
                       <span className="font-medium text-ink">{p.name}</span>
                       <span className="text-xs text-ink-muted ml-2">{p.phone}</span>
                     </button>

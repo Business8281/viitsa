@@ -5,7 +5,7 @@ import { collection, query, where, orderBy, getDocs, limit } from 'firebase/fire
 import { formatDate } from '../lib/format';
 import { usePatientAuth } from '../lib/patientAuth';
 import { ReportScanner } from './ReportScanner';
-import type { Consultation, Vital, User, HealthReport } from '../lib/types';
+import type { Consultation, Vital, HealthReport } from '../lib/types';
 import type { PatientTab } from './PatientBottomNav';
 
 interface Props { patientId: string | null; onTab: (t: PatientTab) => void; }

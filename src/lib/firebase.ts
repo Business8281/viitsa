@@ -15,4 +15,5 @@ export const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
 export const db = getFirestore(app);
 
-export const DEMO_CLINIC_ID = '11111111-1111-1111-1111-111111111111';
+export const DEFAULT_CLINIC_ID = 'cln_viitsa_main';
+export const DEMO_CLINIC_ID = DEFAULT_CLINIC_ID;

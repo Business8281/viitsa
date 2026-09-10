@@ -27,7 +27,7 @@ interface Props {
   clinicId: string | null;
 }
 
-const TYPE_ICON: Record<string, React.ComponentType<{ size?: number; className?: string }>> = {
+const TYPE_ICON: Record<string, any> = {
   appointment: Calendar,
   consultation: Stethoscope,
   report: FileText,
