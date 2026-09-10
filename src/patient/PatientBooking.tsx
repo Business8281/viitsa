@@ -146,12 +146,14 @@ export function PatientBooking({ onTab, clinic: initialClinic, patientId, aiSumm
   };
 
   // Load doctors when clinic is selected
+  useEffect(() => {
     if (!clinic) return;
     const q = query(collection(db, 'users'), where('clinic_id', '==', clinic.clinic_id), where('role', '==', 'doctor'), where('active', '==', true));
     getDocs(q).then((snap) => setDoctors(snap.docs.map(d => d.data() as User)));
   }, [clinic]);
 
   // Load taken slots
+  useEffect(() => {
     if (!selectedDoctor || !clinic) return;
     const iso = localDateISO(selectedDate);
     const q = query(collection(db, 'appointments'), where('doctor_id', '==', selectedDoctor.user_id), where('date', '==', iso));
