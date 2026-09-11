@@ -49,6 +49,8 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { hasError: boole
 
 const LandingPage       = lazy(() => import('./screens/LandingPage').then(m => ({ default: m.LandingPage })));
 const AuthLoginPage     = lazy(() => import('./screens/AuthLoginPage').then(m => ({ default: m.AuthLoginPage })));
+const AdminLoginPage    = lazy(() => import('./screens/AdminLoginPage').then(m => ({ default: m.AdminLoginPage })));
+const AdminDashboard    = lazy(() => import('./screens/AdminDashboard').then(m => ({ default: m.AdminDashboard })));
 const ClinicLoginPage   = lazy(() => import('./screens/ClinicLoginPage').then(m => ({ default: m.ClinicLoginPage })));
 const ClinicSetupPage   = lazy(() => import('./screens/ClinicSetupPage').then(m => ({ default: m.ClinicSetupPage })));
 const SetupWizardPage   = lazy(() => import('./screens/SetupWizardPage').then(m => ({ default: m.SetupWizardPage })));
@@ -81,6 +83,31 @@ function ClinicProtectedRoute({ children }: { children: React.ReactNode }) {
   if (loading) return <PageLoader />;
   if (!user) return <Navigate to="/clinic/login" replace />;
   if (user.role === 'patient') return <Navigate to="/patient/dashboard" replace />;
+  if (user.role === 'company_admin') return <Navigate to="/admin/dashboard" replace />;
+  return <>{children}</>;
+}
+
+/** Admin public route — redirect if already logged in */
+function AdminPublicRoute({ children }: { children: React.ReactNode }) {
+  const { user, loading } = useAuth();
+  if (loading) return <PageLoader />;
+  if (user) {
+    if (user.role === 'company_admin') return <Navigate to="/admin/dashboard" replace />;
+    if (user.role === 'patient') return <Navigate to="/patient/dashboard" replace />;
+    return <Navigate to="/clinic/login" replace />;
+  }
+  return <>{children}</>;
+}
+
+/** Admin protected route — only company_admin */
+function AdminProtectedRoute({ children }: { children: React.ReactNode }) {
+  const { user, loading } = useAuth();
+  if (loading) return <PageLoader />;
+  if (!user) return <Navigate to="/admin/login" replace />;
+  if (user.role !== 'company_admin') {
+    if (user.role === 'patient') return <Navigate to="/patient/dashboard" replace />;
+    return <Navigate to="/clinic/dashboard" replace />;
+  }
   return <>{children}</>;
 }
 
@@ -105,6 +132,7 @@ function PatientPublicRoute({ children }: { children: React.ReactNode }) {
   if (loading) return <PageLoader />;
   if (user) {
     if (user.role === 'patient') return <Navigate to="/patient/dashboard" replace />;
+    if (user.role === 'company_admin') return <Navigate to="/admin/dashboard" replace />;
     // Clinic users visiting /login are sent to clinic login
     return <Navigate to="/clinic/login" replace />;
   }
@@ -162,6 +190,29 @@ function AppRoutes() {
             </PatientPublicRoute>
           }
         />
+
+        {/* Admin login */}
+        <Route
+          path="/admin/login"
+          element={
+            <AdminPublicRoute>
+              <AdminLoginPage />
+            </AdminPublicRoute>
+          }
+        />
+
+        {/* Admin dashboard */}
+        <Route
+          path="/admin/dashboard"
+          element={
+            <AdminProtectedRoute>
+              <AdminDashboard />
+            </AdminProtectedRoute>
+          }
+        />
+
+        {/* Redirect /admin → /admin/login */}
+        <Route path="/admin" element={<Navigate to="/admin/login" replace />} />
 
         {/* Clinic-only login */}
         <Route

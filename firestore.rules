@@ -3,37 +3,47 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
+    // Helper: check if requester is a company_admin (system admin)
+    function isCompanyAdmin() {
+      return request.auth != null
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'company_admin';
+    }
+
     // Users: authenticated user can read/write their own document
+    // Company admin can read all users
     match /users/{userId} {
-      allow read, write: if request.auth != null && request.auth.uid == userId;
-      // Allow clinic admin to read other users in their clinic (e.g., doctors)
       allow read: if request.auth != null;
+      allow write: if request.auth != null && (request.auth.uid == userId || isCompanyAdmin());
     }
 
     // Clinics: owner can read/write; any authenticated user can read (for patient clinic picker)
+    // Company admin can read/write all clinics
     match /clinics/{clinicId} {
       allow read: if request.auth != null;
       allow create: if request.auth != null;
       allow update, delete: if request.auth != null
         && (resource.data.owner_user_id == request.auth.uid
-            || request.resource.data.owner_user_id == request.auth.uid);
+            || request.resource.data.owner_user_id == request.auth.uid
+            || isCompanyAdmin());
 
-      // Doctors sub-collection: clinic owner can write
+      // Doctors sub-collection
       match /doctors/{doctorId} {
         allow read: if request.auth != null;
         allow write: if request.auth != null
-          && get(/databases/$(database)/documents/clinics/$(clinicId)).data.owner_user_id == request.auth.uid;
+          && (get(/databases/$(database)/documents/clinics/$(clinicId)).data.owner_user_id == request.auth.uid
+              || isCompanyAdmin());
       }
     }
 
-    // Patient accounts: only the owning patient can read/write their own account
+    // Patient accounts: owning patient can read/write; clinic staff and admin can read
     match /patient_accounts/{accountId} {
-      allow read, write: if request.auth != null
+      allow read: if request.auth != null;
+      allow write: if request.auth != null
         && (resource == null
             || resource.data.auth_user_id == request.auth.uid
-            || request.resource.data.auth_user_id == request.auth.uid);
-      // Allow clinic staff to read patient accounts (for appointments)
-      allow read: if request.auth != null;
+            || request.resource.data.auth_user_id == request.auth.uid
+            || isCompanyAdmin());
     }
 
     // Appointments: authenticated users can read/write
