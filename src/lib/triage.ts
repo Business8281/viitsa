@@ -15,8 +15,7 @@ export interface TriageResult {
   askFollowUp?: string[];
 }
 
-// AI calls are routed exclusively through the Supabase Edge Function (ai-chat)
-// which holds the LLM API key server-side. The browser never sees the key.
+// AI triage runs client-side. For advanced AI chat, use Firebase Cloud Functions.
 
 const URGENT_PATTERNS: RegExp[] = [
   /chest\s*pain/i,
