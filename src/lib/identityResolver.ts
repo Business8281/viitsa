@@ -538,7 +538,7 @@ async function createNewCanonicalUser(
     const clinicCode = generateReadableId('CLN', firebaseUser.uid);
     const clinicName = onboardingData?.clinicName || `${name}'s Clinic`;
     try {
-      const clinicDocRef = await addDoc(collection(db, 'clinics'), {
+      const clinicDocRef = await addDoc(collection(db, 'clinics'), sanitizeForFirestore({
         clinic_code: clinicCode,
         id_number: clinicCode,
         display_id: clinicCode,
@@ -547,13 +547,14 @@ async function createNewCanonicalUser(
         owner_user_id: firebaseUser.uid,
         phone: phone || '',
         email: email || '',
-        city: 'Bangalore',
+        city: '',
         address: '',
         logo_url: null,
+        clinic_setup_complete: false,
         working_hours: { open: '09:00', close: '19:00', days: ['Mon','Tue','Wed','Thu','Fri','Sat'] },
         created_at: nowIso,
         updated_at: nowIso,
-      });
+      }));
       clinicId = clinicDocRef.id;
     } catch (e) {
       console.warn('Create clinic warning:', e);
@@ -568,9 +569,10 @@ async function createNewCanonicalUser(
       owner_user_id: firebaseUser.uid,
       phone: phone || '',
       email: email || '',
-      city: 'Bangalore',
+      city: '',
       address: '',
       logo_url: null,
+      clinic_setup_complete: false,
       working_hours: { open: '09:00', close: '19:00', days: ['Mon','Tue','Wed','Thu','Fri','Sat'] },
       created_at: nowIso,
       updated_at: nowIso,
@@ -662,6 +664,7 @@ async function createNewCanonicalUser(
     patient_account_id: patientAccount?.account_id || null,
     profile_completed: false,
     role_selected: hasExplicitRole,
+    clinic_setup_complete: role === 'admin' ? false : undefined,
   };
 
   try {

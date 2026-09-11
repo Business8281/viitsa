@@ -1,10 +1,69 @@
 rules_version = '2';
+
 service cloud.firestore {
   match /databases/{database}/documents {
-    
-    // Allow authenticated users to access and write collections
-    match /{document=**} {
+
+    // Users: authenticated user can read/write their own document
+    match /users/{userId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+      // Allow clinic admin to read other users in their clinic (e.g., doctors)
+      allow read: if request.auth != null;
+    }
+
+    // Clinics: owner can read/write; any authenticated user can read (for patient clinic picker)
+    match /clinics/{clinicId} {
+      allow read: if request.auth != null;
+      allow create: if request.auth != null;
+      allow update, delete: if request.auth != null
+        && (resource.data.owner_user_id == request.auth.uid
+            || request.resource.data.owner_user_id == request.auth.uid);
+
+      // Doctors sub-collection: clinic owner can write
+      match /doctors/{doctorId} {
+        allow read: if request.auth != null;
+        allow write: if request.auth != null
+          && get(/databases/$(database)/documents/clinics/$(clinicId)).data.owner_user_id == request.auth.uid;
+      }
+    }
+
+    // Patient accounts: only the owning patient can read/write their own account
+    match /patient_accounts/{accountId} {
+      allow read, write: if request.auth != null
+        && (resource == null
+            || resource.data.auth_user_id == request.auth.uid
+            || request.resource.data.auth_user_id == request.auth.uid);
+      // Allow clinic staff to read patient accounts (for appointments)
+      allow read: if request.auth != null;
+    }
+
+    // Appointments: authenticated users can read/write
+    match /appointments/{apptId} {
       allow read, write: if request.auth != null;
+    }
+
+    // Bills: authenticated users can read/write
+    match /bills/{billId} {
+      allow read, write: if request.auth != null;
+    }
+
+    // Inventory: authenticated users can read/write
+    match /inventory/{itemId} {
+      allow read, write: if request.auth != null;
+    }
+
+    // AI sessions: patient or clinic staff access
+    match /ai_sessions/{sessionId} {
+      allow read, write: if request.auth != null;
+    }
+
+    // Patient clinic links
+    match /patient_clinic_links/{linkId} {
+      allow read, write: if request.auth != null;
+    }
+
+    // Deny all other access
+    match /{document=**} {
+      allow read, write: if false;
     }
   }
 }

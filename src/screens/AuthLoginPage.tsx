@@ -555,34 +555,9 @@ export function AuthLoginPage() {
             </div>
           )}
 
-          {/* Sign In Mode: Google Sign-In & Method Selector */}
+          {/* Sign In Mode: Method Selector (Email / Phone) — Patient portal only */}
           {activeTab === 'login' && (
             <>
-              {/* Google Sign-In Button */}
-              <div className="mb-5">
-                <button
-                  type="button"
-                  onClick={handleGoogleAuth}
-                  disabled={loading}
-                  className="w-full h-12 flex items-center justify-center gap-3 px-4 rounded-xl text-sm font-semibold transition-all border bg-white hover:bg-slate-50 text-slate-700 border-slate-300 shadow-sm hover:border-slate-400 active:scale-[0.99]"
-                >
-                  {loading ? <Loader2 className="w-4 h-4 animate-spin text-slate-600" /> : <GoogleIcon className="w-5 h-5" />}
-                  <span>Continue with Google</span>
-                </button>
-              </div>
-
-              {/* Divider */}
-              <div className="relative mb-5">
-                <div className="absolute inset-0 flex items-center">
-                  <div className="w-full border-t border-slate-200" />
-                </div>
-                <div className="relative flex justify-center text-xs font-semibold uppercase tracking-wider">
-                  <span className="bg-white px-3 text-slate-400">
-                    Or continue with
-                  </span>
-                </div>
-              </div>
-
               {/* Sub-Method Selector: Email vs Phone */}
               <div className="grid grid-cols-2 gap-2 mb-5">
                 <button
@@ -621,43 +596,7 @@ export function AuthLoginPage() {
             </>
           )}
 
-          {/* Create Account Mode: Account Type Selector (Patient or Clinic only) */}
-          {activeTab === 'register' && (
-            <div className="mb-5 space-y-2">
-              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wide">
-                Account Type
-              </label>
-              <div className="grid grid-cols-2 gap-3">
-                <button
-                  type="button"
-                  onClick={() => setSelectedRole('patient')}
-                  className={`flex flex-col items-center justify-center p-3.5 rounded-xl border text-center transition-all ${
-                    selectedRole === 'patient'
-                      ? 'bg-teal-50 border-teal-600 text-teal-900 shadow-sm ring-1 ring-teal-600'
-                      : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
-                  }`}
-                >
-                  <User className="w-5 h-5 mb-1.5 text-teal-600" />
-                  <span className="text-sm font-bold">Patient</span>
-                  <span className="text-xs text-slate-500">Personal</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setSelectedRole('admin')}
-                  className={`flex flex-col items-center justify-center p-3.5 rounded-xl border text-center transition-all ${
-                    selectedRole === 'admin'
-                      ? 'bg-teal-50 border-teal-600 text-teal-900 shadow-sm ring-1 ring-teal-600'
-                      : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
-                  }`}
-                >
-                  <Building2 className="w-5 h-5 mb-1.5 text-teal-600" />
-                  <span className="text-sm font-bold">Clinic</span>
-                  <span className="text-xs text-slate-500">Admin</span>
-                </button>
-              </div>
-            </div>
-          )}
+          {/* Create Account — patient only on this page */}
 
           {/* METHOD 1: EMAIL & PASSWORD (Available for Register and Login) */}
           {(activeTab === 'register' || loginMethod === 'email') && (
@@ -1025,8 +964,8 @@ export function AuthLoginPage() {
           {/* Invisible Recaptcha Mount Point */}
           <div id="recaptcha-container-login" />
 
-          {/* Footer Back Link */}
-          <div className="mt-6 pt-5 border-t border-slate-100 text-center">
+          {/* Footer links */}
+          <div className="mt-6 pt-5 border-t border-slate-100 text-center space-y-2">
             <Link
               to="/"
               className="inline-flex items-center gap-1.5 text-xs sm:text-sm font-semibold text-slate-500 hover:text-slate-800 transition-colors"
@@ -1034,6 +973,12 @@ export function AuthLoginPage() {
               <ArrowLeft className="w-4 h-4" />
               <span>Back to VIITSA Home</span>
             </Link>
+            <p className="text-xs text-slate-400">
+              Clinic or doctor?{' '}
+              <Link to="/clinic/login" className="text-teal-700 font-semibold hover:text-teal-900">
+                Sign in to Clinic Portal →
+              </Link>
+            </p>
           </div>
 
         </div>

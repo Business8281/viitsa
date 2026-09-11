@@ -22,8 +22,10 @@ export interface Clinic {
   owner_name: string | null;
   owner_user_id?: string | null;
   departments?: string[];
+  speciality?: string | null;
   rating?: number;
   working_hours: { open: string; close: string; days: string[] };
+  clinic_setup_complete?: boolean;
   created_at: string;
   updated_at?: string;
 }
@@ -52,6 +54,7 @@ export interface User {
   patient_account_id?: string | null;
   profile_completed?: boolean;
   role_selected?: boolean;
+  clinic_setup_complete?: boolean;
 }
 
 export interface Patient {

@@ -33,11 +33,11 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { hasError: boole
             <button
               onClick={() => {
                 this.setState({ hasError: false, error: null });
-                window.location.href = '/login';
+                window.location.href = '/';
               }}
               className="w-full py-2.5 px-4 bg-teal-600 hover:bg-teal-700 text-white font-medium rounded-xl transition"
             >
-              Return to Login
+              Return to Home
             </button>
           </div>
         </div>
@@ -47,21 +47,22 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { hasError: boole
   }
 }
 
-const LandingPage = lazy(() => import('./screens/LandingPage').then(m => ({ default: m.LandingPage })));
-const AuthLoginPage = lazy(() => import('./screens/AuthLoginPage').then(m => ({ default: m.AuthLoginPage })));
-const AuthRegisterPage = lazy(() => import('./screens/AuthRegisterPage').then(m => ({ default: m.AuthRegisterPage })));
-const SetupWizardPage = lazy(() => import('./screens/SetupWizardPage').then(m => ({ default: m.SetupWizardPage })));
-const DashboardScreen = lazy(() => import('./screens/DashboardScreen').then(m => ({ default: m.DashboardScreen })));
-const PatientsScreen = lazy(() => import('./screens/PatientsScreen').then(m => ({ default: m.PatientsScreen })));
+const LandingPage       = lazy(() => import('./screens/LandingPage').then(m => ({ default: m.LandingPage })));
+const AuthLoginPage     = lazy(() => import('./screens/AuthLoginPage').then(m => ({ default: m.AuthLoginPage })));
+const ClinicLoginPage   = lazy(() => import('./screens/ClinicLoginPage').then(m => ({ default: m.ClinicLoginPage })));
+const ClinicSetupPage   = lazy(() => import('./screens/ClinicSetupPage').then(m => ({ default: m.ClinicSetupPage })));
+const SetupWizardPage   = lazy(() => import('./screens/SetupWizardPage').then(m => ({ default: m.SetupWizardPage })));
+const DashboardScreen   = lazy(() => import('./screens/DashboardScreen').then(m => ({ default: m.DashboardScreen })));
+const PatientsScreen    = lazy(() => import('./screens/PatientsScreen').then(m => ({ default: m.PatientsScreen })));
 const AppointmentsScreen = lazy(() => import('./screens/AppointmentsScreen').then(m => ({ default: m.AppointmentsScreen })));
-const BillingScreen = lazy(() => import('./screens/BillingScreen').then(m => ({ default: m.BillingScreen })));
-const InventoryScreen = lazy(() => import('./screens/InventoryScreen').then(m => ({ default: m.InventoryScreen })));
+const BillingScreen     = lazy(() => import('./screens/BillingScreen').then(m => ({ default: m.BillingScreen })));
+const InventoryScreen   = lazy(() => import('./screens/InventoryScreen').then(m => ({ default: m.InventoryScreen })));
 const AINavigatorScreen = lazy(() => import('./screens/AINavigatorScreen').then(m => ({ default: m.AINavigatorScreen })));
-const AnalyticsScreen = lazy(() => import('./screens/AnalyticsScreen').then(m => ({ default: m.AnalyticsScreen })));
-const SettingsScreen = lazy(() => import('./screens/SettingsScreen').then(m => ({ default: m.SettingsScreen })));
-const DoctorDashboard = lazy(() => import('./screens/DoctorDashboard').then(m => ({ default: m.DoctorDashboard })));
-const PatientApp = lazy(() => import('./patient/PatientApp').then(m => ({ default: m.PatientApp })));
-const EmergencyPage = lazy(() => import('./screens/EmergencyPage').then(m => ({ default: m.EmergencyPage })));
+const AnalyticsScreen   = lazy(() => import('./screens/AnalyticsScreen').then(m => ({ default: m.AnalyticsScreen })));
+const SettingsScreen    = lazy(() => import('./screens/SettingsScreen').then(m => ({ default: m.SettingsScreen })));
+const DoctorDashboard   = lazy(() => import('./screens/DoctorDashboard').then(m => ({ default: m.DoctorDashboard })));
+const PatientApp        = lazy(() => import('./patient/PatientApp').then(m => ({ default: m.PatientApp })));
+const EmergencyPage     = lazy(() => import('./screens/EmergencyPage').then(m => ({ default: m.EmergencyPage })));
 
 function PageLoader() {
   return (
@@ -74,37 +75,61 @@ function PageLoader() {
   );
 }
 
-function ProtectedRoute({ children }: { children: React.ReactNode }) {
+/** Redirects unauthenticated clinic users to /clinic/login */
+function ClinicProtectedRoute({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
-
   if (loading) return <PageLoader />;
-
-  if (!user) return <Navigate to="/login" replace />;
-
+  if (!user) return <Navigate to="/clinic/login" replace />;
+  if (user.role === 'patient') return <Navigate to="/patient/dashboard" replace />;
   return <>{children}</>;
 }
 
-function PublicOnlyRoute({ children }: { children: React.ReactNode }) {
+/** Guard for /clinic/setup: must be authenticated admin and setup not yet complete */
+function ClinicSetupRoute() {
   const { user, loading } = useAuth();
-
   if (loading) return <PageLoader />;
+  if (!user) return <Navigate to="/clinic/login" replace />;
+  if (user.role === 'patient') return <Navigate to="/patient/dashboard" replace />;
+  // If already set up, skip to dashboard
+  if (user.clinic_setup_complete === true) return <Navigate to="/clinic/dashboard" replace />;
+  return (
+    <Suspense fallback={<PageLoader />}>
+      <ClinicSetupPage />
+    </Suspense>
+  );
+}
 
+/** Patient-only public route: redirect patients away if already logged in */
+function PatientPublicRoute({ children }: { children: React.ReactNode }) {
+  const { user, loading } = useAuth();
+  if (loading) return <PageLoader />;
   if (user) {
     if (user.role === 'patient') return <Navigate to="/patient/dashboard" replace />;
+    // Clinic users visiting /login are sent to clinic login
+    return <Navigate to="/clinic/login" replace />;
+  }
+  return <>{children}</>;
+}
+
+/** Clinic-only public route: redirect if already authenticated */
+function ClinicPublicRoute({ children }: { children: React.ReactNode }) {
+  const { user, loading } = useAuth();
+  if (loading) return <PageLoader />;
+  if (user) {
+    if (user.role === 'patient') return <Navigate to="/patient/dashboard" replace />;
+    if (user.clinic_setup_complete === false) return <Navigate to="/clinic/setup" replace />;
     return <Navigate to="/clinic/dashboard" replace />;
   }
-
   return <>{children}</>;
 }
 
 function ClinicLayout() {
   const { user, loading } = useAuth();
-
   if (loading) return <PageLoader />;
-
-  if (!user) return <Navigate to="/login" replace />;
-
+  if (!user) return <Navigate to="/clinic/login" replace />;
   if (user.role === 'patient') return <Navigate to="/patient/dashboard" replace />;
+  // First-time clinic users must complete setup
+  if (user.clinic_setup_complete === false) return <Navigate to="/clinic/setup" replace />;
 
   return (
     <AppShell>
@@ -125,36 +150,62 @@ function AppRoutes() {
   return (
     <Suspense fallback={<PageLoader />}>
       <Routes>
-        {/* Public routes */}
+        {/* Public landing */}
         <Route path="/" element={<LandingPage />} />
-        <Route path="/login" element={<AuthLoginPage />} />
+
+        {/* Patient-only login */}
+        <Route
+          path="/login"
+          element={
+            <PatientPublicRoute>
+              <AuthLoginPage />
+            </PatientPublicRoute>
+          }
+        />
+
+        {/* Clinic-only login */}
+        <Route
+          path="/clinic/login"
+          element={
+            <ClinicPublicRoute>
+              <ClinicLoginPage />
+            </ClinicPublicRoute>
+          }
+        />
+
+        {/* Clinic onboarding (first-time setup) */}
+        <Route path="/clinic/setup" element={<ClinicSetupRoute />} />
+
+        {/* Legacy register redirect */}
         <Route path="/register" element={<Navigate to="/login?mode=register" replace />} />
 
         {/* Protected clinic routes */}
         <Route
           path="/clinic"
           element={
-            <ProtectedRoute>
+            <ClinicProtectedRoute>
               <ClinicLayout />
-            </ProtectedRoute>
+            </ClinicProtectedRoute>
           }
         >
           <Route index element={<Navigate to="/clinic/dashboard" replace />} />
-          <Route path="dashboard" element={<RoleBasedDashboard />} />
-          <Route path="patients" element={<PatientsScreen />} />
+          <Route path="dashboard"    element={<RoleBasedDashboard />} />
+          <Route path="patients"     element={<PatientsScreen />} />
           <Route path="appointments" element={<AppointmentsScreen />} />
-          <Route path="billing" element={<BillingScreen />} />
-          <Route path="inventory" element={<InventoryScreen />} />
+          <Route path="billing"      element={<BillingScreen />} />
+          <Route path="inventory"    element={<InventoryScreen />} />
           <Route path="ai-navigator" element={<AINavigatorScreen />} />
-          <Route path="analytics" element={<AnalyticsScreen />} />
-          <Route path="settings" element={<SettingsScreen />} />
+          <Route path="analytics"    element={<AnalyticsScreen />} />
+          <Route path="settings"     element={<SettingsScreen />} />
         </Route>
+
+        {/* Legacy setup wizard */}
         <Route
           path="/setup"
           element={
-            <ProtectedRoute>
+            <ClinicProtectedRoute>
               <SetupWizardPage />
-            </ProtectedRoute>
+            </ClinicProtectedRoute>
           }
         />
 

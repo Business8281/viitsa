@@ -315,8 +315,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }, [confirmationResult]);
 
-  // Sign out
   const logout = useCallback(async () => {
+    const isClinic = user?.role === 'admin' || user?.role === 'company_admin' || user?.role === 'doctor' || user?.role === 'staff';
     setUser(null);
     setClinic(null);
     setPatientAccount(null);
@@ -329,10 +329,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       localStorage.removeItem('viitsa_patient_v1');
       sessionStorage.clear();
     } catch {}
-    if (window.location.pathname !== '/login') {
-      window.location.href = '/login';
+    const loginPath = isClinic ? '/clinic/login' : '/login';
+    if (window.location.pathname !== loginPath) {
+      window.location.href = loginPath;
     }
-  }, []);
+  }, [user]);
+
 
   // Refresh user session from Firestore
   const refreshSession = useCallback(async () => {
