@@ -555,6 +555,25 @@ export function AuthLoginPage() {
             </div>
           )}
 
+          {/* Google Sign-In (Available for both Login and Register) */}
+          <button
+            type="button"
+            onClick={handleGoogleAuth}
+            disabled={loading}
+            className="w-full mb-5 h-12 flex items-center justify-center gap-3 px-6 rounded-xl border-2 border-slate-100 bg-white hover:bg-slate-50 hover:border-slate-200 transition-all font-bold text-slate-700 shadow-sm disabled:opacity-50 active:scale-[0.99]"
+          >
+            <GoogleIcon className="w-5 h-5" />
+            <span>Continue with Google</span>
+          </button>
+
+          <div className="relative mb-5 flex items-center">
+            <div className="flex-grow border-t border-slate-200"></div>
+            <span className="shrink-0 px-3 text-[10px] font-bold text-slate-400 uppercase tracking-widest">
+              Or
+            </span>
+            <div className="flex-grow border-t border-slate-200"></div>
+          </div>
+
           {/* Sign In Mode: Method Selector (Email / Phone) — Patient portal only */}
           {activeTab === 'login' && (
             <>
