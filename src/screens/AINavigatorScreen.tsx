@@ -94,7 +94,7 @@ export function AINavigatorScreen() {
   useEffect(() => {
     if (!clinic) return;
     const fetchDoctors = async () => {
-      const q = query(collection(db, 'users'), where('clinic_id', '==', clinic.clinic_id), where('role', '==', 'doctor'), where('active', '==', true));
+      const q = query(collection(db, 'users'), where('clinic_id', '==', clinic.clinic_id), where('role', '==', 'clinic_doctor'), where('active', '==', true));
       const snap = await getDocs(q);
       setClinicContext({ doctors: snap.docs.map(d => { const dt = d.data(); return { user_id: d.id, name: dt.name, specialisation: dt.specialisation }; }) });
     };

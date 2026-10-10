@@ -132,7 +132,7 @@ export async function sendToAI(
   systemPrompt: string,
 ): Promise<AIResponse> {
   try {
-    const functions = getFunctions(app);
+    const functions = getFunctions(app, "asia-south1");
     const aiChat = httpsCallable<{ messages: AIMessage[], systemPrompt: string }, { raw: string }>(functions, 'aiChat');
     const result = await aiChat({ messages, systemPrompt });
     return parseAIResponse(result.data.raw || '');
@@ -162,7 +162,7 @@ export async function translateSummary(
   );
 
   try {
-    const functions = getFunctions(app);
+    const functions = getFunctions(app, "asia-south1");
     const aiChat = httpsCallable<{ messages: AIMessage[], systemPrompt: string }, { raw: string }>(functions, 'aiChat');
     const result = await aiChat({
       messages: [{ role: 'user', content: `Translate this JSON to ${langName}: ${payload}` }],

@@ -3,8 +3,9 @@ import { ChevronLeft, ChevronRight, Check, MessageCircle, Calendar, CalendarPlus
 import { db } from '../lib/firebase';
 import { collection, query, where, getDocs, addDoc, doc, getDoc, updateDoc, orderBy, limit } from 'firebase/firestore';
 import { usePatientAuth } from '../lib/patientAuth';
-import { sendEmail } from '../lib/emailService';
-import { formatTime, formatDate, whatsappAppointmentConfirmation, localDateISO } from '../lib/format';
+import { sendInstantAppointmentEmail } from '../lib/emailService';
+
+import { formatTime, formatDate, whatsappAppointmentConfirmation, localDateISO, formatDobForInput } from '../lib/format';
 import type { User, Clinic } from '../lib/types';
 import type { PatientTab } from './PatientBottomNav';
 import type { TriageSummary } from '../lib/aiService';
@@ -53,13 +54,31 @@ export function PatientBooking({ onTab, clinic: initialClinic, patientId, aiSumm
   const [clinic, setClinic] = useState<Clinic | null>(initialClinic);
   const [doctors, setDoctors] = useState<User[]>([]);
   const [selectedDoctor, setSelectedDoctor] = useState<User | null>(null);
-  const [selectedDate, setSelectedDate] = useState<Date>(new Date());
+  const [selectedDate, setSelectedDate] = useState<string>(localDateISO(new Date()));
   const [takenSlots, setTakenSlots] = useState<string[]>([]);
-  const [selectedSlot, setSelectedSlot] = useState('');
+  const now = new Date();
+  const [selectedSlot, setSelectedSlot] = useState(`${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`);
   const [visitType, setVisitType] = useState<VisitTypeKey>('new-visit');
   const [reason, setReason] = useState('');
   const [saving, setSaving] = useState(false);
   const [bookingError, setBookingError] = useState('');
+  const [holidays, setHolidays] = useState<string[]>([]);
+  const [source, setSource] = useState('patient');
+
+  useEffect(() => {
+    if (initialClinic) {
+      setClinic(initialClinic);
+      if (step === 'clinic') {
+        setStep('doctor');
+      }
+    }
+  }, [initialClinic]);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const s = params.get('source');
+    if (s) setSource(s);
+  }, []);
 
   // Clinic search state
   const [clinics, setClinics] = useState<Clinic[]>([]);
@@ -151,15 +170,22 @@ export function PatientBooking({ onTab, clinic: initialClinic, patientId, aiSumm
     const q = query(collection(db, 'users'), where('clinic_id', '==', clinic.clinic_id), where('active', '==', true));
     getDocs(q).then((snap) => {
       const allUsers = snap.docs.map(d => ({ ...d.data(), user_id: d.id, id: d.id } as User));
-      const docList = allUsers.filter(u => u.role === 'doctor' || u.role === 'admin' || u.user_type === 'clinic_admin');
+      const docList = allUsers.filter(u => u.role === 'clinic_doctor' || u.role === 'clinic_admin' || u.user_type === 'clinic_admin');
       setDoctors(docList);
+    });
+
+    getDoc(doc(db, 'clinic_settings', clinic.clinic_id)).then((snap) => {
+      if (snap.exists()) {
+        const data = snap.data();
+        setHolidays(data.holidays || []);
+      }
     });
   }, [clinic]);
 
   // Load taken slots
   useEffect(() => {
     if (!selectedDoctor || !clinic) return;
-    const iso = localDateISO(selectedDate);
+    const iso = selectedDate;
     const q = query(collection(db, 'appointments'), where('doctor_id', '==', selectedDoctor.user_id), where('date', '==', iso));
     getDocs(q).then((snap) => {
       const data = snap.docs.map(d => d.data());
@@ -180,20 +206,25 @@ export function PatientBooking({ onTab, clinic: initialClinic, patientId, aiSumm
     const effectivePatientId = patientId || account?.account_id;
     if (!clinic || !selectedDoctor || !selectedSlot || !effectivePatientId) return;
     setSaving(true);
-    const iso = localDateISO(selectedDate);
+    const iso = selectedDate;
     const nowIso = new Date().toISOString();
     
     try {
-      const q = query(collection(db, 'appointments'), where('clinic_id', '==', clinic.clinic_id), where('date', '==', iso), orderBy('token_number', 'desc'), limit(1));
+      const q = query(collection(db, 'appointments'), where('clinic_id', '==', clinic.clinic_id), where('date', '==', iso));
       const snap = await getDocs(q);
       const existing = snap.docs.map(d => d.data());
-      const nextToken = (existing?.[0]?.token_number ?? 0) + 1;
+      
+      const maxToken = existing.reduce((max, appt) => Math.max(max, appt.token_number || 0), 0);
+      const nextToken = maxToken + 1;
       
       // Check for duplicate slot
-      const dupQ = query(collection(db, 'appointments'), where('doctor_id', '==', selectedDoctor.user_id), where('date', '==', iso), where('time_slot', '==', selectedSlot));
-      const dupSnap = await getDocs(dupQ);
-      const dupData = dupSnap.docs.map(d => d.data()).filter(d => d.status !== 'cancelled');
-      if (dupData.length > 0) {
+      const isDuplicate = existing.some(a => 
+        a.doctor_id === selectedDoctor.user_id && 
+        a.time_slot === selectedSlot && 
+        a.status !== 'cancelled'
+      );
+
+      if (isDuplicate) {
         setSaving(false);
         setBookingError('This time slot was just booked by another patient. Please choose a different time.');
         return;
@@ -210,7 +241,8 @@ export function PatientBooking({ onTab, clinic: initialClinic, patientId, aiSumm
         reason: reason || null,
         triage_level: aiSummary?.level?.toLowerCase() ?? 'normal',
         token_number: nextToken,
-        booked_via: 'patient',
+        display_token: 'ON-' + String(nextToken).padStart(3, '0'),
+        booked_via: source,
         visit_type: visitType,
         online_booking: true,
         ai_summary: aiSummary ?? null,
@@ -223,23 +255,10 @@ export function PatientBooking({ onTab, clinic: initialClinic, patientId, aiSumm
         appointment_id: apptRef.id,
       });
 
+      sendInstantAppointmentEmail(apptRef.id, 'appointment_confirmed');
+
       setSaving(false);
 
-      // Send confirmation email if patient has an email on file
-      if (account?.email) {
-        sendEmail({
-          to: account.email,
-          template: "appointment_confirmed",
-          data: {
-            patientName: account.name ?? 'Patient',
-            clinicName: clinic.name,
-            doctorName: selectedDoctor.name,
-            date: formatDate(selectedDate),
-            time: formatTime(selectedSlot),
-            token: String(nextToken),
-          },
-        });
-      }
 
       setStep('done');
     } catch (error) {
@@ -493,45 +512,32 @@ export function PatientBooking({ onTab, clinic: initialClinic, patientId, aiSumm
 
       {/* Step: date */}
       {step === 'date' && (
-        <div className="py-5 space-y-4">
-          <div className="px-4"><h2 className="text-lg font-bold text-gray-900">Choose a date</h2></div>
-          <div className="flex gap-2 overflow-x-auto px-4 pb-1">
-            {dates.map(d => {
-              const active = d.toDateString() === selectedDate.toDateString();
-              return (
-                <button key={d.toISOString()} onClick={() => setSelectedDate(d)} className={`shrink-0 flex flex-col items-center rounded-2xl px-4 py-3 border-2 min-w-[72px] transition ${active ? 'border-primary bg-[#E1F5EE]' : 'border-gray-100 bg-white'}`}>
-                  <span className={`text-[10px] uppercase font-semibold ${active ? 'text-primary' : 'text-gray-400'}`}>{d.toLocaleDateString('en-IN', { weekday: 'short' })}</span>
-                  <span className={`text-xl font-bold ${active ? 'text-primary' : 'text-gray-800'}`}>{d.getDate()}</span>
-                  <span className={`text-[10px] ${active ? 'text-primary' : 'text-gray-400'}`}>{d.toDateString() === new Date().toDateString() ? 'Today' : d.toLocaleDateString('en-IN', { month: 'short' })}</span>
-                </button>
-              );
-            })}
+        <div className="py-5 space-y-4 px-4">
+          <h2 className="text-lg font-bold text-gray-900">Choose date and time</h2>
+          <div className="grid grid-cols-2 gap-4 pb-2">
+            <div>
+              <label className="block text-sm font-semibold text-gray-700 mb-2">Date *</label>
+              <input
+                type="date"
+                required
+                min={localDateISO(new Date())}
+                className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3.5 focus:bg-white focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all outline-none text-gray-900"
+                value={formatDobForInput(selectedDate)}
+                onChange={(e) => setSelectedDate(e.target.value)}
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-semibold text-gray-700 mb-2">Time *</label>
+              <input
+                type="time"
+                required
+                className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3.5 focus:bg-white focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all outline-none text-gray-900"
+                value={selectedSlot}
+                onChange={(e) => setSelectedSlot(e.target.value)}
+              />
+            </div>
           </div>
-          <div className="px-4">
-            <button onClick={() => setStep('slot')} className="w-full rounded-xl py-4 text-base font-semibold text-white" style={{ backgroundColor: '#0F6E56' }}>Choose time →</button>
-          </div>
-        </div>
-      )}
-
-      {/* Step: slot */}
-      {step === 'slot' && (
-        <div className="px-4 py-5 space-y-4">
-          <h2 className="text-lg font-bold text-gray-900">Choose a time slot</h2>
-          <p className="text-sm text-gray-500">{formatDate(selectedDate)}</p>
-          <div className="grid grid-cols-3 gap-2">
-            {slots.map(s => {
-              const taken = takenSlots.includes(s);
-              const sel = selectedSlot === s;
-              return (
-                <button key={s} onClick={() => !taken && setSelectedSlot(s)} disabled={taken} className={`rounded-xl py-3 text-sm font-semibold transition border-2 ${sel ? 'border-primary bg-[#E1F5EE] text-primary' : taken ? 'border-gray-100 bg-gray-50 text-gray-300 line-through' : 'border-gray-200 bg-white text-gray-700 hover:border-primary/50'}`}>
-                  {formatTime(s)}
-                </button>
-              );
-            })}
-          </div>
-          {selectedSlot && (
-            <button onClick={() => setStep('confirm')} className="w-full rounded-xl py-4 text-base font-semibold text-white" style={{ backgroundColor: '#0F6E56' }}>Continue →</button>
-          )}
+          <button onClick={() => setStep('confirm')} disabled={!selectedDate || !selectedSlot} className="w-full rounded-xl py-4 text-base font-semibold text-white disabled:opacity-50 disabled:cursor-not-allowed" style={{ backgroundColor: '#0F6E56' }}>Continue →</button>
         </div>
       )}
 

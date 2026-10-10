@@ -22,12 +22,14 @@ import { getAuth, createUserWithEmailAndPassword } from "firebase/auth";
 import { useToast } from '../lib/toast';
 import { useAuth } from '../lib/auth';
 import { ViitsaLogo } from '../components/ViitsaLogo';
+import { RazorpaySubscriptionButton } from '../components/RazorpaySubscriptionButton';
 
 const STEPS = [
   { id: 1, title: 'Clinic Details', icon: Building2, desc: 'Basic clinic information' },
   { id: 2, title: 'Doctors', icon: Stethoscope, desc: 'Add your medical staff' },
   { id: 3, title: 'Staff', icon: Users, desc: 'Add your support team' },
   { id: 4, title: 'Working Hours', icon: Clock, desc: 'Set your schedule' },
+  { id: 5, title: 'Plan & Billing', icon: Globe, desc: 'Setup your subscription' },
 ];
 
 const SPECIALIZATIONS = [
@@ -150,7 +152,7 @@ export function SetupWizardPage() {
   };
 
   const handleNext = () => {
-    if (step < 4) {
+    if (step < 5) {
       setStep(step + 1);
     }
   };
@@ -198,7 +200,7 @@ export function SetupWizardPage() {
             name: docUser.name,
             email: docUser.email.toLowerCase(),
             phone: docUser.phone,
-            role: 'doctor',
+            role: 'clinic_doctor',
             specialisation: docUser.specialization,
             avatar_color: docUser.color,
             active: true,
@@ -220,7 +222,7 @@ export function SetupWizardPage() {
             name: member.name,
             email: member.email.toLowerCase(),
             phone: member.phone,
-            role: 'staff',
+            role: 'clinic_staff',
             avatar_color: member.color,
             active: true,
             created_at: new Date().toISOString()
@@ -249,6 +251,8 @@ export function SetupWizardPage() {
         return staff.some((s) => s.name.trim() !== '');
       case 4:
         return workingHours.days.length > 0;
+      case 5:
+        return true;
       default:
         return true;
     }
@@ -263,7 +267,7 @@ export function SetupWizardPage() {
             <ViitsaLogo size="sm" />
             <div className="flex items-center gap-2 text-sm text-slate-500">
               <CheckCircle className="w-4 h-4 text-emerald-500" />
-              Step {step} of 4
+              Step {step} of 5
             </div>
           </div>
         </div>
@@ -690,6 +694,41 @@ export function SetupWizardPage() {
             </div>
           )}
 
+          {/* Step 5: Subscription */}
+          {step === 5 && (
+            <div className="p-8">
+              <div className="mb-6">
+                <h2 className="text-2xl font-bold text-slate-900 mb-2">Pro Plan Subscription</h2>
+                <p className="text-slate-600">Start your 30-day free trial to access all Pro features</p>
+              </div>
+
+              <div className="bg-gradient-to-r from-emerald-50 to-teal-50 rounded-2xl p-6 border border-emerald-100">
+                <div className="flex items-center justify-between mb-4">
+                  <div>
+                    <h3 className="text-xl font-bold text-slate-800">Viitsa Clinic Pro</h3>
+                    <p className="text-emerald-600 font-semibold mt-1">₹2999 / month</p>
+                  </div>
+                  <div className="px-3 py-1 bg-emerald-100 text-emerald-700 font-bold rounded-full text-sm">
+                    30 Days Free
+                  </div>
+                </div>
+
+                <ul className="space-y-3 mb-6">
+                  {['Smart appointment scheduling', 'AI-powered patient triage', 'Digital billing & invoicing', 'Analytics dashboard', 'Priority support'].map((feature) => (
+                    <li key={feature} className="flex items-center gap-2 text-slate-700">
+                      <CheckCircle className="w-5 h-5 text-emerald-500" />
+                      {feature}
+                    </li>
+                  ))}
+                </ul>
+
+                <p className="text-sm text-slate-500 mb-6">
+                  You will not be charged today. Auto-pay of ₹2999 will begin automatically after your 30-day free trial ends. Cancel anytime.
+                </p>
+              </div>
+            </div>
+          )}
+
           {/* Footer Actions */}
           <div className="p-6 bg-slate-50 border-t border-slate-100 flex items-center justify-between">
             <button
@@ -701,7 +740,7 @@ export function SetupWizardPage() {
               Back
             </button>
 
-            {step < 4 ? (
+            {step < 5 ? (
               <button
                 onClick={handleNext}
                 disabled={!isStepValid()}
@@ -711,23 +750,14 @@ export function SetupWizardPage() {
                 <ArrowRight className="w-5 h-5" />
               </button>
             ) : (
-              <button
-                onClick={handleComplete}
-                disabled={loading}
-                className="inline-flex items-center gap-2 px-8 py-3 bg-gradient-to-r from-emerald-500 to-teal-500 text-white font-semibold rounded-xl shadow-lg shadow-emerald-500/25 hover:shadow-xl hover:-translate-y-0.5 transition-all disabled:opacity-50"
-              >
-                {loading ? (
-                  <>
-                    <span className="w-5 h-5 animate-spin rounded-full border-2 border-white/30 border-t-white" />
-                    Setting up...
-                  </>
-                ) : (
-                  <>
-                    <CheckCircle className="w-5 h-5" />
-                    Complete Setup
-                  </>
-                )}
-              </button>
+              <div className="flex items-center gap-3">
+                <RazorpaySubscriptionButton
+                  clinicId={user?.clinic_id || ''}
+                  planId={import.meta.env.VITE_RAZORPAY_PLAN_ID_PRO || 'plan_TkvpQ2LluCpPIu'}
+                  onSuccess={() => handleComplete()}
+                  className="inline-flex items-center gap-2 px-6 py-3 bg-gradient-to-r from-emerald-500 to-teal-500 text-white font-semibold rounded-xl shadow-lg shadow-emerald-500/25 hover:shadow-xl hover:-translate-y-0.5 transition-all"
+                />
+              </div>
             )}
           </div>
         </div>

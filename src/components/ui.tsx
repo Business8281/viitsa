@@ -62,3 +62,68 @@ export function Avatar({ name, color = '#0F6E56', size = 40 }: { name: string; c
     </div>
   );
 }
+
+export function StatusBadge({ text }: { text: string }) {
+  const lower = (text || '').toLowerCase();
+  let cls = 'badge';
+  if (lower === 'active' || lower === 'completed' || lower === 'done' || lower === 'paid') cls += ' badge-done';
+  else if (lower === 'pending' || lower === 'waiting') cls += ' badge-waiting';
+  else if (lower === 'urgent') cls += ' badge-urgent';
+  else if (lower === 'cancelled' || lower === 'canceled') cls += ' badge-cancelled';
+  else if (lower === 'in-progress' || lower === 'in progress') cls += ' badge-progress';
+  else cls += ' bg-primary-50 text-primary';
+  return <span className={cls}>{text}</span>;
+}
+
+export function RoleBadge({ role }: { role?: string }) {
+  if (!role) return <span className="badge badge-cancelled">unknown</span>;
+  if (role === 'company_admin') return <span className="badge bg-purple-50 text-purple-700">{role}</span>;
+  if (role === 'company_manager') return <span className="badge bg-purple-50 text-purple-600">{role}</span>;
+  if (role === 'company_staff') return <span className="badge bg-purple-50 text-purple-500">{role}</span>;
+  if (role === 'clinic_admin')  return <span className="badge badge-done">{role}</span>;
+  if (role === 'clinic_doctor') return <span className="badge badge-progress">{role}</span>;
+  if (role === 'clinic_staff')  return <span className="badge badge-waiting">{role}</span>;
+  if (role === 'patient')       return <span className="badge bg-blue-50 text-blue-700">{role}</span>;
+  if (role === 'patient_attendant') return <span className="badge bg-blue-50 text-blue-600">{role}</span>;
+  return <span className="badge badge-cancelled">{role}</span>;
+}
+
+export function DataTable({ headers, hiddenFrom, children, empty, emptyLabel }: {
+  headers: string[];
+  hiddenFrom?: (string | null)[];
+  children: React.ReactNode;
+  empty: boolean;
+  emptyLabel: string;
+}) {
+  return (
+    <div className="card p-0 overflow-hidden">
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead className="border-b border-black/5 bg-surface">
+            <tr>
+              {headers.map((h, i) => (
+                <th
+                  key={h}
+                  className={`text-left px-4 py-3 text-xs font-semibold text-ink-muted uppercase tracking-wide ${
+                    hiddenFrom?.[i] ? `hidden ${hiddenFrom[i]}:table-cell` : ''
+                  }`}
+                >
+                  {h}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-black/5">
+            {!empty ? children : (
+              <tr>
+                <td colSpan={headers.length} className="px-4 py-10 text-center text-sm text-ink-muted">
+                  {emptyLabel}
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}

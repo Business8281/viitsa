@@ -8,13 +8,16 @@ import {
   signInWithPhoneNumber, 
   signOut, 
   onAuthStateChanged,
+  sendEmailVerification,
   ConfirmationResult,
   User as FirebaseUser 
 } from 'firebase/auth';
-import { doc, setDoc, onSnapshot } from 'firebase/firestore';
+import { doc, setDoc, onSnapshot, deleteDoc } from 'firebase/firestore';
 import { auth, db, DEFAULT_CLINIC_ID } from './firebase';
 import type { Clinic, User, PatientAccount, Role } from './types';
-import { resolveCanonicalIdentity, generateReadableId, sanitizeForFirestore, getOrInitializeClinic, type OnboardingData, type IdentityResult } from './identityResolver';
+import { PATIENT_ROLES, ADMIN_ROLES, CLINIC_ROLES } from './types';
+import { resolveCanonicalIdentity, generateReadableId, sanitizeForFirestore, getOrInitializeClinic, getCachedIdentity, saveCachedIdentity, type OnboardingData, type IdentityResult } from './identityResolver';
+import { clearAllViitsaCaches } from './cacheCleaner';
 
 interface AuthResponse {
   ok: boolean;
@@ -30,7 +33,9 @@ interface AuthState {
   patientAccount: PatientAccount | null;
   loading: boolean;
   error: string | null;
-  loginWithEmail: (email: string, password: string) => Promise<AuthResponse>;
+  setClinic: (clinic: Clinic | null) => void;
+  switchClinic: (clinic: Clinic) => Promise<void>;
+  loginWithEmail: (email: string, password: string, expectedRole?: Role) => Promise<AuthResponse>;
   registerWithEmail: (email: string, password: string, onboarding: OnboardingData) => Promise<AuthResponse>;
   loginWithGoogle: (onboarding?: OnboardingData) => Promise<AuthResponse>;
   sendPhoneOtp: (phone: string, recaptchaContainerId: string) => Promise<{ ok: boolean; error?: string }>;
@@ -58,10 +63,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const clearError = useCallback(() => setError(null), []);
 
-  // Listen to Firebase Authentication state changes
+  // Listen to Firebase Authentication state changes with instant sub-second local cache hydration
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser: FirebaseUser | null) => {
       if (firebaseUser) {
+        // 1. Immediately hydrate from local storage cache to unblock rendering in < 10ms!
+        const cached = getCachedIdentity(firebaseUser.uid);
+        if (cached) {
+          setUser(cached.user);
+          setClinic(cached.clinic);
+          setPatientAccount(cached.patientAccount);
+          setLoading(false);
+        }
+
+        // 2. Concurrently resolve canonical identity and keep cache fresh in background
         try {
           const res = await resolveCanonicalIdentity(firebaseUser);
           setUser(res.user);
@@ -69,31 +84,35 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           setPatientAccount(res.patientAccount);
         } catch (err: any) {
           console.warn('Fallback on auth state change resolution:', err);
-          const activeClinic = await getOrInitializeClinic();
-          const fallbackUser: User = {
-            user_id: firebaseUser.uid,
-            clinic_id: activeClinic?.clinic_id || undefined,
-            clinic_name: activeClinic?.name || undefined,
-            name: firebaseUser.displayName || firebaseUser.email?.split('@')[0] || 'User',
-            email: firebaseUser.email || '',
-            role: 'patient',
-            phone: firebaseUser.phoneNumber || null,
-            specialisation: null,
-            active: true,
-            avatar_color: '#0F6E56',
-            created_at: new Date().toISOString(),
-            linked_uids: [firebaseUser.uid],
-            auth_providers: firebaseUser.providerData.map(p => p.providerId),
-          };
-          setUser(fallbackUser);
-          setClinic(activeClinic);
+          if (!cached) {
+            const activeClinic = await getOrInitializeClinic();
+            const fallbackUser: User = {
+              user_id: firebaseUser.uid,
+              clinic_id: activeClinic?.clinic_id || undefined,
+              clinic_name: activeClinic?.name || undefined,
+              name: firebaseUser.displayName || firebaseUser.email?.split('@')[0] || 'User',
+              email: firebaseUser.email || '',
+              role: 'patient',
+              phone: firebaseUser.phoneNumber || null,
+              specialisation: null,
+              active: true,
+              avatar_color: '#0F6E56',
+              created_at: new Date().toISOString(),
+              linked_uids: [firebaseUser.uid],
+              auth_providers: firebaseUser.providerData.map(p => p.providerId),
+            };
+            setUser(fallbackUser);
+            setClinic(activeClinic);
+          }
+        } finally {
+          setLoading(false);
         }
       } else {
         setUser(null);
         setClinic(null);
         setPatientAccount(null);
+        setLoading(false);
       }
-      setLoading(false);
     });
 
     return () => unsubscribe();
@@ -120,7 +139,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
 
     let unsubPat = () => {};
-    const patId = user.patient_account_id || (user.role === 'patient' ? `pat_${user.user_id}` : null);
+    const patId = user.patient_account_id || (PATIENT_ROLES.includes(user.role) ? `pat_${user.user_id}` : null);
     if (patId) {
       unsubPat = onSnapshot(doc(db, 'patient_accounts', patId), (snap) => {
         if (snap.exists()) {
@@ -138,16 +157,28 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [user?.user_id, user?.clinic_id, user?.patient_account_id, user?.role]);
 
   // Email + Password Login
-  const loginWithEmail = useCallback(async (email: string, password: string): Promise<AuthResponse> => {
+  const loginWithEmail = useCallback(async (email: string, password: string, expectedRole?: Role): Promise<AuthResponse> => {
     setLoading(true);
     setError(null);
     try {
       const cred = await signInWithEmailAndPassword(auth, email.trim().toLowerCase(), password);
-      const res = await resolveCanonicalIdentity(cred.user);
+      
+      const onboardingData = expectedRole ? { role: expectedRole, name: email.split('@')[0], email } : undefined;
+      const res = await resolveCanonicalIdentity(cred.user, onboardingData);
+
+      // Enforce email verification for patients only
+      const isAdminOrStaff = res.user?.role && (ADMIN_ROLES.includes(res.user.role) || CLINIC_ROLES.includes(res.user.role));
+      if (!cred.user.emailVerified && !isAdminOrStaff) {
+        try { await sendEmailVerification(cred.user); } catch (e) {}
+        await signOut(auth);
+        throw new Error('Please verify your email address before logging in. A new confirmation link has been sent to your inbox.');
+      }
+      
       setUser(res.user);
       setClinic(res.clinic);
       setPatientAccount(res.patientAccount);
       setLoading(false);
+      logUserLogin(res.user.id || res.user.user_id, res.user.role, res.user.clinic_id, { method: 'email' });
       return { ok: true, user: res.user, role: res.user.role, isNewUser: res.isNewUser };
     } catch (err: any) {
       const msg = err.code === 'auth/invalid-credential' || err.code === 'auth/user-not-found' || err.code === 'auth/wrong-password'
@@ -170,11 +201,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try {
       const cred = await createUserWithEmailAndPassword(auth, email.trim().toLowerCase(), password);
       const res = await resolveCanonicalIdentity(cred.user, { ...onboarding, email });
-      setUser(res.user);
-      setClinic(res.clinic);
-      setPatientAccount(res.patientAccount);
+      
+      await sendEmailVerification(cred.user);
+      await signOut(auth);
+      
+      setUser(null);
+      setClinic(null);
+      setPatientAccount(null);
       setLoading(false);
-      return { ok: true, user: res.user, role: res.user.role, isNewUser: res.isNewUser };
+      return { ok: false, error: 'Registration successful! Please check your email and click the confirmation link before logging in.' };
     } catch (err: any) {
       const msg = err.code === 'auth/email-already-in-use'
         ? 'An account with this email already exists. Please sign in instead.'
@@ -226,6 +261,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setClinic(res.clinic);
       setPatientAccount(res.patientAccount);
       setLoading(false);
+      logUserLogin(res.user.id || res.user.user_id, res.user.role, res.user.clinic_id, { method: 'google' });
       return { ok: true, user: res.user, role: res.user.role, isNewUser: res.isNewUser };
     } catch (err: any) {
       if (err.code === 'auth/popup-closed-by-user' || err.code === 'auth/cancelled-popup-request') {
@@ -303,6 +339,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setClinic(res.clinic);
       setPatientAccount(res.patientAccount);
       setLoading(false);
+      logUserLogin(res.user.id || res.user.user_id, res.user.role, res.user.clinic_id, { method: 'phone' });
       return { ok: true, user: res.user, role: res.user.role, isNewUser: res.isNewUser };
     } catch (err: any) {
       console.error('verifyPhoneOtp error:', err);
@@ -325,13 +362,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } catch (err) {
       console.error('Error signing out:', err);
     }
-    try {
-      localStorage.removeItem('viitsa_patient_v1');
-      sessionStorage.clear();
-    } catch {}
+    await clearAllViitsaCaches();
     let loginPath = '/login';
     if (role === 'company_admin') loginPath = '/admin/login';
-    else if (role === 'admin' || role === 'doctor' || role === 'staff') loginPath = '/clinic/login';
+    else if (role === 'clinic_admin' || role === 'clinic_doctor' || role === 'clinic_staff') loginPath = '/clinic/login';
     if (window.location.pathname !== loginPath) {
       window.location.href = loginPath;
     }
@@ -469,6 +503,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         console.warn('Could not sync patient role record in Firestore:', e);
       }
     } else if (newRole === 'admin') {
+      try {
+        await deleteDoc(doc(db, 'patient_accounts', `pat_${uid}`));
+      } catch (e) {
+        console.warn('Could not clean up patient_accounts during role switch:', e);
+      }
+
       const clnId = user?.clinic_id || clinic?.clinic_id || `cln_${uid}`;
       const clnCode = clinic?.clinic_code || clinic?.id_number || generateReadableId('CLN', clnId);
       const clnName = clinic?.name || user?.clinic_name || 'My Clinic';
@@ -501,6 +541,59 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }, [user, clinic]);
 
+  const switchClinic = useCallback(async (newClinic: Clinic) => {
+    setClinic(newClinic);
+    try {
+      localStorage.setItem('viitsa_active_clinic_id', newClinic.clinic_id);
+    } catch {}
+
+    setUser(prev => {
+      if (!prev) return prev;
+      const updated: User = {
+        ...prev,
+        clinic_id: newClinic.clinic_id,
+        clinic_name: newClinic.name,
+      };
+      try {
+        const cached = getCachedIdentity(prev.user_id);
+        if (cached) {
+          saveCachedIdentity({
+            ...cached,
+            user: updated,
+            clinic: newClinic,
+            patientAccount: cached.patientAccount ? {
+              ...cached.patientAccount,
+              clinic_id: newClinic.clinic_id,
+              clinic_name: newClinic.name,
+            } : cached.patientAccount,
+          });
+        }
+      } catch {}
+      return updated;
+    });
+
+    setPatientAccount(prev => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        clinic_id: newClinic.clinic_id,
+        clinic_name: newClinic.name,
+      };
+    });
+
+    if (user?.user_id) {
+      try {
+        await setDoc(doc(db, 'users', user.user_id), sanitizeForFirestore({
+          clinic_id: newClinic.clinic_id,
+          clinic_name: newClinic.name,
+          updated_at: new Date().toISOString(),
+        }), { merge: true });
+      } catch (e) {
+        console.warn('Could not update users doc in switchClinic:', e);
+      }
+    }
+  }, [user?.user_id]);
+
   const value = useMemo<AuthState>(
     () => ({
       user,
@@ -508,6 +601,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       patientAccount,
       loading,
       error,
+      setClinic,
+      switchClinic,
       loginWithEmail,
       registerWithEmail,
       loginWithGoogle,
@@ -528,6 +623,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       patientAccount,
       loading,
       error,
+      setClinic,
+      switchClinic,
       loginWithEmail,
       registerWithEmail,
       loginWithGoogle,

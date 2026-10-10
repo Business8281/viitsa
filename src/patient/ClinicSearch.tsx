@@ -43,7 +43,7 @@ export function ClinicSearch({ onSelectClinic, onBack }: Props) {
     getDocs(collection(db, 'clinics'))
       .then((snap) => {
         setLoading(false);
-        const data = snap.docs.map(d => d.data() as Clinic);
+        const data = snap.docs.map(d => ({ ...d.data(), clinic_id: d.id } as Clinic));
         setClinics(data);
         setFiltered(data);
       })

@@ -106,7 +106,7 @@ export function PatientAINavigator({ onTab, clinicId, patientId, onBookWithSumma
     if (!clinicId) return;
     Promise.all([
       getDoc(doc(db, 'clinics', clinicId)),
-      getDocs(query(collection(db, 'users'), where('clinic_id', '==', clinicId), where('role', '==', 'doctor'), where('active', '==', true))),
+      getDocs(query(collection(db, 'users'), where('clinic_id', '==', clinicId), where('role', '==', 'clinic_doctor'), where('active', '==', true))),
     ]).then(([clinicSnap, doctorsSnap]) => {
       if (clinicSnap.exists()) {
         const cData = clinicSnap.data();

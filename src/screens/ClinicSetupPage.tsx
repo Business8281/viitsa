@@ -134,7 +134,7 @@ export function ClinicSetupPage() {
           specialisation: dr.specialisation.trim() || speciality.trim() || null,
           id_number: drCode,
           display_id: drCode,
-          role: 'doctor',
+          role: 'clinic_doctor',
           user_type: 'doctor',
           active: true,
           avatar_color: '#0F6E56',
@@ -158,7 +158,7 @@ export function ClinicSetupPage() {
       // 4. Refresh session so auth context picks up the new state
       await refreshSession();
 
-      navigate('/clinic/dashboard', { replace: true });
+      navigate('/clinic/upload-documents', { replace: true });
     } catch (err: any) {
       console.error('Clinic setup error:', err);
       setError('Failed to save clinic details. Please try again.');
@@ -176,7 +176,7 @@ export function ClinicSetupPage() {
         </div>
         <div className="inline-flex items-center gap-1.5 bg-teal-50 border border-teal-200 rounded-full px-3 py-1 mb-3">
           <CheckCircle2 className="w-3.5 h-3.5 text-teal-600" />
-          <span className="text-xs font-bold text-teal-700 uppercase tracking-wide">Account Created — Step 2 of 2</span>
+          <span className="text-xs font-bold text-teal-700 uppercase tracking-wide">Account Created — Step 2 of 3</span>
         </div>
         <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-900 tracking-tight">
           Set Up Your Clinic
@@ -517,7 +517,7 @@ export function ClinicSetupPage() {
             ) : (
               <>
                 <CheckCircle2 className="w-5 h-5" />
-                <span>Save & Open Dashboard</span>
+                <span>Next: Upload Documents</span>
               </>
             )}
           </button>

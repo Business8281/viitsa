@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
+import { useNavigate, Link, useSearchParams } from 'react-router-dom';
 import {
   Mail,
   Lock,
@@ -17,6 +17,7 @@ import { ViitsaLogo } from '../components/ViitsaLogo';
 import { sendPasswordResetEmail } from 'firebase/auth';
 import { auth } from '../lib/firebase';
 import type { OnboardingData } from '../lib/identityResolver';
+import { PATIENT_ROLES, ADMIN_ROLES } from '../lib/types';
 
 function GoogleIcon({ className = 'w-5 h-5' }: { className?: string }) {
   return (
@@ -37,6 +38,8 @@ const isValid10Digit = (val: string) => /^\d{10}$/.test(val.replace(/\D/g, ''));
 
 export function ClinicLoginPage() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const returnUrl = searchParams.get('returnUrl');
   const {
     user,
     loginWithEmail,
@@ -47,8 +50,8 @@ export function ClinicLoginPage() {
     error: authError,
     clearError,
   } = useAuth();
-
-  const [activeTab, setActiveTab] = useState<AuthTab>('signin');
+  const initialMode = searchParams.get('mode') === 'register' ? 'register' : 'signin';
+  const [activeTab, setActiveTab] = useState<AuthTab>(initialMode);
   const [loginMethod, setLoginMethod] = useState<LoginMethod>('email');
 
   // Form fields
@@ -72,24 +75,51 @@ export function ClinicLoginPage() {
   // Redirect if already authenticated
   useEffect(() => {
     if (!user) return;
-    if (user.role === 'patient') {
+    if (PATIENT_ROLES.includes(user.role)) {
       navigate('/patient/dashboard', { replace: true });
       return;
     }
-    // Clinic user — check setup status
-    if (user.clinic_setup_complete === false) {
-      navigate('/clinic/setup', { replace: true });
-    } else {
-      navigate('/clinic/dashboard', { replace: true });
+    if (ADMIN_ROLES.includes(user.role)) {
+      navigate('/admin/dashboard', { replace: true });
+      return;
     }
-  }, [user, navigate]);
+    if (returnUrl) {
+      navigate(returnUrl, { replace: true });
+      return;
+    }
+    // Doctors and staff directly open clinic dashboard
+    if (user.role === 'clinic_doctor' || user.role === 'clinic_staff' || user.role === 'doctor' || user.role === 'staff') {
+      navigate('/clinic/dashboard', { replace: true });
+      return;
+    }
+    // Already registered clinic users (has clinic_id or clinic_setup_complete !== false)
+    if (user.clinic_id || user.clinic_setup_complete !== false) {
+      navigate('/clinic/dashboard', { replace: true });
+    } else {
+      navigate('/clinic/setup', { replace: true });
+    }
+  }, [user, navigate, returnUrl]);
 
   const handleAfterAuth = (role?: string, setupComplete?: boolean) => {
-    if (role === 'patient') {
+    if (role && PATIENT_ROLES.includes(role as any)) {
       navigate('/patient/dashboard', { replace: true });
       return;
     }
-    if (setupComplete === false) {
+    if (role && ADMIN_ROLES.includes(role as any)) {
+      navigate('/admin/dashboard', { replace: true });
+      return;
+    }
+    if (returnUrl) {
+      navigate(returnUrl, { replace: true });
+      return;
+    }
+    // Doctors and staff directly open clinic dashboard
+    if (role === 'clinic_doctor' || role === 'clinic_staff' || role === 'doctor' || role === 'staff') {
+      navigate('/clinic/dashboard', { replace: true });
+      return;
+    }
+    // Only brand-new clinic registrations without setup go to /clinic/setup
+    if (setupComplete === false && activeTab === 'register') {
       navigate('/clinic/setup', { replace: true });
     } else {
       navigate('/clinic/dashboard', { replace: true });
@@ -101,7 +131,7 @@ export function ClinicLoginPage() {
     setLocalError(null);
     clearError();
     setLoading(true);
-    const onboarding: OnboardingData = { role: 'admin' };
+    const onboarding: OnboardingData = { role: 'clinic_admin' };
     const res = await loginWithGoogle(onboarding);
     setLoading(false);
     if (res.ok && res.user) {
@@ -128,7 +158,7 @@ export function ClinicLoginPage() {
     setLoading(true);
 
     if (activeTab === 'signin') {
-      const res = await loginWithEmail(cleanEmail, password);
+      const res = await loginWithEmail(cleanEmail, password, 'admin');
       setLoading(false);
       if (res.ok && res.user) {
         handleAfterAuth(res.user.role, res.user.clinic_setup_complete);
@@ -145,10 +175,12 @@ export function ClinicLoginPage() {
         setLoading(false);
         return;
       }
+      const cleanPhone = phone.replace(/\D/g, '');
       const onboarding: OnboardingData = {
-        role: 'admin',
+        role: 'clinic_admin',
         name: name.trim(),
         email: cleanEmail,
+        phone: cleanPhone || undefined,
       };
       const res = await registerWithEmail(cleanEmail, password, onboarding);
       setLoading(false);
@@ -184,7 +216,7 @@ export function ClinicLoginPage() {
       return;
     }
     setLoading(true);
-    const onboarding: OnboardingData = { role: 'admin' };
+    const onboarding: OnboardingData = { role: 'clinic_admin' };
     const res = await verifyPhoneOtp(otp.trim(), onboarding);
     setLoading(false);
     if (res.ok && res.user) {
@@ -271,10 +303,16 @@ export function ClinicLoginPage() {
             </button>
           </div>
 
-          {/* Error Banner */}
+          {/* Feedback Banner */}
           {errorMessage && (
-            <div className="flex items-start gap-3 p-3.5 bg-rose-50 border border-rose-200 rounded-xl mb-5 text-rose-800 animate-in fade-in duration-150">
-              <AlertCircle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
+            <div className={`flex items-start gap-3 p-3.5 border rounded-xl mb-5 animate-in fade-in duration-150 ${
+              errorMessage.includes('successful') || errorMessage.includes('confirmation link')
+                ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                : 'bg-rose-50 border-rose-200 text-rose-800'
+            }`}>
+              <AlertCircle className={`w-5 h-5 shrink-0 mt-0.5 ${
+                errorMessage.includes('successful') || errorMessage.includes('confirmation link') ? 'text-emerald-600' : 'text-rose-600'
+              }`} />
               <p className="text-xs sm:text-sm font-medium leading-relaxed">{errorMessage}</p>
             </div>
           )}
@@ -282,57 +320,6 @@ export function ClinicLoginPage() {
           {/* ── SIGN IN TAB ── */}
           {activeTab === 'signin' && (
             <>
-              {/* Forgot password reset sent */}
-              {forgotMode && resetSent ? (
-                <div className="text-center py-6">
-                  <CheckCircle2 className="w-10 h-10 text-teal-600 mx-auto mb-3" />
-                  <h3 className="text-base font-bold text-slate-900 mb-1">Reset email sent!</h3>
-                  <p className="text-xs text-slate-500 mb-5">
-                    Check your inbox and follow the link to reset your password.
-                  </p>
-                  <button
-                    onClick={() => { setForgotMode(false); setResetSent(false); }}
-                    className="text-sm font-semibold text-teal-700 hover:text-teal-900"
-                  >
-                    ← Back to Sign In
-                  </button>
-                </div>
-              ) : forgotMode ? (
-                /* Forgot Password Form */
-                <form onSubmit={handleForgotPassword} className="space-y-4">
-                  <div>
-                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wide mb-1.5">
-                      Registered Email
-                    </label>
-                    <div className="relative">
-                      <Mail className="w-5 h-5 text-slate-400 absolute left-3.5 top-3.5" />
-                      <input
-                        type="email"
-                        value={email}
-                        onChange={e => setEmail(e.target.value)}
-                        placeholder="you@example.com"
-                        className="w-full h-12 pl-11 pr-4 bg-white border border-slate-300 rounded-xl text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/20 transition-all"
-                        required
-                      />
-                    </div>
-                  </div>
-                  <button
-                    type="submit"
-                    disabled={loading}
-                    className="w-full h-12 bg-teal-700 hover:bg-teal-800 text-white font-bold rounded-xl flex items-center justify-center gap-2 transition-all active:scale-[0.99]"
-                  >
-                    {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Send Reset Link'}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setForgotMode(false)}
-                    className="w-full text-sm font-semibold text-slate-500 hover:text-slate-800 transition-colors"
-                  >
-                    ← Back to Sign In
-                  </button>
-                </form>
-              ) : (
-                <>
                   {/* Google Sign-In */}
                   <div className="mb-5">
                     <button
@@ -356,33 +343,8 @@ export function ClinicLoginPage() {
                     </div>
                   </div>
 
-                  {/* Method toggle: Email / Phone */}
-                  <div className="grid grid-cols-2 gap-2 mb-5">
-                    <button
-                      type="button"
-                      onClick={() => { setLoginMethod('email'); setOtpSent(false); setLocalError(null); }}
-                      className={`py-2 px-3 text-xs sm:text-sm font-semibold rounded-lg flex items-center justify-center gap-2 transition-all border ${
-                        loginMethod === 'email'
-                          ? 'bg-teal-50 border-teal-600 text-teal-800 shadow-sm'
-                          : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
-                      }`}
-                    >
-                      <Mail className="w-4 h-4 text-teal-600" />
-                      <span>Email</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => { setLoginMethod('phone'); setLocalError(null); }}
-                      className={`py-2 px-3 text-xs sm:text-sm font-semibold rounded-lg flex items-center justify-center gap-2 transition-all border ${
-                        loginMethod === 'phone'
-                          ? 'bg-teal-50 border-teal-600 text-teal-800 shadow-sm'
-                          : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
-                      }`}
-                    >
-                      <Smartphone className="w-4 h-4 text-teal-600" />
-                      <span>Phone OTP</span>
-                    </button>
-                  </div>
+                  {/* Method toggle: Email only — Phone OTP hidden until integration is complete */}
+                  {/* TODO: Re-enable Phone OTP toggle when ready */}
 
                   {/* Email/Password Sign-In Form */}
                   {loginMethod === 'email' && (
@@ -429,13 +391,12 @@ export function ClinicLoginPage() {
                             {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
                           </button>
                         </div>
-                        <button
-                          type="button"
-                          onClick={() => setForgotMode(true)}
+                        <Link
+                          to="/forgot-password?return=/clinic/login"
                           className="mt-1.5 text-[11px] font-semibold text-teal-700 hover:text-teal-900 float-right"
                         >
                           Forgot password?
-                        </button>
+                        </Link>
                       </div>
                       <button
                         type="submit"
@@ -447,89 +408,6 @@ export function ClinicLoginPage() {
                     </form>
                   )}
 
-                  {/* Phone OTP Sign-In Form */}
-                  {loginMethod === 'phone' && (
-                    <>
-                      {!otpSent ? (
-                        <form onSubmit={handleSendOtp} className="space-y-4">
-                          <div>
-                            <label className="block text-xs font-bold text-slate-700 uppercase tracking-wide mb-1.5">
-                              Mobile Number
-                            </label>
-                            <div className="flex items-center gap-2">
-                              <span className="h-12 px-3.5 bg-slate-100 border border-slate-300 rounded-xl text-sm font-bold text-slate-700 flex items-center">
-                                +91
-                              </span>
-                              <input
-                                type="tel"
-                                id="clinic-login-phone"
-                                autoComplete="tel"
-                                inputMode="numeric"
-                                maxLength={10}
-                                required
-                                value={phone}
-                                onKeyDown={e => {
-                                  if (['Backspace','Delete','Tab','Escape','Enter','ArrowLeft','ArrowRight'].includes(e.key)) return;
-                                  if (e.ctrlKey || e.metaKey) return;
-                                  if (!/^\d$/.test(e.key)) e.preventDefault();
-                                }}
-                                onChange={e => setPhone(e.target.value.replace(/\D/g, '').slice(0, 10))}
-                                placeholder="9876543210"
-                                className="flex-1 h-12 px-4 bg-white border border-slate-300 rounded-xl text-sm font-mono text-slate-900 placeholder:text-slate-400 focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/20 transition-all"
-                              />
-                            </div>
-                          </div>
-                          <button
-                            type="submit"
-                            disabled={loading}
-                            className="w-full h-12 bg-teal-700 hover:bg-teal-800 text-white font-bold rounded-xl flex items-center justify-center gap-2 transition-all active:scale-[0.99]"
-                          >
-                            {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Send OTP'}
-                          </button>
-                        </form>
-                      ) : (
-                        <form onSubmit={handleVerifyOtp} className="space-y-4">
-                          <div className="bg-teal-50 border border-teal-200 rounded-xl p-3 text-center">
-                            <p className="text-xs font-semibold text-teal-800">
-                              OTP sent to +91 {phone}
-                            </p>
-                          </div>
-                          <div>
-                            <label className="block text-xs font-bold text-slate-700 uppercase tracking-wide mb-1.5">
-                              Enter OTP
-                            </label>
-                            <input
-                              type="text"
-                              id="clinic-login-otp"
-                              inputMode="numeric"
-                              maxLength={6}
-                              required
-                              value={otp}
-                              onChange={e => setOtp(e.target.value.replace(/\D/g, '').slice(0, 6))}
-                              placeholder="6-digit OTP"
-                              className="w-full h-12 px-4 text-center tracking-widest font-mono text-lg bg-white border border-slate-300 rounded-xl text-slate-900 placeholder:text-slate-400 focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/20 transition-all"
-                            />
-                          </div>
-                          <button
-                            type="submit"
-                            disabled={loading}
-                            className="w-full h-12 bg-teal-700 hover:bg-teal-800 text-white font-bold rounded-xl flex items-center justify-center gap-2 transition-all active:scale-[0.99]"
-                          >
-                            {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <>Verify & Sign In <ArrowRight className="w-4 h-4" /></>}
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => { setOtpSent(false); setOtp(''); }}
-                            className="w-full text-sm font-semibold text-slate-500 hover:text-slate-800 transition-colors"
-                          >
-                            ← Change number
-                          </button>
-                        </form>
-                      )}
-                    </>
-                  )}
-                </>
-              )}
             </>
           )}
 
@@ -573,6 +451,25 @@ export function ClinicLoginPage() {
                   />
                 </div>
               </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wide mb-1.5">
+                  Phone Number
+                </label>
+                <div className="relative">
+                  <Smartphone className="w-5 h-5 text-slate-400 absolute left-3.5 top-3.5" />
+                  <input
+                    type="tel"
+                    id="clinic-reg-phone"
+                    autoComplete="tel"
+                    value={phone}
+                    onChange={e => setPhone(e.target.value.replace(/\D/g, '').slice(0, 10))}
+                    placeholder="10-digit mobile number"
+                    className="w-full h-12 pl-11 pr-4 bg-white border border-slate-300 rounded-xl text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/20 transition-all font-medium"
+                  />
+                </div>
+              </div>
+
 
               <div>
                 <label className="block text-xs font-bold text-slate-700 uppercase tracking-wide mb-1.5">
@@ -634,13 +531,7 @@ export function ClinicLoginPage() {
           )}
         </div>
 
-        {/* Footer */}
-        <p className="text-center text-xs text-slate-500 mt-5">
-          Patient?{' '}
-          <Link to="/login" className="text-teal-700 font-semibold hover:text-teal-900">
-            Sign in to patient portal →
-          </Link>
-        </p>
+
       </div>
     </div>
   );
