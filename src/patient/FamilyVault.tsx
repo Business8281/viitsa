@@ -4,8 +4,10 @@ import {
   User, Calendar, Droplets, Heart, AlertTriangle, Pill, X, Check,
 } from 'lucide-react';
 import { db } from '../lib/firebase';
-import { collection, query, where, getDocs, addDoc, updateDoc, deleteDoc, doc, orderBy } from 'firebase/firestore';
+import { collection, query, where, getDocs, addDoc, updateDoc, deleteDoc, doc, orderBy, onSnapshot } from 'firebase/firestore';
 import { usePatientAuth } from '../lib/patientAuth';
+import { formatDate, calculateAge, formatDobForInput, localDateISO } from '../lib/format';
+import { DobCalendarPicker } from '../components/DobCalendarPicker';
 import type { PatientTab } from './PatientBottomNav';
 
 const RELATIONSHIPS = ['Spouse', 'Child', 'Parent', 'Sibling', 'Guardian', 'Other'];
@@ -42,15 +44,21 @@ export function FamilyVault({ onTab }: Props) {
   const [expanded, setExpanded] = useState<string | null>(null);
   const [form, setForm] = useState({ ...emptyForm });
 
-  const load = async () => {
-    if (!account) return;
+  useEffect(() => {
+    if (!account?.account_id) {
+      setLoading(false);
+      return;
+    }
     const q = query(collection(db, 'family_members'), where('patient_account_id', '==', account.account_id), orderBy('name'));
-    const snap = await getDocs(q);
-    setMembers(snap.docs.map(d => d.data() as FamilyMember));
-    setLoading(false);
-  };
-
-  useEffect(() => { load(); }, [account]);
+    const unsub = onSnapshot(q, (snap) => {
+      setMembers(snap.docs.map(d => ({ ...d.data(), id: d.id } as FamilyMember)));
+      setLoading(false);
+    }, (err) => {
+      console.warn('Family members onSnapshot warning:', err);
+      setLoading(false);
+    });
+    return () => unsub();
+  }, [account?.account_id]);
 
   const toggleCondition = (c: string) => {
     if (c === 'None') { setForm(f => ({ ...f, conditions: ['None'] })); return; }
@@ -97,10 +105,7 @@ export function FamilyVault({ onTab }: Props) {
     setMembers(prev => prev.filter(m => m.id !== id));
   };
 
-  const ageFromDob = (dob: string | null) => {
-    if (!dob) return null;
-    return Math.floor((Date.now() - new Date(dob).getTime()) / (365.25 * 24 * 60 * 60 * 1000));
-  };
+  const ageFromDob = (dob: string | null) => calculateAge(dob);
 
   return (
     <div className="min-h-screen bg-[#F5FAFA] pb-28">
@@ -176,7 +181,7 @@ export function FamilyVault({ onTab }: Props) {
                   {m.dob && (
                     <div className="flex items-center gap-2 text-xs text-gray-600">
                       <Calendar size={13} className="text-gray-400" />
-                      <span>Born: {new Date(m.dob).toLocaleDateString('en-IN')}</span>
+                      <span>Born: {formatDate(m.dob)}</span>
                     </div>
                   )}
                   {m.blood_group && (
@@ -246,12 +251,10 @@ export function FamilyVault({ onTab }: Props) {
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="text-xs text-gray-500 mb-1 block">Date of Birth</label>
-                  <input
-                    type="date"
+                  <DobCalendarPicker
                     value={form.dob}
-                    onChange={e => setForm(f => ({ ...f, dob: e.target.value }))}
-                    max={new Date().toISOString().slice(0, 10)}
-                    className="w-full rounded-xl border border-gray-200 px-3 py-2.5 text-sm focus:outline-none focus:border-primary"
+                    onChange={v => setForm(f => ({ ...f, dob: v }))}
+                    placeholder="Select DOB"
                   />
                 </div>
                 <div>

@@ -1,5 +1,5 @@
 import { db } from './firebase';
-import { collection, doc, writeBatch } from 'firebase/firestore';
+import { collection, doc, writeBatch, serverTimestamp } from 'firebase/firestore';
 import type { BillLineItem, PaymentMethod } from './types';
 
 export interface ProcessPaymentInput {
@@ -49,7 +49,7 @@ export async function processPayment(input: ProcessPaymentInput): Promise<Proces
     const invoiceRef = doc(collection(db, 'invoices'));
 
     const invoiceNumber = `INV-${Date.now()}`;
-    const timestamp = new Date().toISOString();
+    const timestamp = serverTimestamp();
 
     batch.set(billRef, {
       clinic_id: input.clinicId,

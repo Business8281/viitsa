@@ -4,7 +4,7 @@ import {
   ChevronDown, ChevronUp, Pill, AlertTriangle,
 } from 'lucide-react';
 import { db } from '../lib/firebase';
-import { collection, query, where, getDocs, orderBy, limit, getDoc, doc } from 'firebase/firestore';
+import { collection, query, where, getDocs, orderBy, limit, getDoc, doc, onSnapshot } from 'firebase/firestore';
 import { usePatientAuth } from '../lib/patientAuth';
 import { formatDate } from '../lib/format';
 import type { PatientTab } from './PatientBottomNav';
@@ -55,93 +55,100 @@ export function HealthTimeline({ onTab, patientId, clinicId }: Props) {
   const [filter, setFilter] = useState<EventType>('all');
   const [expanded, setExpanded] = useState<string | null>(null);
 
+  const [timelineData, setTimelineData] = useState<{
+    appts: TimelineEvent[];
+    consults: TimelineEvent[];
+    reports: TimelineEvent[];
+    ai: TimelineEvent[];
+  }>({ appts: [], consults: [], reports: [], ai: [] });
+
   useEffect(() => {
     if (!patientId && !account) { setLoading(false); return; }
-    const all: TimelineEvent[] = [];
-    const promises: Promise<void>[] = [];
+    
+    const unsubs: (() => void)[] = [];
+    setLoading(true);
 
     if (patientId) {
-      promises.push(
-        getDocs(query(collection(db, 'appointments'), where('patient_id', '==', patientId), orderBy('date', 'desc'), limit(20)))
-          .then(async (snap) => {
-            const appts = snap.docs.map(d => d.data());
-            for (const a of appts) {
-              let docName = 'Doctor';
-              if (a.doctor_id) {
-                const docSnap = await getDoc(doc(db, 'users', a.doctor_id));
-                if (docSnap.exists()) docName = docSnap.data().name || 'Doctor';
-              }
-              all.push({
-                id: a.appt_id as string,
-                type: 'appointment',
-                date: a.date as string,
-                title: `Appointment`,
-                subtitle: docName,
-                status: a.status as string,
-                detail: a.reason as string | undefined,
-              });
-            }
-          })
-      );
-      promises.push(
-        getDocs(query(collection(db, 'consultations'), where('patient_id', '==', patientId), orderBy('created_at', 'desc'), limit(20)))
-          .then((snap) => {
-            snap.docs.forEach((d) => {
-              const c = d.data();
-              all.push({
-                id: c.consult_id as string,
-                type: 'consultation',
-                date: (c.created_at as string).slice(0, 10),
-                title: (c.diagnosis as string) || 'Consultation',
-                subtitle: (c.symptoms as string) || '',
-                detail: c.prescription as string | undefined,
-              });
-            });
-          })
-      );
-      promises.push(
-        getDocs(query(collection(db, 'health_reports'), where('patient_id', '==', patientId), orderBy('created_at', 'desc'), limit(10)))
-          .then((snap) => {
-            snap.docs.forEach((d) => {
-              const r = d.data();
-              all.push({
-                id: r.report_id as string,
-                type: 'report',
-                date: (r.report_date as string | null) ?? (r.created_at as string).slice(0, 10),
-                title: (r.report_type as string) || 'Health Report',
-                subtitle: (r.hospital_or_doctor as string) || '',
-                detail: r.summary as string | undefined,
-              });
-            });
-          })
-      );
+      unsubs.push(onSnapshot(query(collection(db, 'appointments'), where('patient_id', '==', patientId), orderBy('date', 'desc'), limit(20)), async (snap) => {
+        const appts = snap.docs.map(d => d.data());
+        const mapped: TimelineEvent[] = [];
+        for (const a of appts) {
+          let docName = 'Doctor';
+          if (a.doctor_id) {
+            const docSnap = await getDoc(doc(db, 'users', a.doctor_id));
+            if (docSnap.exists()) docName = docSnap.data().name || 'Doctor';
+          }
+          mapped.push({
+            id: a.appt_id as string,
+            type: 'appointment',
+            date: a.date as string,
+            title: `Appointment`,
+            subtitle: docName,
+            status: a.status as string,
+            detail: a.reason as string | undefined,
+          });
+        }
+        setTimelineData(prev => ({ ...prev, appts: mapped }));
+        setLoading(false);
+      }));
+
+      unsubs.push(onSnapshot(query(collection(db, 'consultations'), where('patient_id', '==', patientId), orderBy('created_at', 'desc'), limit(20)), (snap) => {
+        const mapped: TimelineEvent[] = snap.docs.map(d => {
+          const c = d.data();
+          return {
+            id: c.consult_id as string,
+            type: 'consultation',
+            date: (c.created_at as string).slice(0, 10),
+            title: (c.diagnosis as string) || 'Consultation',
+            subtitle: (c.symptoms as string) || '',
+            detail: c.prescription as string | undefined,
+          };
+        });
+        setTimelineData(prev => ({ ...prev, consults: mapped }));
+      }));
+
+      unsubs.push(onSnapshot(query(collection(db, 'health_reports'), where('patient_id', '==', patientId), orderBy('created_at', 'desc'), limit(10)), (snap) => {
+        const mapped: TimelineEvent[] = snap.docs.map(d => {
+          const r = d.data();
+          return {
+            id: r.report_id as string,
+            type: 'report',
+            date: (r.report_date as string | null) ?? (r.created_at as string).slice(0, 10),
+            title: (r.report_type as string) || 'Health Report',
+            subtitle: (r.hospital_or_doctor as string) || '',
+            detail: r.summary as string | undefined,
+          };
+        });
+        setTimelineData(prev => ({ ...prev, reports: mapped }));
+      }));
     }
 
     if (account) {
-      promises.push(
-        getDocs(query(collection(db, 'ai_conversations'), where('account_id', '==', account.account_id), orderBy('created_at', 'desc'), limit(10)))
-          .then((snap) => {
-            snap.docs.forEach((d) => {
-              const s = d.data();
-              all.push({
-                id: s.conversation_id as string,
-                type: 'ai',
-                date: (s.created_at as string).slice(0, 10),
-                title: 'AI Health Check',
-                subtitle: `Triage: ${String(s.triage_level ?? 'normal').toUpperCase()}`,
-                detail: (s.triage_summary as { chief_complaint?: string } | null)?.chief_complaint ?? undefined,
-              });
-            });
-          })
-      );
+      unsubs.push(onSnapshot(query(collection(db, 'ai_conversations'), where('account_id', '==', account.account_id), orderBy('created_at', 'desc'), limit(10)), (snap) => {
+        const mapped: TimelineEvent[] = snap.docs.map(d => {
+          const s = d.data();
+          return {
+            id: s.conversation_id as string,
+            type: 'ai',
+            date: (s.created_at as string).slice(0, 10),
+            title: 'AI Health Check',
+            subtitle: `Triage: ${String(s.triage_level ?? 'normal').toUpperCase()}`,
+            detail: (s.triage_summary as { chief_complaint?: string } | null)?.chief_complaint ?? undefined,
+          };
+        });
+        setTimelineData(prev => ({ ...prev, ai: mapped }));
+        setLoading(false);
+      }));
     }
 
-    Promise.all(promises).then(() => {
-      all.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-      setEvents(all);
-      setLoading(false);
-    });
+    return () => unsubs.forEach(u => u());
   }, [patientId, account]);
+
+  useEffect(() => {
+    const all = [...timelineData.appts, ...timelineData.consults, ...timelineData.reports, ...timelineData.ai];
+    all.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+    setEvents(all);
+  }, [timelineData]);
 
   const filtered = filter === 'all' ? events : events.filter(e => e.type === filter);
 

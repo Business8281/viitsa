@@ -7,6 +7,7 @@
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
     text-rendering: optimizeLegibility;
+    -webkit-text-size-adjust: 100%;
   }
   body {
     background-color: #F5FAFA;
@@ -19,6 +20,46 @@
   * {
     box-sizing: border-box;
   }
+
+  /* Safari iOS zoom prevention & consistent input alignment */
+  @media screen and (max-width: 768px) {
+    input, select, textarea {
+      font-size: 16px !important;
+    }
+  }
+
+  /* Cross-browser HTML5 date inputs & Safari WebKit normalization */
+  input[type="date"] {
+    -webkit-appearance: none;
+    -moz-appearance: textfield;
+    appearance: none;
+    position: relative;
+    min-height: 38px;
+  }
+
+  input[type="date"]::-webkit-date-and-time-value {
+    text-align: left;
+    min-height: 1.4em;
+  }
+
+  input[type="date"]::-webkit-calendar-picker-indicator {
+    cursor: pointer;
+    opacity: 0.7;
+    filter: invert(0.3);
+    padding: 2px;
+    margin-left: 4px;
+    transition: opacity 0.15s ease-in-out;
+  }
+
+  input[type="date"]::-webkit-calendar-picker-indicator:hover {
+    opacity: 1;
+  }
+
+  /* Safari backdrop-filter fallback for modals */
+  [class*="backdrop-blur"] {
+    -webkit-backdrop-filter: blur(12px);
+  }
+
   ::-webkit-scrollbar {
     width: 10px;
     height: 10px;
@@ -151,18 +192,113 @@
   }
 }
 
+/* Prescription A4 Styling */
+.prescription-preview {
+  min-height: 100vh;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding: 24px;
+  background-color: #f1f5f9;
+}
+
+.prescription-page {
+  width: 210mm;
+  min-height: 297mm;
+  box-sizing: border-box;
+  background: #ffffff;
+  margin: 0 auto;
+  padding: 8mm 9mm 6mm;
+  position: relative;
+}
+
+@page {
+  size: A4 portrait;
+  margin: 0;
+}
+
 @media print {
+  body {
+    margin: 0 !important;
+    padding: 0 !important;
+    background: white !important;
+  }
+
   body * {
     visibility: hidden;
   }
+
+  .no-print {
+    display: none !important;
+  }
+
   #print-area,
-  #print-area * {
+  #print-area *,
+  #prescription-print-area,
+  #prescription-print-area *,
+  #qr-standee-print-area,
+  #qr-standee-print-area * {
     visibility: visible;
   }
+
   #print-area {
     position: absolute;
     left: 0;
     top: 0;
     width: 100%;
+    height: auto;
+    border: none !important;
+    box-shadow: none !important;
+    border-radius: 0 !important;
+    margin: 0;
+    padding: 0;
+    min-height: 100vh;
+  }
+
+  #prescription-print-area {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 210mm !important;
+    min-height: 297mm !important;
+    margin: 0 !important;
+    padding: 8mm 9mm 6mm !important;
+    box-shadow: none !important;
+    border: none !important;
+    background: #ffffff !important;
+  }
+
+  #qr-standee-print-area {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 210mm !important;
+    min-height: 297mm !important;
+    max-height: 297mm !important;
+    box-sizing: border-box !important;
+    margin: 0 !important;
+    padding: 12mm 14mm 10mm !important;
+    box-shadow: none !important;
+    border: none !important;
+    background: #ffffff !important;
+    display: flex !important;
+    flex-direction: column !important;
+    justify-content: space-between !important;
+    page-break-after: avoid;
+    break-after: avoid;
+  }
+
+  * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  thead {
+    display: table-header-group;
+  }
+
+  tr, .avoid-break {
+    break-inside: avoid;
+    page-break-inside: avoid;
   }
 }

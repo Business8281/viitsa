@@ -20,6 +20,7 @@ import { ViitsaLogo } from '../components/ViitsaLogo';
 import { sendPasswordResetEmail } from 'firebase/auth';
 import { auth } from '../lib/firebase';
 import type { OnboardingData } from '../lib/identityResolver';
+import { type Role, PATIENT_ROLES, ADMIN_ROLES, CLINIC_ROLES } from '../lib/types';
 
 function GoogleIcon({ className = "w-5 h-5" }: { className?: string }) {
   return (
@@ -48,26 +49,28 @@ type AuthTab = 'login' | 'register';
 type LoginMethod = 'email' | 'phone';
 
 export const isValidGmail = (val: string): boolean => {
-  return /^[a-zA-Z0-9._%+-]+@gmail\.com$/.test(val.trim().toLowerCase());
+  if (typeof val !== 'string') return false;
+  return /^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$/.test(val.trim().toLowerCase());
 };
 
 export const isValid10DigitPhone = (val: string): boolean => {
+  if (typeof val !== 'string') return false;
   return /^\d{10}$/.test(val.replace(/\D/g, ''));
 };
 
 export function AuthLoginPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const { 
-    user, 
-    loginWithEmail, 
-    registerWithEmail, 
-    loginWithGoogle, 
-    sendPhoneOtp, 
-    verifyPhoneOtp, 
+  const {
+    user,
+    loginWithEmail,
+    registerWithEmail,
+    loginWithGoogle,
+    sendPhoneOtp,
+    verifyPhoneOtp,
     updateUserRole,
-    error: authError, 
-    clearError 
+    error: authError,
+    clearError
   } = useAuth();
 
   // Tab State
@@ -121,7 +124,7 @@ export function AuthLoginPage() {
           setDevicePhones(parsed.filter(isValid10DigitPhone));
         }
       }
-    } catch {}
+    } catch { }
 
     if (typeof navigator !== 'undefined' && 'contacts' in navigator && 'ContactsManager' in window) {
       setHasContactPicker(true);
@@ -146,7 +149,7 @@ export function AuthLoginPage() {
           return updated;
         });
       }
-    } catch {}
+    } catch { }
   };
 
   // Mobile Web Contact Picker
@@ -170,25 +173,25 @@ export function AuthLoginPage() {
             }
           }
         }
-      } catch {}
+      } catch { }
     }
   };
 
   // If already authenticated and not choosing role, route automatically by role
   useEffect(() => {
     if (user && !showRoleModal && !pendingUser) {
-      if (user.role === 'patient') {
+      if (PATIENT_ROLES.includes(user.role)) {
         navigate('/patient/dashboard', { replace: true });
-      } else {
-        navigate('/clinic/dashboard', { replace: true });
+        return;
       }
+      navigate('/clinic/dashboard', { replace: true });
     }
   }, [user, navigate, showRoleModal, pendingUser]);
 
   const errorMessage = localError || authError;
 
   const handleRouteByRole = (role?: string) => {
-    if (role === 'patient') {
+    if (role && PATIENT_ROLES.includes(role as Role)) {
       navigate('/patient/dashboard', { replace: true });
     } else {
       navigate('/clinic/dashboard', { replace: true });
@@ -205,7 +208,7 @@ export function AuthLoginPage() {
     setRoleActionLoading(false);
     setShowRoleModal(false);
     setPendingUser(null);
-    if (role === 'patient') {
+    if (PATIENT_ROLES.includes(role)) {
       navigate('/patient/dashboard', { replace: true });
     } else {
       navigate('/clinic/dashboard', { replace: true });
@@ -223,6 +226,11 @@ export function AuthLoginPage() {
 
     if (res.ok && res.user) {
       saveDeviceContact(res.user?.email, res.user?.phone || undefined);
+      if (res.isNewUser) {
+        try { sessionStorage.setItem('viitsa_is_new_registration', 'true'); } catch {}
+      } else {
+        try { sessionStorage.removeItem('viitsa_is_new_registration'); } catch {}
+      }
       // If user already has a saved/locked role in Firestore, directly proceed to their dashboard
       if (!res.isNewUser && res.user.role_selected) {
         handleRouteByRole(res.role || res.user.role);
@@ -241,15 +249,11 @@ export function AuthLoginPage() {
     clearError();
 
     const cleanEmail = email.trim().toLowerCase();
-    if (!cleanEmail) {
-      setLocalError('Please enter your Gmail address.');
+    if (!cleanEmail || !isValidGmail(cleanEmail)) {
+      setLocalError('Please enter a valid email address.');
       return;
     }
 
-    if (!isValidGmail(cleanEmail)) {
-      setLocalError('Only Gmail addresses (@gmail.com) are allowed. Please enter a valid @gmail.com email.');
-      return;
-    }
 
     if (!password || password.length < 6) {
       setLocalError('Password must be at least 6 characters.');
@@ -259,6 +263,7 @@ export function AuthLoginPage() {
     setLoading(true);
 
     if (activeTab === 'login') {
+      try { sessionStorage.removeItem('viitsa_is_new_registration'); } catch {}
       const res = await loginWithEmail(cleanEmail, password);
       setLoading(false);
       if (res.ok) {
@@ -287,18 +292,13 @@ export function AuthLoginPage() {
         return;
       }
 
-      if (selectedRole === 'admin' && !clinicName.trim()) {
-        setLocalError('Please enter your Clinic or Hospital name.');
-        setLoading(false);
-        return;
-      }
+      try { sessionStorage.setItem('viitsa_is_new_registration', 'true'); } catch {}
 
       const onboarding: OnboardingData = {
-        role: selectedRole,
+        role: 'patient',
         name: name.trim(),
         email: cleanEmail,
         phone: cleanPhone,
-        clinicName: clinicName.trim() || undefined,
       };
 
       const res = await registerWithEmail(cleanEmail, password, onboarding);
@@ -350,120 +350,25 @@ export function AuthLoginPage() {
 
     if (res.ok && res.user) {
       saveDeviceContact(email.trim().toLowerCase() || undefined, phone.replace(/\D/g, ''));
-      // If user already has a saved/locked role in Firestore, directly proceed to their dashboard
+      if (res.isNewUser) {
+        try { sessionStorage.setItem('viitsa_is_new_registration', 'true'); } catch {}
+      } else {
+        try { sessionStorage.removeItem('viitsa_is_new_registration'); } catch {}
+      }
       if (!res.isNewUser && res.user.role_selected) {
         handleRouteByRole(res.role || res.user.role);
         return;
       }
-      // First-time login: Prompt for Patient Login vs Clinic Login
-      setPendingUser(res.user);
-      setShowRoleModal(true);
+      // Force patient role for new users
+      await handleSelectRoleAndProceed('patient');
     }
   };
 
-  // Forgot Password
-  const handleForgotPassword = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setLocalError(null);
-    const cleanEmail = email.trim().toLowerCase();
-    if (!cleanEmail) {
-      setLocalError('Please enter your registered Gmail address.');
-      return;
-    }
-    if (!isValidGmail(cleanEmail)) {
-      setLocalError('Only Gmail addresses (@gmail.com) are allowed.');
-      return;
-    }
-    setLoading(true);
-    try {
-      await sendPasswordResetEmail(auth, cleanEmail);
-      setResetSent(true);
-    } catch (err: any) {
-      setLocalError(err.message || 'Failed to send reset email.');
-    } finally {
-      setLoading(false);
-    }
-  };
+  // Forgot Password is now handled by the dedicated /forgot-password page
 
   return (
     <div className="min-h-screen bg-white text-slate-900 flex flex-col justify-center py-10 px-4 sm:px-6 lg:px-8">
-      {/* Role Selection Modal after Google Sign-In or Phone OTP */}
-      {showRoleModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-200">
-          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6 sm:p-8 border border-slate-200 animate-in zoom-in-95 duration-200">
-            <div className="text-center mb-6">
-              <div className="w-12 h-12 rounded-full bg-teal-50 text-teal-700 flex items-center justify-center mx-auto mb-3">
-                <ViitsaLogo size="sm" light={false} />
-              </div>
-              <h2 className="text-xl sm:text-2xl font-black text-slate-900 tracking-tight">
-                Select Account Login
-              </h2>
-              <p className="text-xs sm:text-sm text-slate-500 mt-1">
-                Please choose your login role to proceed:
-              </p>
-            </div>
 
-            <div className="space-y-3.5">
-              {/* Option 1: Patient Login */}
-              <button
-                type="button"
-                disabled={roleActionLoading}
-                onClick={() => handleSelectRoleAndProceed('patient')}
-                className="w-full text-left p-4 rounded-xl border-2 border-slate-200 hover:border-teal-600 hover:bg-teal-50/50 transition-all group active:scale-[0.99] flex items-center gap-4 bg-white cursor-pointer"
-              >
-                <div className="w-12 h-12 rounded-xl bg-teal-100 text-teal-800 flex items-center justify-center shrink-0 group-hover:bg-teal-600 group-hover:text-white transition-colors">
-                  <User className="w-6 h-6" />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center justify-between">
-                    <h3 className="text-sm font-bold text-slate-900 group-hover:text-teal-900">
-                      Patient Login
-                    </h3>
-                    <span className="text-[11px] font-semibold text-teal-600 bg-teal-50 px-2 py-0.5 rounded-full border border-teal-200">
-                      Personal
-                    </span>
-                  </div>
-                  <p className="text-xs text-slate-500 mt-0.5 leading-relaxed">
-                    Consult doctors, book appointments, and view personal health records.
-                  </p>
-                </div>
-              </button>
-
-              {/* Option 2: Clinic Login */}
-              <button
-                type="button"
-                disabled={roleActionLoading}
-                onClick={() => handleSelectRoleAndProceed('admin')}
-                className="w-full text-left p-4 rounded-xl border-2 border-slate-200 hover:border-teal-600 hover:bg-teal-50/50 transition-all group active:scale-[0.99] flex items-center gap-4 bg-white cursor-pointer"
-              >
-                <div className="w-12 h-12 rounded-xl bg-teal-100 text-teal-800 flex items-center justify-center shrink-0 group-hover:bg-teal-600 group-hover:text-white transition-colors">
-                  <Building2 className="w-6 h-6" />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center justify-between">
-                    <h3 className="text-sm font-bold text-slate-900 group-hover:text-teal-900">
-                      Clinic Login
-                    </h3>
-                    <span className="text-[11px] font-semibold text-teal-600 bg-teal-50 px-2 py-0.5 rounded-full border border-teal-200">
-                      Admin
-                    </span>
-                  </div>
-                  <p className="text-xs text-slate-500 mt-0.5 leading-relaxed">
-                    Manage clinic staff, doctor schedules, appointments, and billing.
-                  </p>
-                </div>
-              </button>
-            </div>
-
-            {roleActionLoading && (
-              <div className="mt-4 flex items-center justify-center gap-2 text-xs text-slate-500 font-semibold">
-                <Loader2 className="w-4 h-4 animate-spin text-teal-600" />
-                <span>Redirecting to your dashboard...</span>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
 
       {/* Native Browser Datalists for 1-click device auto-fill */}
       <datalist id="device-emails-list">
@@ -507,11 +412,10 @@ export function AuthLoginPage() {
                 setLocalError(null);
                 clearError();
               }}
-              className={`flex-1 py-2.5 rounded-lg text-sm font-bold transition-all ${
-                activeTab === 'login'
-                  ? 'bg-white text-slate-900 shadow-sm'
-                  : 'text-slate-500 hover:text-slate-800'
-              }`}
+              className={`flex-1 py-2.5 rounded-lg text-sm font-bold transition-all ${activeTab === 'login'
+                ? 'bg-white text-slate-900 shadow-sm'
+                : 'text-slate-500 hover:text-slate-800'
+                }`}
             >
               Sign In
             </button>
@@ -523,11 +427,10 @@ export function AuthLoginPage() {
                 setLocalError(null);
                 clearError();
               }}
-              className={`flex-1 py-2.5 rounded-lg text-sm font-bold transition-all ${
-                activeTab === 'register'
-                  ? 'bg-white text-slate-900 shadow-sm'
-                  : 'text-slate-500 hover:text-slate-800'
-              }`}
+              className={`flex-1 py-2.5 rounded-lg text-sm font-bold transition-all ${activeTab === 'register'
+                ? 'bg-white text-slate-900 shadow-sm'
+                : 'text-slate-500 hover:text-slate-800'
+                }`}
             >
               Create Account
             </button>
@@ -547,10 +450,16 @@ export function AuthLoginPage() {
             </div>
           )}
 
-          {/* Error Banner */}
+          {/* Feedback Banner */}
           {errorMessage && (
-            <div className="flex items-start gap-3 p-3.5 bg-rose-50 border border-rose-200 rounded-xl mb-5 text-rose-800 animate-in fade-in duration-150">
-              <AlertCircle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
+            <div className={`flex items-start gap-3 p-3.5 border rounded-xl mb-5 animate-in fade-in duration-150 ${
+              errorMessage.includes('successful') || errorMessage.includes('confirmation link')
+                ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                : 'bg-rose-50 border-rose-200 text-rose-800'
+            }`}>
+              <AlertCircle className={`w-5 h-5 shrink-0 mt-0.5 ${
+                errorMessage.includes('successful') || errorMessage.includes('confirmation link') ? 'text-emerald-600' : 'text-rose-600'
+              }`} />
               <p className="text-xs sm:text-sm font-medium leading-relaxed">{errorMessage}</p>
             </div>
           )}
@@ -574,46 +483,8 @@ export function AuthLoginPage() {
             <div className="flex-grow border-t border-slate-200"></div>
           </div>
 
-          {/* Sign In Mode: Method Selector (Email / Phone) — Patient portal only */}
-          {activeTab === 'login' && (
-            <>
-              {/* Sub-Method Selector: Email vs Phone */}
-              <div className="grid grid-cols-2 gap-2 mb-5">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setLoginMethod('email');
-                    setOtpSent(false);
-                    setLocalError(null);
-                  }}
-                  className={`py-2 px-3 text-xs sm:text-sm font-semibold rounded-lg flex items-center justify-center gap-2 transition-all border ${
-                    loginMethod === 'email'
-                      ? 'bg-teal-50 border-teal-600 text-teal-800 shadow-sm'
-                      : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
-                  }`}
-                >
-                  <Mail className="w-4 h-4 text-teal-600" />
-                  <span>Email & Password</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    setLoginMethod('phone');
-                    setLocalError(null);
-                  }}
-                  className={`py-2 px-3 text-xs sm:text-sm font-semibold rounded-lg flex items-center justify-center gap-2 transition-all border ${
-                    loginMethod === 'phone'
-                      ? 'bg-teal-50 border-teal-600 text-teal-800 shadow-sm'
-                      : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
-                  }`}
-                >
-                  <Smartphone className="w-4 h-4 text-teal-600" />
-                  <span>Phone OTP</span>
-                </button>
-              </div>
-            </>
-          )}
+          {/* Sign In Mode: Method Selector — Phone OTP hidden, will be added later */}
+          {/* TODO: Re-enable Phone OTP login toggle when ready */}
 
           {/* Create Account — patient only on this page */}
 
@@ -636,27 +507,6 @@ export function AuthLoginPage() {
                       value={name}
                       onChange={(e) => setName(e.target.value)}
                       placeholder="e.g. Dr. Rajesh Kumar"
-                      className="w-full h-12 pl-11 pr-4 bg-white border border-slate-300 rounded-xl text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/20 transition-all font-medium"
-                    />
-                  </div>
-                </div>
-              )}
-
-              {activeTab === 'register' && selectedRole === 'admin' && (
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wide mb-1.5">
-                    Clinic / Hospital Name <span className="text-rose-500">*</span>
-                  </label>
-                  <div className="relative">
-                    <Building2 className="w-5 h-5 text-slate-400 absolute left-3.5 top-3.5" />
-                    <input
-                      type="text"
-                      name="clinic-name"
-                      id="register-clinic-name"
-                      required
-                      value={clinicName}
-                      onChange={(e) => setClinicName(e.target.value)}
-                      placeholder="e.g. Apollo Care Clinic"
                       className="w-full h-12 pl-11 pr-4 bg-white border border-slate-300 rounded-xl text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/20 transition-all font-medium"
                     />
                   </div>
@@ -764,13 +614,12 @@ export function AuthLoginPage() {
                     Password {activeTab === 'register' && <span className="text-rose-500">*</span>}
                   </label>
                   {activeTab === 'login' && (
-                    <button
-                      type="button"
-                      onClick={() => setForgotPasswordMode(!forgotPasswordMode)}
+                    <Link
+                      to="/forgot-password?return=/login"
                       className="text-xs text-teal-700 hover:text-teal-800 font-semibold"
                     >
                       Forgot password?
-                    </button>
+                    </Link>
                   )}
                 </div>
                 <div className="relative">
@@ -818,29 +667,6 @@ export function AuthLoginPage() {
                 </div>
               )}
 
-              {/* Forgot Password Accordion */}
-              {forgotPasswordMode && (
-                <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl text-xs space-y-2.5">
-                  <p className="text-slate-600 leading-relaxed font-medium">
-                    Enter your email address above and click below to receive a password reset link.
-                  </p>
-                  {resetSent ? (
-                    <div className="flex items-center gap-2 text-emerald-700 font-bold">
-                      <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-                      <span>Password reset email has been sent!</span>
-                    </div>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={handleForgotPassword}
-                      disabled={loading}
-                      className="px-4 py-2 bg-teal-600 hover:bg-teal-700 text-white rounded-lg text-xs font-bold shadow-sm"
-                    >
-                      {loading ? 'Sending...' : 'Send Reset Link'}
-                    </button>
-                  )}
-                </div>
-              )}
 
               {/* Submit Button */}
               <button
@@ -857,148 +683,12 @@ export function AuthLoginPage() {
             </form>
           )}
 
-          {/* METHOD 2: PHONE NUMBER + OTP (Sign-In Mode Only) */}
-          {activeTab === 'login' && loginMethod === 'phone' && (
-            <div className="space-y-4">
-              {!otpSent ? (
-                <form onSubmit={handleSendOtp} className="space-y-4" autoComplete="on">
-                  <div>
-                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wide mb-1.5">
-                      Mobile Number <span className="text-slate-400 font-normal normal-case">(10 digits only)</span>
-                    </label>
-                    <div className="flex items-center gap-2">
-                      <span className="h-12 px-3.5 bg-slate-100 border border-slate-300 rounded-xl text-sm font-bold text-slate-700 flex items-center">
-                        +91
-                      </span>
-                      <input
-                        type="tel"
-                        name="tel"
-                        id="phone-number-input"
-                        list="device-phones-list"
-                        autoComplete="tel"
-                        inputMode="numeric"
-                        maxLength={10}
-                        pattern="[0-9]{10}"
-                        title="Must be exactly 10 digits (numbers only)"
-                        required
-                        value={phone}
-                        onKeyDown={(e) => {
-                          if (['Backspace', 'Delete', 'Tab', 'Escape', 'Enter', 'ArrowLeft', 'ArrowRight'].includes(e.key)) return;
-                          if (e.ctrlKey || e.metaKey) return;
-                          if (!/^\d$/.test(e.key)) e.preventDefault();
-                        }}
-                        onChange={(e) => setPhone(e.target.value.replace(/\D/g, '').slice(0, 10))}
-                        placeholder="9876543210"
-                        className="flex-1 h-12 px-4 bg-white border border-slate-300 rounded-xl text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/20 transition-all font-medium font-mono"
-                      />
-                    </div>
-                    <span className="text-[11px] text-slate-500 mt-1 block">Must be exactly 10 digits, numbers only (e.g. 9876543210).</span>
-
-                    {/* 1-Click Device Suggestion Pills for Phone */}
-                    {devicePhones.length > 0 && !phone && (
-                      <div className="flex flex-wrap items-center gap-1.5 mt-2">
-                        <span className="text-[11px] font-semibold text-slate-400">Device suggestion:</span>
-                        {devicePhones.map((savedPhone) => (
-                          <button
-                            key={savedPhone}
-                            type="button"
-                            onClick={() => setPhone(savedPhone)}
-                            className="inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-semibold bg-teal-50 text-teal-700 hover:bg-teal-100 transition-colors border border-teal-200/80 shadow-xs font-mono"
-                          >
-                            +91 {savedPhone}
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-
-                  <button
-                    type="submit"
-                    disabled={loading || phone.replace(/\D/g, '').length !== 10}
-                    className="w-full h-12 flex items-center justify-center gap-2 px-6 rounded-xl text-sm font-bold text-white bg-teal-600 hover:bg-teal-700 transition-all disabled:opacity-50 shadow-md hover:shadow-lg active:scale-[0.99]"
-                  >
-                    {loading && <Loader2 className="w-4 h-4 animate-spin text-white" />}
-                    <span>Get SMS OTP Code</span>
-                    <ArrowRight className="w-4 h-4" />
-                  </button>
-                </form>
-              ) : (
-                <form onSubmit={handleVerifyOtp} className="space-y-4" autoComplete="on">
-                  <div className="p-3 bg-teal-50 border border-teal-200 rounded-xl text-xs text-teal-800 flex items-center justify-between font-semibold">
-                    <span>Code sent to +91 {phone}</span>
-                    <button
-                      type="button"
-                      onClick={() => setOtpSent(false)}
-                      className="underline text-teal-900 hover:text-teal-950 font-bold"
-                    >
-                      Change
-                    </button>
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wide mb-1.5 text-center">
-                      Enter 6-digit Verification Code
-                    </label>
-                    <input
-                      type="text"
-                      name="one-time-code"
-                      id="otp-input"
-                      autoComplete="one-time-code"
-                      inputMode="numeric"
-                      required
-                      value={otp}
-                      onChange={(e) => setOtp(e.target.value.replace(/\D/g, '').slice(0, 6))}
-                      placeholder="••••••"
-                      maxLength={6}
-                      className="w-full h-12 text-center tracking-[0.5em] text-lg font-bold bg-white border border-slate-300 rounded-xl text-slate-900 placeholder:text-slate-400 focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/20 transition-all"
-                      autoFocus
-                    />
-                  </div>
-
-                  <button
-                    type="submit"
-                    disabled={loading || otp.length < 4}
-                    className="w-full h-12 flex items-center justify-center gap-2 px-6 rounded-xl text-sm font-bold text-white bg-teal-600 hover:bg-teal-700 transition-all disabled:opacity-50 shadow-md hover:shadow-lg active:scale-[0.99]"
-                  >
-                    {loading && <Loader2 className="w-4 h-4 animate-spin text-white" />}
-                    <span>Verify & Sign In</span>
-                    <ArrowRight className="w-4 h-4" />
-                  </button>
-
-                  <div className="text-center pt-1">
-                    <button
-                      type="button"
-                      onClick={handleSendOtp}
-                      disabled={loading}
-                      className="text-xs font-semibold text-slate-500 hover:text-teal-700 transition-colors"
-                    >
-                      Didn't receive SMS? Resend code
-                    </button>
-                  </div>
-                </form>
-              )}
-            </div>
-          )}
+          {/* METHOD 2: PHONE NUMBER + OTP — Hidden until integration is complete */}
+          {/* TODO: Restore Phone OTP login section here when ready */}
 
           {/* Invisible Recaptcha Mount Point */}
           <div id="recaptcha-container-login" />
 
-          {/* Footer links */}
-          <div className="mt-6 pt-5 border-t border-slate-100 text-center space-y-2">
-            <Link
-              to="/"
-              className="inline-flex items-center gap-1.5 text-xs sm:text-sm font-semibold text-slate-500 hover:text-slate-800 transition-colors"
-            >
-              <ArrowLeft className="w-4 h-4" />
-              <span>Back to VIITSA Home</span>
-            </Link>
-            <p className="text-xs text-slate-400">
-              Clinic or doctor?{' '}
-              <Link to="/clinic/login" className="text-teal-700 font-semibold hover:text-teal-900">
-                Sign in to Clinic Portal →
-              </Link>
-            </p>
-          </div>
 
         </div>
       </div>

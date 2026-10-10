@@ -31,16 +31,33 @@ export function PatientHome({ onTab, clinicId }: Props) {
   const [showClinicPicker, setShowClinicPicker] = useState(false);
   const [availableClinics, setAvailableClinics] = useState<Clinic[]>([]);
   const [loadingClinics, setLoadingClinics] = useState(false);
+  const [switchingClinicId, setSwitchingClinicId] = useState<string | null>(null);
 
   const fetchClinics = async () => {
     setLoadingClinics(true);
     try {
       const snap = await getDocs(collection(db, 'clinics'));
-      setAvailableClinics(snap.docs.map(d => ({ ...d.data(), clinic_id: d.id } as Clinic)));
+      const list = snap.docs.map(d => ({ ...d.data(), clinic_id: d.id } as Clinic));
+      setAvailableClinics(list);
     } catch (e) {
       console.warn('fetchClinics error:', e);
     } finally {
       setLoadingClinics(false);
+    }
+  };
+
+  const handleSelectClinic = async (targetClinic: Clinic) => {
+    if (switchingClinicId) return;
+    setSwitchingClinicId(targetClinic.clinic_id);
+    try {
+      await selectClinic(targetClinic);
+      setTimeout(() => {
+        setShowClinicPicker(false);
+        setSwitchingClinicId(null);
+      }, 350);
+    } catch (err) {
+      console.error('Failed to switch clinic:', err);
+      setSwitchingClinicId(null);
     }
   };
 
@@ -53,12 +70,11 @@ export function PatientHome({ onTab, clinicId }: Props) {
     const apptQ = query(
       collection(db, 'appointments'),
       where('patient_id', '==', pid),
-      where('date', '>=', localDateISO()),
-      orderBy('date'),
-      limit(5)
+      orderBy('date', 'desc'),
+      limit(20)
     );
     const unsubAppt = onSnapshot(apptQ, async (apptSnap) => {
-      const appts = apptSnap.docs.map(d => ({ ...d.data(), appointment_id: d.id } as Appointment)).filter(a => a.status !== 'cancelled');
+      const appts = apptSnap.docs.map(d => ({ ...d.data(), appointment_id: d.id } as Appointment));
       for (const appt of appts) {
         if (appt.doctor_id && !appt.doctor) {
           try {
@@ -99,7 +115,17 @@ export function PatientHome({ onTab, clinicId }: Props) {
     };
   }, [account?.account_id]);
 
-  const nextAppt = appointments[0];
+  const sortedAppointments = [...appointments].sort((a, b) => {
+    const da = a.date || '';
+    const dbDate = b.date || '';
+    if (da !== dbDate) return da.localeCompare(dbDate);
+    return (a.time_slot || '').localeCompare(b.time_slot || '');
+  });
+
+  const todayStr = localDateISO();
+  const upcomingAppointments = sortedAppointments.filter(a => a.date >= todayStr && a.status !== 'cancelled');
+  const nextAppt = upcomingAppointments[0];
+  const historyAppointments = appointments.filter(a => a.date < todayStr || a.status === 'cancelled').sort((a, b) => (b.date || '').localeCompare(a.date || ''));
 
   if (showEmergency) {
     return (
@@ -123,7 +149,7 @@ export function PatientHome({ onTab, clinicId }: Props) {
               </div>
               <div className="flex justify-between">
                 <span className="text-sm text-gray-500">DOB</span>
-                <span className="text-sm font-semibold text-gray-900">{account?.dob ? new Date(account.dob).toLocaleDateString('en-IN') : (account?.age ? `${account.age} yrs` : '—')}</span>
+                <span className="text-sm font-semibold text-gray-900">{account?.dob ? formatDate(account.dob) : (account?.age ? `${account.age} yrs` : '—')}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-sm text-gray-500">Blood Group</span>
@@ -213,9 +239,19 @@ export function PatientHome({ onTab, clinicId }: Props) {
           <button onClick={() => onTab('book')} className="mt-4 bg-white/15 backdrop-blur rounded-2xl px-4 py-3 flex items-center gap-3 w-full text-left">
             <CalendarClock size={20} className="text-white shrink-0" />
             <div className="flex-1">
-              <p className="text-xs text-white/70">Next appointment</p>
+              <div className="flex items-center gap-2">
+                <p className="text-xs text-white/70">Next appointment {nextAppt.display_token ? `(Token: ${nextAppt.display_token})` : ''}</p>
+                {nextAppt.visit_type && (
+                  <span className="text-[9px] uppercase font-bold text-white bg-white/20 px-1.5 py-0.5 rounded">
+                    {nextAppt.visit_type.replace('-', ' ')}
+                  </span>
+                )}
+              </div>
               <p className="text-sm font-semibold text-white">{formatDate(nextAppt.date)} at {formatTime(nextAppt.time_slot)}</p>
-              {nextAppt.doctor && <p className="text-xs text-white/70">{(nextAppt.doctor as { name?: string }).name}</p>}
+              <p className="text-xs text-white/70">
+                {(nextAppt.doctor as { name?: string })?.name || 'Doctor'} • {(nextAppt.clinic as { name?: string })?.name || 'Clinic'}
+              </p>
+              {nextAppt.reason && <p className="text-xs text-white/50 truncate mt-0.5">"{nextAppt.reason}"</p>}
             </div>
             <ChevronRight size={16} className="text-white/50" />
           </button>
@@ -364,18 +400,51 @@ export function PatientHome({ onTab, clinicId }: Props) {
               <button onClick={() => onTab('book')} className="text-xs text-primary font-semibold">See all</button>
             </div>
             <div className="space-y-2">
-              {appointments.slice(0, 2).map(a => (
-                <div key={a.appt_id} className="bg-white rounded-2xl border border-gray-100 p-4 flex items-center gap-3">
-                  <div className="h-12 w-12 rounded-xl bg-[#E1F5EE] flex items-center justify-center shrink-0">
-                    <Stethoscope size={20} className="text-primary" />
+              {upcomingAppointments.slice(0, 3).map(a => (
+                <div key={a.appt_id || a.appointment_id} className="bg-white rounded-2xl border border-gray-100 p-4 flex items-center gap-3">
+                  <div className="h-12 w-12 rounded-xl bg-[#E1F5EE] flex flex-col items-center justify-center shrink-0">
+                    <span className="text-xs font-bold leading-none text-primary">{new Date(a.date).getDate()}</span>
+                    <span className="text-[9px] uppercase tracking-wider font-bold mt-0.5 text-primary/70">{new Date(a.date).toLocaleString('default', { month: 'short' })}</span>
                   </div>
                   <div className="flex-1 min-w-0">
-                    <p className="text-sm font-semibold text-gray-900 truncate">{(a.doctor as { name?: string } | null | undefined)?.name ?? 'Doctor'}</p>
-                    <p className="text-xs text-gray-500">{formatDate(a.date)} at {formatTime(a.time_slot)}</p>
+                    <div className="flex items-center gap-2 mb-0.5">
+                      <p className="text-sm font-semibold text-gray-900 truncate">{(a.doctor as { name?: string } | null | undefined)?.name ?? 'Doctor'}</p>
+                      {a.display_token && <span className="text-xs font-bold text-primary px-1.5 py-0.5 bg-primary/10 rounded-md">{a.display_token}</span>}
+                    </div>
+                    <p className="text-xs text-gray-500 truncate">{(a.clinic as { name?: string } | null | undefined)?.name ?? 'Clinic'}</p>
+                    <p className="text-xs text-gray-500">
+                      {formatTime(a.time_slot)}
+                      {a.visit_type && ` • ${a.visit_type.replace('-', ' ')}`}
+                    </p>
                   </div>
-                  <span className={`text-xs font-semibold px-2 py-1 rounded-full ${
-                    a.status === 'done' ? 'bg-green-50 text-green-700' : 'bg-yellow-50 text-yellow-700'
-                  }`}>{a.status}</span>
+                  <span className="text-[10px] font-bold px-2 py-1 rounded-full bg-amber-50 text-amber-700 capitalize">{a.status}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Appointment history */}
+        {historyAppointments.length > 0 && (
+          <div>
+            <div className="flex items-center justify-between mb-3">
+              <p className="text-sm font-bold text-gray-900">Appointment history</p>
+            </div>
+            <div className="space-y-2 opacity-80">
+              {historyAppointments.slice(0, 5).map(a => (
+                <div key={a.appt_id || a.appointment_id} className="bg-gray-50 rounded-2xl border border-gray-100 p-4 flex items-center gap-3">
+                  <div className="h-12 w-12 rounded-xl bg-gray-200 flex flex-col items-center justify-center shrink-0">
+                    <span className="text-xs font-bold leading-none text-gray-600">{new Date(a.date).getDate()}</span>
+                    <span className="text-[9px] uppercase tracking-wider font-bold mt-0.5 text-gray-500">{new Date(a.date).toLocaleString('default', { month: 'short' })}</span>
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 mb-0.5">
+                      <p className="text-sm font-semibold text-gray-900 truncate">{(a.doctor as { name?: string } | null | undefined)?.name ?? 'Doctor'}</p>
+                    </div>
+                    <p className="text-xs text-gray-500 truncate">{(a.clinic as { name?: string } | null | undefined)?.name ?? 'Clinic'}</p>
+                    <p className="text-xs text-gray-500">{formatTime(a.time_slot)}</p>
+                  </div>
+                  <span className={`text-[10px] font-bold px-2 py-1 rounded-full capitalize ${a.status === 'cancelled' ? 'bg-red-50 text-red-700' : 'bg-gray-200 text-gray-700'}`}>{a.status}</span>
                 </div>
               ))}
             </div>
@@ -455,35 +524,42 @@ export function PatientHome({ onTab, clinicId }: Props) {
                 </div>
               ) : (
                 availableClinics.map((c) => {
-                  const isSelected = clinic?.clinic_id === c.clinic_id;
+                  const activeClinicId = clinic?.clinic_id || account?.clinic_id;
+                  const isSelected = activeClinicId === c.clinic_id;
+                  const isSwitching = switchingClinicId === c.clinic_id;
                   return (
                     <div
                       key={c.clinic_id}
-                      className={`p-4 rounded-2xl border transition-all ${
-                        isSelected ? 'border-primary bg-primary/5' : 'border-gray-100 hover:border-gray-200 bg-white'
+                      className={`p-4 rounded-2xl transition-all ${
+                        isSelected
+                          ? 'border-2 border-[#0B5C4D] bg-white shadow-xs'
+                          : 'border border-gray-200 hover:border-gray-300 bg-white'
                       }`}
                     >
-                      <div className="flex items-start justify-between">
-                        <div>
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="flex-1 min-w-0">
                           <p className="text-sm font-bold text-gray-900">{c.name}</p>
                           <p className="text-xs text-gray-500 mt-0.5">{c.address || c.city || 'Clinic'}</p>
-                          {c.phone && <p className="text-xs text-gray-400 mt-0.5">{c.phone}</p>}
+                          {c.phone && <p className="text-xs text-gray-500 mt-0.5">{c.phone}</p>}
                         </div>
                         <button
-                          onClick={() => {
-                            selectClinic(c);
-                            setShowClinicPicker(false);
-                          }}
-                          className={`px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1 ${
+                          onClick={() => handleSelectClinic(c)}
+                          disabled={isSelected || Boolean(switchingClinicId)}
+                          className={`px-4 py-1.5 rounded-full text-xs font-semibold flex items-center gap-1.5 transition-colors shrink-0 ${
                             isSelected
-                              ? 'bg-primary text-white'
-                              : 'bg-primary/10 text-primary hover:bg-primary hover:text-white'
+                              ? 'bg-[#0B5C4D] text-white cursor-default'
+                              : 'bg-[#E5F3EE] text-[#0C6A58] hover:bg-[#D5EBE4] cursor-pointer'
                           }`}
                         >
                           {isSelected ? (
                             <>
-                              <Check size={12} /> Selected
+                              <Check size={13} className="stroke-[2.5]" /> Selected
                             </>
+                          ) : isSwitching ? (
+                            <span className="flex items-center gap-1">
+                              <span className="h-3 w-3 border-2 border-[#0C6A58] border-t-transparent rounded-full animate-spin" />
+                              Connecting...
+                            </span>
                           ) : (
                             'Select'
                           )}

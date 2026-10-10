@@ -1,12 +1,14 @@
 import React, { useState } from 'react';
 import { 
   User, Mail, Phone, Calendar, Droplets, MapPin, 
-  Heart, AlertTriangle, Check, ArrowRight, Loader2, Sparkles, ShieldCheck 
+  Heart, AlertTriangle, Check, ArrowRight, Loader2, Sparkles, ShieldCheck, LogOut 
 } from 'lucide-react';
 import { usePatientAuth } from '../lib/patientAuth';
 import { useAuth } from '../lib/auth';
 import { ViitsaLogo } from '../components/ViitsaLogo';
+import { DobCalendarPicker } from '../components/DobCalendarPicker';
 import { isValidGmail, isValid10DigitPhone } from '../screens/AuthLoginPage';
+import { calculateAge, formatDobForInput, parseDateArg, localDateISO } from '../lib/format';
 
 const BLOOD_GROUPS = ['A+', 'A-', 'B+', 'B-', 'O+', 'O-', 'AB+', 'AB-'] as const;
 const GENDERS = ['Male', 'Female', 'Other'] as const;
@@ -17,7 +19,7 @@ interface Props {
 }
 
 export function PatientOnboardingProfile({ onComplete }: Props) {
-  const { account, updateProfile, clinic } = usePatientAuth();
+  const { account, updateProfile, clinic, logout } = usePatientAuth();
   const { user } = useAuth();
 
   const getCleanPhone = (val?: string | null) => {
@@ -34,7 +36,24 @@ export function PatientOnboardingProfile({ onComplete }: Props) {
   
   // Mandatory profile details to be completed
   const [dob, setDob] = useState(account?.dob || '');
+  const [age, setAge] = useState<string>(
+    account?.age ? String(account.age) : (account?.dob ? String(calculateAge(account.dob) ?? '') : '')
+  );
   const [gender, setGender] = useState<'Male' | 'Female' | 'Other' | ''>(account?.gender || '');
+
+  const handleDobChange = (newDob: string) => {
+    setDob(newDob);
+    if (newDob && !age) {
+      const computed = calculateAge(newDob);
+      if (computed !== null) {
+        setAge(String(computed));
+      }
+    }
+  };
+
+  const handleAgeChange = (newAge: string) => {
+    setAge(newAge);
+  };
   const [bloodGroup, setBloodGroup] = useState<string>(account?.blood_group || '');
   const [address, setAddress] = useState(account?.address || '');
   const [emergencyName, setEmergencyName] = useState(account?.emergency_contact_name || '');
@@ -72,9 +91,7 @@ export function PatientOnboardingProfile({ onComplete }: Props) {
   }, [account, user, name, email, phone]);
 
   // Compute age from DOB
-  const computedAge = dob 
-    ? Math.max(0, Math.floor((Date.now() - new Date(dob).getTime()) / (365.25 * 24 * 60 * 60 * 1000)))
-    : null;
+  const computedAge = calculateAge(dob);
 
   const toggleCondition = (cond: string) => {
     setHasNoConditions(false);
@@ -98,16 +115,17 @@ export function PatientOnboardingProfile({ onComplete }: Props) {
       return;
     }
 
-    // 2. Mandatory Gmail
+    // 2. Mandatory Email (any valid email)
     const cleanEmail = email.trim().toLowerCase();
     if (!cleanEmail) {
       setError('Email address is required.');
       return;
     }
     if (!isValidGmail(cleanEmail)) {
-      setError('Email address must be a valid Gmail account ending in @gmail.com.');
+      setError('Please enter a valid email address.');
       return;
     }
+
 
     // 3. Mandatory 10-digit Phone
     const cleanPhone = phone.replace(/\D/g, '');
@@ -116,14 +134,21 @@ export function PatientOnboardingProfile({ onComplete }: Props) {
       return;
     }
 
-    // 4. Mandatory DOB
+    // 4. Mandatory DOB & Age
     if (!dob) {
       setError('Please select your Date of Birth.');
       return;
     }
-    const dobDate = new Date(dob);
+    const dobDate = parseDateArg(dob);
     if (isNaN(dobDate.getTime()) || dobDate > new Date()) {
       setError('Please select a valid Date of Birth in the past.');
+      return;
+    }
+
+    const calculated = calculateAge(dob);
+    const finalAge = age ? parseInt(age, 10) : calculated;
+    if (finalAge === null || isNaN(finalAge) || finalAge < 0 || finalAge > 125) {
+      setError('Please provide a valid Age between 0 and 125.');
       return;
     }
 
@@ -169,6 +194,7 @@ export function PatientOnboardingProfile({ onComplete }: Props) {
       email: cleanEmail,
       phone: cleanPhone,
       dob,
+      age: finalAge,
       gender,
       blood_group: bloodGroup,
       address: address.trim(),
@@ -191,6 +217,7 @@ export function PatientOnboardingProfile({ onComplete }: Props) {
           email: cleanEmail,
           phone: cleanPhone,
           dob,
+          age: finalAge,
           gender,
           blood_group: bloodGroup,
           address: address.trim(),
@@ -203,6 +230,10 @@ export function PatientOnboardingProfile({ onComplete }: Props) {
         }));
       } catch {}
 
+      try {
+        sessionStorage.removeItem('viitsa_is_new_registration');
+      } catch {}
+
       onComplete();
     } else {
       setError(res.error || 'Failed to save profile. Please try again.');
@@ -213,9 +244,27 @@ export function PatientOnboardingProfile({ onComplete }: Props) {
     <div className="min-h-screen bg-slate-50 py-8 px-4 sm:px-6 lg:px-8">
       <div className="max-w-2xl mx-auto">
         {/* Header */}
-        <div className="text-center mb-8">
+        <div className="text-center mb-8 relative">
+          <div className="absolute right-0 top-0 hidden sm:block">
+            <button
+              type="button"
+              onClick={logout}
+              className="text-slate-500 hover:text-slate-800 transition flex items-center gap-1.5 text-sm font-medium px-3 py-1.5 rounded-lg hover:bg-slate-200/50"
+            >
+              <LogOut size={16} /> Logout
+            </button>
+          </div>
           <div className="flex justify-center mb-3">
             <ViitsaLogo size="md" light={false} />
+          </div>
+          <div className="sm:hidden flex justify-center mb-4">
+             <button
+              type="button"
+              onClick={logout}
+              className="text-slate-500 hover:text-slate-800 transition flex items-center gap-1.5 text-sm font-medium px-3 py-1.5 rounded-lg hover:bg-slate-200/50"
+            >
+              <LogOut size={16} /> Logout
+            </button>
           </div>
           <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-teal-100 text-teal-800 text-xs font-bold uppercase tracking-wider mb-2">
             <ShieldCheck className="w-3.5 h-3.5 text-teal-600" />
@@ -321,26 +370,38 @@ export function PatientOnboardingProfile({ onComplete }: Props) {
                 </div>
               </div>
 
-              {/* Date of Birth */}
-              <div>
-                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wide mb-1.5">
-                  Date of Birth <span className="text-rose-500">*</span>
-                  {computedAge !== null && (
-                    <span className="ml-2 text-teal-700 font-bold normal-case">({computedAge} years old)</span>
-                  )}
-                </label>
-                <div className="relative">
-                  <Calendar className="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5" />
-                  <input
-                    type="date"
-                    required
-                    max={new Date().toISOString().split('T')[0]}
-                    value={dob}
-                    onChange={(e) => setDob(e.target.value)}
-                    className="w-full h-11 pl-10 pr-4 bg-white border border-slate-300 rounded-xl text-sm font-medium text-slate-900 focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/20"
-                  />
-                </div>
-              </div>
+              {/* Date of Birth & Age */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                 <div>
+                   <label className="block text-xs font-bold text-slate-700 uppercase tracking-wide mb-1.5">
+                     Date of Birth (DOB) <span className="text-rose-500">*</span>
+                   </label>
+                   <DobCalendarPicker
+                     value={dob}
+                     onChange={handleDobChange}
+                     placeholder="Select Date of Birth"
+                   />
+                 </div>
+
+                 <div>
+                   <label className="block text-xs font-bold text-slate-700 uppercase tracking-wide mb-1.5">
+                     Age (Years) <span className="text-rose-500">*</span>
+                   </label>
+                   <div className="relative">
+                     <User className="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5" />
+                     <input
+                       type="number"
+                       required
+                       min={0}
+                       max={125}
+                       value={age}
+                       onChange={(e) => handleAgeChange(e.target.value)}
+                       placeholder="e.g. 28"
+                       className="w-full h-11 pl-10 pr-4 bg-white border border-slate-300 rounded-xl text-sm font-medium text-slate-900 focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/20 font-mono"
+                     />
+                   </div>
+                 </div>
+               </div>
 
               {/* Gender */}
               <div>

@@ -12,11 +12,13 @@ import type { InventoryItem } from '../lib/types';
 
 export function InventoryScreen() {
   const { clinic } = useAuth();
+  const { toast } = useToast();
   const { inventory, loading, refresh, criticalInventory } = useClinicData();
   const [query, setQuery] = useState('');
   const [category, setCategory] = useState<'all' | 'Medicine' | 'Supplies' | 'Equipment'>('all');
   const [addOpen, setAddOpen] = useState(false);
   const [restock, setRestock] = useState<InventoryItem | null>(null);
+  const [editItem, setEditItem] = useState<InventoryItem | null>(null);
 
   const filtered = useMemo(() => {
     let list = inventory;
@@ -36,7 +38,7 @@ export function InventoryScreen() {
     return { ok, low, critical, value };
   }, [inventory]);
 
-  if (loading) return <Loading label="Loading inventory…" />;
+
 
   return (
     <div className="space-y-5">
@@ -112,7 +114,29 @@ export function InventoryScreen() {
                     )}
                     {status === 'ok' && <span className="badge badge-done text-[10px] uppercase">OK</span>}
                   </div>
-                  <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
+                  
+                  <div className="flex justify-end gap-2 mt-2 -mb-1">
+                    <button onClick={() => setEditItem(item)} className="text-ink-muted hover:text-primary text-xs">Edit</button>
+                    <button 
+                      onClick={async () => {
+                        if (window.confirm('Are you sure you want to delete this item?')) {
+                          try {
+                            const { deleteDoc } = await import('firebase/firestore');
+                            await deleteDoc(doc(db, 'inventory', item.item_id!));
+                            toast('Item deleted.', 'success');
+                            void refresh();
+                          } catch (e) {
+                            toast('Failed to delete item.', 'error');
+                          }
+                        }
+                      }} 
+                      className="text-danger/70 hover:text-danger text-xs"
+                    >
+                      Delete
+                    </button>
+                  </div>
+
+                  <div className="mt-2 grid grid-cols-2 gap-2 text-xs">
                     <div>
                       <p className="text-[10px] text-ink-subtle uppercase">Quantity</p>
                       <p className="font-semibold text-ink">{item.quantity} {item.unit}</p>
@@ -138,6 +162,7 @@ export function InventoryScreen() {
       </div>
 
       <AddItemModal open={addOpen} onClose={() => setAddOpen(false)} onSaved={() => { void refresh(); setAddOpen(false); }} clinicId={clinic?.clinic_id ?? ''} />
+      {editItem && <EditItemModal item={editItem} onClose={() => setEditItem(null)} onSaved={() => { void refresh(); setEditItem(null); }} clinicId={clinic?.clinic_id ?? ''} />}
       <RestockModal item={restock} onClose={() => setRestock(null)} onSaved={() => { void refresh(); setRestock(null); }} />
     </div>
   );
@@ -249,6 +274,65 @@ function RestockModal({ item, onClose, onSaved }: { item: InventoryItem | null; 
         <div className="rounded-lg bg-primary-50/60 px-3 py-2 text-sm">
           <p className="text-ink-muted text-xs">New total</p>
           <p className="font-bold text-primary text-lg">{newQty} {item.unit}</p>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function EditItemModal({ item, onClose, onSaved, clinicId }: { item: InventoryItem; onClose: () => void; onSaved: () => void; clinicId: string }) {
+  const { toast } = useToast();
+  const [form, setForm] = useState({ 
+    name: item.name || '', 
+    category: item.category || 'Medicine', 
+    quantity: item.quantity?.toString() || '0', 
+    unit: item.unit || 'strips', 
+    reorder: item.reorder_level?.toString() || '10', 
+    supplier: item.supplier || '', 
+    cost: item.cost_per_unit?.toString() || '0' 
+  });
+  const [saving, setSaving] = useState(false);
+
+  const submit = async () => {
+    if (!form.name.trim()) return toast('Item name is required.', 'error');
+    if (!form.quantity) return toast('Enter quantity.', 'error');
+    setSaving(true);
+    try {
+      await updateDoc(doc(db, 'inventory', item.item_id!), {
+        name: form.name.trim(),
+        category: form.category,
+        quantity: parseFloat(form.quantity) || 0,
+        unit: form.unit,
+        reorder_level: parseFloat(form.reorder) || 10,
+        supplier: form.supplier || null,
+        cost_per_unit: parseFloat(form.cost) || 0,
+      });
+      setSaving(false);
+      toast('Item updated successfully.', 'success');
+      onSaved();
+    } catch(error) {
+      setSaving(false);
+      toast('Unable to update inventory. Please try again.', 'error');
+    }
+  };
+
+  return (
+    <Modal open={true} onClose={onClose} title="Edit inventory item" size="md"
+      footer={<><button onClick={onClose} className="btn-ghost">Cancel</button><button onClick={submit} disabled={saving} className="btn-primary">{saving ? 'Saving…' : 'Save changes'}</button></>}
+    >
+      <div className="space-y-3">
+        <div className="grid grid-cols-2 gap-3">
+          <div><label className="label">Name *</label><input className="input" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></div>
+          <div><label className="label">Category</label><select className="select" value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })}><option>Medicine</option><option>Supplies</option><option>Equipment</option></select></div>
+        </div>
+        <div className="grid grid-cols-3 gap-3">
+          <div><label className="label">Quantity *</label><input type="number" className="input" value={form.quantity} onChange={(e) => setForm({ ...form, quantity: e.target.value })} /></div>
+          <div><label className="label">Unit</label><input className="input" value={form.unit} onChange={(e) => setForm({ ...form, unit: e.target.value })} /></div>
+          <div><label className="label">Reorder at</label><input type="number" className="input" value={form.reorder} onChange={(e) => setForm({ ...form, reorder: e.target.value })} /></div>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <div><label className="label">Supplier</label><input className="input" value={form.supplier} onChange={(e) => setForm({ ...form, supplier: e.target.value })} /></div>
+          <div><label className="label">Cost / unit (₹)</label><input type="number" className="input" value={form.cost} onChange={(e) => setForm({ ...form, cost: e.target.value })} /></div>
         </div>
       </div>
     </Modal>

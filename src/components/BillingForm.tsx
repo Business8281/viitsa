@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { X, Plus, Minus, CreditCard, Banknote, Smartphone, Clock, Check, QrCode } from 'lucide-react';
 import type { PaymentMethod, BillLineItem } from '../lib/types';
-import { formatRs } from '../lib/format';
+import { formatRs, formatDobForInput } from '../lib/format';
 
 export interface BillingFormData {
   consultationFee: number;
@@ -162,7 +162,7 @@ export function BillingForm({ patientName, doctorName, defaultFee = 500, onChang
         <div className="space-y-2">
           <div>
             <label className="label">Expected payment date</label>
-            <input type="date" className="input" value={value.expectedPaymentDate}
+            <input type="date" className="input" value={formatDobForInput(value.expectedPaymentDate)}
               onChange={e => update({ expectedPaymentDate: e.target.value })} />
           </div>
           <div>

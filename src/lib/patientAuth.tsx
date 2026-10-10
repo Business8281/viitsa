@@ -4,6 +4,8 @@ import { doc, getDoc, updateDoc, setDoc, onSnapshot } from 'firebase/firestore';
 import type { PatientAccount, Clinic } from './types';
 import { useAuth } from './auth';
 import { generateReadableId, sanitizeForFirestore } from './identityResolver';
+import { switchPatientClinic } from './patientClinicService';
+import { calculateAge } from './format';
 
 const STORAGE_KEY = 'viitsa_patient_v1';
 
@@ -27,6 +29,7 @@ export interface RegisterData {
   name: string;
   email?: string;
   dob?: string;
+  age?: number | string | null;
   gender: 'Male' | 'Female' | 'Other';
   blood_group: string;
   address?: string;
@@ -41,35 +44,44 @@ export interface RegisterData {
 const Ctx = createContext<PatientAuthState | undefined>(undefined);
 
 export function PatientAuthProvider({ children }: { children: React.ReactNode }) {
-  const { user, clinic: authClinic, patientAccount: authPatientAccount, logout: authLogout } = useAuth();
+  const { user, clinic: authClinic, patientAccount: authPatientAccount, logout: authLogout, switchClinic: authSwitchClinic, setClinic: authSetClinic } = useAuth();
   
+  // Check if a specific clinic was previously chosen in localStorage
+  const savedClinicId = typeof window !== 'undefined' ? localStorage.getItem('viitsa_active_clinic_id') : null;
+  const initialClinicId = savedClinicId || authClinic?.clinic_id || authPatientAccount?.clinic_id || null;
+
   const [account, setAccount] = useState<PatientAccount | null>(authPatientAccount);
   const [clinic, setClinic] = useState<Clinic | null>(authClinic);
-  const [clinicId, setClinicIdState] = useState<string | null>(authClinic?.clinic_id || null);
+  const [clinicId, setClinicIdState] = useState<string | null>(initialClinicId);
   const [loading] = useState(false);
 
-  // Load real clinic ONLY if account or user explicitly selected a clinic_id
+  // Load active clinic with robust priority: explicit clinicId > saved in localStorage > account clinic > auth clinic
   useEffect(() => {
-    const targetCid = clinicId || account?.clinic_id;
-    if (targetCid && (!clinic || clinic.clinic_id !== targetCid)) {
-      getDoc(doc(db, 'clinics', targetCid)).then((snap) => {
-        if (snap.exists()) {
-          setClinic({ ...snap.data(), clinic_id: snap.id } as Clinic);
-          setClinicIdState(snap.id);
-        } else {
-          setClinic(null);
-          setClinicIdState(null);
-        }
-      }).catch(console.warn);
-    } else if (!targetCid) {
-      setClinic(null);
-      setClinicIdState(null);
+    let storedId: string | null = null;
+    try {
+      storedId = localStorage.getItem('viitsa_active_clinic_id');
+    } catch {}
+
+    const targetCid = clinicId || storedId || account?.clinic_id || authClinic?.clinic_id || user?.clinic_id;
+    if (targetCid) {
+      if (!clinic || clinic.clinic_id !== targetCid) {
+        getDoc(doc(db, 'clinics', targetCid)).then((snap) => {
+          if (snap.exists()) {
+            const loadedClinic = { ...snap.data(), clinic_id: snap.id } as Clinic;
+            setClinic(loadedClinic);
+            setClinicIdState(snap.id);
+            if (authSetClinic && authClinic?.clinic_id !== snap.id) {
+              authSetClinic(loadedClinic);
+            }
+          }
+        }).catch(console.warn);
+      }
     }
-  }, [clinicId, account?.clinic_id]);
+  }, [clinicId, account?.clinic_id, authClinic?.clinic_id, user?.clinic_id, clinic, authSetClinic]);
 
   // Real-time onSnapshot for active patient account
   useEffect(() => {
-    const activeAccId = account?.account_id || user?.patient_account_id || (user?.role === 'patient' ? `pat_${user.user_id}` : null);
+    const activeAccId = account?.account_id || authPatientAccount?.account_id || user?.patient_account_id || (user?.role === 'patient' ? `pat_${user.user_id}` : null);
     if (!activeAccId) return;
     const unsub = onSnapshot(doc(db, 'patient_accounts', activeAccId), (snap) => {
       if (snap.exists()) {
@@ -78,11 +90,13 @@ export function PatientAuthProvider({ children }: { children: React.ReactNode })
           ...(prev || {}),
           ...data,
           account_id: snap.id,
+          // Never downgrade profile_completed from true → false/undefined
+          profile_completed: data.profile_completed || prev?.profile_completed || false,
         } as PatientAccount));
       }
     });
     return () => unsub();
-  }, [account?.account_id, user?.patient_account_id, user?.user_id, user?.role]);
+  }, [account?.account_id, authPatientAccount?.account_id, user?.patient_account_id, user?.user_id, user?.role]);
 
   // Synchronize with unified AuthProvider
   useEffect(() => {
@@ -96,12 +110,13 @@ export function PatientAuthProvider({ children }: { children: React.ReactNode })
     }
 
     if (authPatientAccount) {
+      // Live Firestore authPatientAccount takes strict precedence over stale local storage
       setAccount({
-        ...authPatientAccount,
         ...(cachedProfile || {}),
-        phone: authPatientAccount.phone || cachedProfile?.phone || user?.phone || '',
-        name: authPatientAccount.name || cachedProfile?.name || user?.name || '',
-        email: authPatientAccount.email || cachedProfile?.email || user?.email || null,
+        ...authPatientAccount,
+        phone: authPatientAccount.phone || user?.phone || cachedProfile?.phone || '',
+        name: authPatientAccount.name || user?.name || cachedProfile?.name || '',
+        email: authPatientAccount.email || user?.email || cachedProfile?.email || null,
         profile_completed: authPatientAccount.profile_completed || cachedProfile?.profile_completed || false,
       });
     } else if (user && user.role === 'patient') {
@@ -131,26 +146,6 @@ export function PatientAuthProvider({ children }: { children: React.ReactNode })
     }
   }, [authPatientAccount, user]);
 
-  useEffect(() => {
-    if (authClinic) {
-      setClinic(authClinic);
-      setClinicIdState(authClinic.clinic_id);
-    }
-  }, [authClinic]);
-
-  useEffect(() => {
-    if (!clinicId || authClinic) return;
-    getDoc(doc(db, 'clinics', clinicId))
-      .then((docSnap) => {
-        if (docSnap.exists()) {
-          setClinic({ ...docSnap.data(), clinic_id: docSnap.id } as Clinic);
-        }
-      })
-      .catch((err) => {
-        console.warn('Error fetching clinic for patient:', err);
-      });
-  }, [clinicId, authClinic]);
-
   const setClinicId = useCallback((id: string) => setClinicIdState(id), []);
 
   const sendOtp = useCallback(async () => {
@@ -166,13 +161,14 @@ export function PatientAuthProvider({ children }: { children: React.ReactNode })
   }, []);
 
   const updateProfile = useCallback(async (d: Partial<RegisterData>) => {
-    const activeAccountId = account?.account_id || user?.patient_account_id || (user?.user_id ? `pat_${user.user_id}` : null);
+    const activeAccountId = account?.account_id || authPatientAccount?.account_id || user?.patient_account_id || (user?.user_id ? `pat_${user.user_id}` : null);
     if (!activeAccountId) return { ok: false, error: 'Not logged in.' };
 
-    const medications = d.current_medications
-      ? d.current_medications.split(',').map(m => m.trim()).filter(Boolean)
+    const medications = d.current_medications !== undefined
+      ? (typeof d.current_medications === 'string'
+          ? d.current_medications.split(',').map(m => m.trim()).filter(Boolean)
+          : d.current_medications)
       : (account?.current_medications || ['None']);
-    const age = d.dob ? Math.floor((Date.now() - new Date(d.dob).getTime()) / (365.25 * 24 * 60 * 60 * 1000)) : (account?.age || null);
 
     const patientCode = account?.id_number || account?.patient_code || user?.id_number || generateReadableId('PAT', activeAccountId);
     const patName = d.name || account?.name || user?.name || 'Patient';
@@ -188,13 +184,20 @@ export function PatientAuthProvider({ children }: { children: React.ReactNode })
     };
     if (d.email !== undefined) updates.email = d.email || null;
     if (d.phone !== undefined) updates.phone = d.phone;
-    if (d.dob !== undefined) { updates.dob = d.dob || null; updates.age = age; }
+    if (d.dob !== undefined) updates.dob = d.dob || null;
+    if (d.age !== undefined) {
+      const num = Number(d.age);
+      updates.age = (!isNaN(num) && d.age !== '' && d.age !== null) ? num : null;
+    } else if (d.dob !== undefined && d.dob && (account?.age === undefined || account?.age === null)) {
+      const calc = calculateAge(d.dob);
+      if (calc !== null) updates.age = calc;
+    }
     if (d.gender !== undefined) updates.gender = d.gender;
     if (d.blood_group !== undefined) updates.blood_group = d.blood_group;
     if (d.address !== undefined) updates.address = d.address || null;
     if (d.chronic_conditions !== undefined) updates.chronic_conditions = d.chronic_conditions;
     if (d.allergies !== undefined) updates.allergies = d.allergies;
-    if (medications !== undefined) updates.current_medications = medications;
+    if (d.current_medications !== undefined) updates.current_medications = medications;
     if (d.emergency_contact_name !== undefined) updates.emergency_contact_name = d.emergency_contact_name;
     if (d.emergency_contact_phone !== undefined) updates.emergency_contact_phone = d.emergency_contact_phone;
     if (d.profile_completed !== undefined) updates.profile_completed = d.profile_completed;
@@ -215,8 +218,22 @@ export function PatientAuthProvider({ children }: { children: React.ReactNode })
         otp_verified: true,
         profile_completed: true,
       }), { merge: true });
-    } catch (e) {
+    } catch (e: any) {
       console.warn('Could not update patient_accounts doc:', e);
+      return { ok: false, error: 'Failed to update patient profile. Permission denied or network issue.' };
+    }
+
+    // 2. Also ensure the 'users' document knows about this profile completion and linking
+    if (user?.user_id) {
+      try {
+        await updateDoc(doc(db, 'users', user.user_id), {
+          patient_account_id: activeAccountId,
+          profile_completed: true,
+          updated_at: new Date().toISOString()
+        });
+      } catch (e) {
+        console.warn('Could not update users doc profile_completed flag:', e);
+      }
     }
 
     // 2. Save all A to Z data to users
@@ -233,8 +250,9 @@ export function PatientAuthProvider({ children }: { children: React.ReactNode })
           profile_completed: true,
           role_selected: true,
         }), { merge: true });
-      } catch (e) {
+      } catch (e: any) {
         console.warn('Could not update users doc:', e);
+        // Do not block onboarding on users doc failure if patient_account worked.
       }
     }
 
@@ -242,8 +260,8 @@ export function PatientAuthProvider({ children }: { children: React.ReactNode })
     const activeClinicId = clinicId || authClinic?.clinic_id || account?.clinic_id;
     if (activeClinicId) {
       try {
-        await setDoc(doc(db, 'patients', activeAccountId), sanitizeForFirestore({
-          patient_id: activeAccountId,
+        const patPayload = sanitizeForFirestore({
+          account_id: activeAccountId,
           clinic_id: activeClinicId,
           id_number: patientCode,
           display_id: patientCode,
@@ -263,7 +281,25 @@ export function PatientAuthProvider({ children }: { children: React.ReactNode })
           emergency_contact_phone: updates.emergency_contact_phone || account?.emergency_contact_phone || null,
           profile_completed: true,
           updated_at: nowIso,
-        }), { merge: true });
+        });
+
+        const patQ = query(
+          collection(db, 'patients'),
+          where('account_id', '==', activeAccountId),
+          where('clinic_id', '==', activeClinicId)
+        );
+        const patSnap = await getDocs(patQ);
+        if (!patSnap.empty) {
+          await updateDoc(doc(db, 'patients', patSnap.docs[0].id), patPayload);
+        } else {
+          // If no specific record for this clinic exists yet, create one
+          const newPatRef = doc(collection(db, 'patients'));
+          await setDoc(newPatRef, {
+            ...patPayload,
+            patient_id: newPatRef.id,
+            created_at: nowIso,
+          });
+        }
       } catch (e) {
         console.warn('Could not update patients collection doc:', e);
       }
@@ -289,7 +325,7 @@ export function PatientAuthProvider({ children }: { children: React.ReactNode })
         name: patName,
         phone: updates.phone || '',
         email: updates.email || null,
-        age: age || null,
+        age: updates.age !== undefined ? updates.age : (account?.age || null),
         dob: updates.dob || null,
         gender: updates.gender || null,
         blood_group: updates.blood_group || null,
@@ -326,46 +362,37 @@ export function PatientAuthProvider({ children }: { children: React.ReactNode })
   const selectClinic = useCallback(async (c: Clinic | null) => {
     setClinic(c);
     setClinicIdState(c ? c.clinic_id : null);
-    const activeAccountId = account?.account_id || user?.patient_account_id || (user?.user_id ? `pat_${user.user_id}` : null);
-    if (!activeAccountId) return;
-
-    try {
-      await updateDoc(doc(db, 'patient_accounts', activeAccountId), {
-        clinic_id: c ? c.clinic_id : null,
-        clinic_name: c ? c.name : null,
-        updated_at: new Date().toISOString(),
-      });
-    } catch (e) {
-      console.warn('Update patient_accounts clinic choice error:', e);
-    }
-
-    if (user?.user_id) {
-      try {
-        await updateDoc(doc(db, 'users', user.user_id), {
-          clinic_id: c ? c.clinic_id : null,
-          clinic_name: c ? c.name : null,
-          updated_at: new Date().toISOString(),
-        });
-      } catch (e) {
-        console.warn('Update users clinic choice error:', e);
-      }
-    }
-
     if (c) {
       try {
-        await setDoc(doc(db, 'patient_clinic_links', `${activeAccountId}_${c.clinic_id}`), sanitizeForFirestore({
-          account_id: activeAccountId,
-          clinic_id: c.clinic_id,
-          patient_id: activeAccountId,
-          name: account?.name || user?.name || 'Patient',
-          id_number: account?.id_number || '',
-          created_at: new Date().toISOString(),
-        }), { merge: true });
-      } catch (e) {
-        console.warn('Sync chosen clinic to patient_clinic_links error:', e);
+        localStorage.setItem('viitsa_active_clinic_id', c.clinic_id);
+      } catch {}
+      // Update local account immediately so UI reflects the selection instantaneously
+      setAccount(prev => prev ? { ...prev, clinic_id: c.clinic_id, clinic_name: c.name } : prev);
+      // Synchronize with global auth session
+      if (authSwitchClinic) {
+        authSwitchClinic(c).catch(console.warn);
+      } else if (authSetClinic) {
+        authSetClinic(c);
       }
+    } else {
+      try {
+        localStorage.removeItem('viitsa_active_clinic_id');
+      } catch {}
+      setAccount(prev => prev ? { ...prev, clinic_id: undefined, clinic_name: undefined } : prev);
+      if (authSetClinic) authSetClinic(null);
     }
-  }, [account, user]);
+
+    const activeAccountId = account?.account_id || user?.patient_account_id || (user?.user_id ? `pat_${user.user_id}` : null);
+    if (!activeAccountId || !c) return;
+
+    await switchPatientClinic({
+      accountId: activeAccountId,
+      targetClinic: c,
+      previousClinicId: clinic?.clinic_id || account?.clinic_id || null,
+      patientName: account?.name || user?.name || 'Patient',
+      userUid: user?.user_id,
+    });
+  }, [account, user, clinic, authSwitchClinic, authSetClinic]);
 
   const logout = useCallback(() => {
     setAccount(null);

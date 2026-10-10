@@ -16,13 +16,14 @@ import { HealthTimeline } from './HealthTimeline';
 import { PatientDoctorSearch } from './PatientDoctorSearch';
 import { PatientBottomNav, type PatientTab } from './PatientBottomNav';
 import { db } from '../lib/firebase';
-import { collection, query, where, onSnapshot } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, doc, updateDoc } from 'firebase/firestore';
 import type { TriageSummary } from '../lib/aiService';
+import { PATIENT_ROLES, CLINIC_ROLES, ADMIN_ROLES } from '../lib/types';
 
 type PatientScreen = 'landing' | 'auth' | 'app';
 
 function PatientInner() {
-  const { account, clinic, clinicId, setClinicId } = usePatientAuth();
+  const { account, clinic, clinicId, setClinicId, selectClinic } = usePatientAuth();
   const { user, loading: authLoading } = useAuth();
   const [screen, setScreen] = useState<PatientScreen>('app');
   const [pendingInvoiceCount, setPendingInvoiceCount] = useState(0);
@@ -65,6 +66,28 @@ function PatientInner() {
     }
   }, [account, screen]);
 
+  // Only brand-new registrations in the current session without a completed profile should see onboarding.
+  // Already registered patients directly open the dashboard!
+  const isNewRegistration = typeof window !== 'undefined' && sessionStorage.getItem('viitsa_is_new_registration') === 'true';
+  const isProfileComplete = user?.profile_completed === true || account?.profile_completed === true || !isNewRegistration;
+
+  // Auto-heal: Ensure already registered patients have profile_completed permanently set to true
+  useEffect(() => {
+    if (user && !isNewRegistration) {
+      if (user.profile_completed !== true || account?.profile_completed !== true) {
+        try {
+          if (user.user_id) {
+            updateDoc(doc(db, 'users', user.user_id), { profile_completed: true, updated_at: new Date().toISOString() }).catch(() => {});
+          }
+          const accId = account?.account_id || user.patient_account_id || `pat_${user.user_id}`;
+          if (accId) {
+            updateDoc(doc(db, 'patient_accounts', accId), { profile_completed: true, updated_at: new Date().toISOString() }).catch(() => {});
+          }
+        } catch {}
+      }
+    }
+  }, [user, account, isNewRegistration]);
+
   const handleBookWithSummary = (summary: TriageSummary) => {
     setPendingAISummary(summary);
     navigate('/patient/book');
@@ -102,14 +125,14 @@ function PatientInner() {
       <div className="min-h-screen bg-[#F5FAFA] flex items-center justify-center">
         <div className="inline-flex items-center gap-2 text-gray-500 text-sm">
           <span className="h-4 w-4 animate-spin rounded-full border-2 border-primary/30 border-t-primary" />
-          Loading...
+          Loading PatientApp auth...
         </div>
       </div>
     );
   }
 
   // If user is a clinic admin or doctor, redirect to clinic dashboard
-  if (user && user.role !== 'patient') {
+  if (user && (CLINIC_ROLES.includes(user.role as any) || ADMIN_ROLES.includes(user.role as any))) {
     return <Navigate to="/clinic/dashboard" replace />;
   }
 
@@ -130,22 +153,12 @@ function PatientInner() {
     );
   }
 
-  // Mandatory Profile Completion on First-Time Login
-  const isProfileComplete = Boolean(
-    account?.profile_completed ||
-    (account?.dob &&
-     account?.gender &&
-     account?.blood_group &&
-     account?.address &&
-     account?.emergency_contact_name &&
-     account?.emergency_contact_phone)
-  );
-
-  // If patient has not completed their mandatory profile, require completion before accessing dashboard
-  if (!guestMode && account && !isProfileComplete) {
+  // If patient is a brand-new registration who has not completed their profile, require completion
+  if (!guestMode && account && isNewRegistration && !isProfileComplete && user?.role !== 'patient_attendant') {
     return (
       <PatientOnboardingProfile
         onComplete={() => {
+          sessionStorage.removeItem('viitsa_is_new_registration');
           navigate('/patient/dashboard', { replace: true });
         }}
       />
@@ -155,15 +168,15 @@ function PatientInner() {
   return (
     <div className="relative">
       <Routes>
-        <Route path="dashboard" element={<PatientHome onTab={(t) => navigate(`/patient/${t === 'home' ? 'dashboard' : t}`)} clinicId={clinicId} />} />
-        <Route path="ai" element={<PatientAINavigator onTab={(t) => navigate(`/patient/${t === 'home' ? 'dashboard' : t}`)} clinicId={clinicId} patientId={patientId} onBookWithSummary={handleBookWithSummary} />} />
+        <Route path="dashboard" element={<PatientHome onTab={(t) => navigate(`/patient/${t === 'home' ? 'dashboard' : t}`)} clinicId={clinic?.clinic_id || clinicId} />} />
+        <Route path="ai" element={<PatientAINavigator onTab={(t) => navigate(`/patient/${t === 'home' ? 'dashboard' : t}`)} clinicId={clinic?.clinic_id || clinicId} patientId={patientId} onBookWithSummary={handleBookWithSummary} />} />
         <Route path="book" element={<PatientBooking onTab={(t) => { navigate(`/patient/${t === 'home' ? 'dashboard' : t}`); if (t === 'home') setPendingAISummary(null); }} clinic={clinic} patientId={patientId} aiSummary={pendingAISummary} />} />
         <Route path="records" element={<PatientRecords patientId={patientId} onTab={(t) => navigate(`/patient/${t === 'home' ? 'dashboard' : t}`)} />} />
         <Route path="payments" element={<PatientPayments patientId={patientId} onTab={(t) => navigate(`/patient/${t === 'home' ? 'dashboard' : t}`)} />} />
         <Route path="profile" element={<PatientProfile onTab={(t) => navigate(`/patient/${t === 'home' ? 'dashboard' : t}`)} />} />
         <Route path="family" element={<FamilyVault onTab={(t) => navigate(`/patient/${t === 'home' ? 'dashboard' : t}`)} />} />
-        <Route path="timeline" element={<HealthTimeline onTab={(t) => navigate(`/patient/${t === 'home' ? 'dashboard' : t}`)} patientId={patientId} clinicId={clinicId} />} />
-        <Route path="doctors" element={<PatientDoctorSearch onTab={(t) => navigate(`/patient/${t === 'home' ? 'dashboard' : t}`)} onSelectDoctor={(clinicObj, doctor) => navigate('/patient/book')} />} />
+        <Route path="timeline" element={<HealthTimeline onTab={(t) => navigate(`/patient/${t === 'home' ? 'dashboard' : t}`)} patientId={patientId} clinicId={clinic?.clinic_id || clinicId} />} />
+        <Route path="doctors" element={<PatientDoctorSearch onTab={(t) => navigate(`/patient/${t === 'home' ? 'dashboard' : t}`)} onSelectDoctor={async (clinicObj, doctor) => { await selectClinic(clinicObj); navigate('/patient/book'); }} />} />
         <Route index element={<Navigate to="/patient/dashboard" replace />} />
         <Route path="*" element={<Navigate to="/patient/dashboard" replace />} />
       </Routes>

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { LogOut, Menu, X, Bell, ChevronDown, CalendarDays, Home } from 'lucide-react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../lib/auth';
@@ -13,6 +13,25 @@ interface AppShellProps {
   children: React.ReactNode;
 }
 
+const routeLoaders: Record<string, () => Promise<any>> = {
+  dashboard: () => import('../screens/DashboardScreen'),
+  appointments: () => import('../screens/AppointmentsScreen'),
+  billing: () => import('../screens/BillingScreen'),
+  patients: () => import('../screens/PatientsScreen'),
+  inventory: () => import('../screens/InventoryScreen'),
+  navigator: () => import('../screens/AINavigatorScreen'),
+  analytics: () => import('../screens/AnalyticsScreen'),
+  settings: () => import('../screens/SettingsScreen'),
+};
+
+function prefetchRoute(key: string) {
+  try {
+    if (routeLoaders[key]) {
+      routeLoaders[key]().catch(() => {});
+    }
+  } catch {}
+}
+
 export function AppShell({ children }: AppShellProps) {
   const { user, clinic, logout } = useAuth();
   const { urgentQueue, pendingBills, criticalInventory } = useClinicData();
@@ -21,9 +40,24 @@ export function AppShell({ children }: AppShellProps) {
   const location = useLocation();
   const currentPath = location.pathname.split('/').pop();
 
-  if (!user || !clinic) return null;
+  // Idle prefetch primary clinic pages for sub-second zero-wait navigation
+  useEffect(() => {
+    const idlePrefetch = () => {
+      ['dashboard', 'appointments', 'billing', 'patients'].forEach((k) => prefetchRoute(k));
+    };
+    if ('requestIdleCallback' in window) {
+      const handle = (window as any).requestIdleCallback(idlePrefetch, { timeout: 2000 });
+      return () => (window as any).cancelIdleCallback?.(handle);
+    } else {
+      const timer = setTimeout(idlePrefetch, 1000);
+      return () => clearTimeout(timer);
+    }
+  }, []);
 
-  const role = user.role as Role;
+  if (!user) return null;
+
+  const role = (user.role || 'patient') as Role;
+  const clinicName = clinic?.name || user.clinic_name || 'VIITSA Health Clinic';
   const items = NAV_ITEMS.filter((n) => n.roles.includes(role));
 
   const badgeFor = (key: NavKey): number => {
@@ -43,6 +77,8 @@ export function AppShell({ children }: AppShellProps) {
           <Link
             key={item.key}
             to={`/clinic/${item.key}`}
+            onMouseEnter={() => prefetchRoute(item.key)}
+            onFocus={() => prefetchRoute(item.key)}
             onClick={() => setMobileOpen(false)}
             className={`nav-item w-full text-left ${active ? 'nav-item-active' : ''}`}
           >
@@ -67,15 +103,15 @@ export function AppShell({ children }: AppShellProps) {
           <ViitsaLogo size="md" />
           <div className="mt-3 pl-1">
             <p className="text-[11px] text-ink-subtle uppercase tracking-wide">Clinic</p>
-            <p className="text-sm font-semibold text-ink truncate">{clinic.name}</p>
+            <p className="text-sm font-semibold text-ink truncate">{clinicName}</p>
           </div>
         </div>
         <NavList />
         <div className="border-t border-black/5 p-3">
           <div className="flex items-center gap-2.5 px-2 py-2 mb-1">
-            <Avatar name={user.name} color={user.avatar_color} size={36} />
+            <Avatar name={user.name || 'User'} color={user.avatar_color} size={36} />
             <div className="min-w-0 flex-1">
-              <p className="text-sm font-semibold text-ink truncate">{user.name}</p>
+              <p className="text-sm font-semibold text-ink truncate">{user.name || 'User'}</p>
               <p className="text-xs text-ink-muted capitalize">{role}</p>
             </div>
           </div>
@@ -122,7 +158,7 @@ export function AppShell({ children }: AppShellProps) {
                 <Menu size={20} />
               </button>
               <div className="min-w-0">
-                <p className="text-sm font-semibold text-ink truncate">{clinic.name}</p>
+                <p className="text-sm font-semibold text-ink truncate">{clinicName}</p>
                 <p className="text-xs text-ink-muted hidden sm:flex items-center gap-1">
                   <CalendarDays size={12} />
                   {formatLongDate(new Date())}

@@ -7,8 +7,9 @@ import { useClinicData } from '../lib/useClinicData';
 import { useToast } from '../lib/toast';
 import { Modal } from '../components/Modal';
 import { EmptyState, Loading, SectionHeader, Avatar } from '../components/ui';
-import { formatDate } from '../lib/format';
+import { formatDate, calculateAge, formatDobForInput, localDateISO } from '../lib/format';
 import type { Patient } from '../lib/types';
+import { PatientDetailModal } from '../components/PatientDetailModal';
 
 const CHRONIC = ['Diabetes', 'Hypertension', 'Heart disease', 'Asthma', 'Other'];
 
@@ -26,7 +27,7 @@ export function PatientsScreen() {
     );
   }, [patients, query]);
 
-  if (loading) return <Loading label="Loading patients…" />;
+
 
   return (
     <div className="space-y-5">
@@ -69,9 +70,16 @@ export function PatientsScreen() {
                 <div className="flex items-center gap-3 mb-3">
                   <Avatar name={p.name} size={40} color="#0F6E56" />
                   <div className="min-w-0 flex-1">
-                    <p className="text-sm font-semibold text-ink truncate">{p.name}</p>
+                    <div className="flex items-center gap-2">
+                      <p className="text-sm font-semibold text-ink truncate">{p.name}</p>
+                      {p.status === 'left' && (
+                        <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-red-100 text-red-700 whitespace-nowrap">
+                          Left Clinic
+                        </span>
+                      )}
+                    </div>
                     <p className="text-xs text-ink-muted">
-                      {p.age ?? '—'} yrs · {p.gender ?? '—'}
+                      {p.age ?? (p.dob ? calculateAge(p.dob) : '—')} yrs{p.dob ? ` · DOB: ${formatDate(p.dob)}` : ''} · {p.gender ?? '—'}
                     </p>
                   </div>
                   <ChevronRight size={16} className="text-ink-subtle opacity-0 group-hover:opacity-100" />
@@ -112,6 +120,7 @@ export function PatientsScreen() {
 
 const EMPTY_FORM = {
   name: '',
+  dob: '',
   age: '',
   gender: 'Male' as 'Male' | 'Female' | 'Other',
   phone: '',
@@ -143,6 +152,27 @@ function PatientFormModal({
 
   const reset = () => setForm(EMPTY_FORM);
 
+  const handleDobChange = (dobVal: string) => {
+    const formatted = formatDobForInput(dobVal);
+    let calculatedAge = form.age;
+    if (dobVal) {
+      const computed = calculateAge(dobVal);
+      if (computed !== null) calculatedAge = String(computed);
+    }
+    setForm((f) => ({ ...f, dob: formatted, age: calculatedAge }));
+  };
+
+  const handleAgeChange = (ageVal: string) => {
+    const cleanAge = ageVal.replace(/\D/g, '').slice(0, 3);
+    const num = parseInt(cleanAge, 10);
+    let newDob = form.dob;
+    if (!form.dob && !isNaN(num) && num >= 0 && num <= 125) {
+      const approxYear = new Date().getFullYear() - num;
+      newDob = `${approxYear}-01-01`;
+    }
+    setForm((f) => ({ ...f, age: cleanAge, dob: newDob }));
+  };
+
   const toggleChronic = (c: string) => {
     setForm((f) => ({
       ...f,
@@ -166,15 +196,12 @@ function PatientFormModal({
       toast('Name and phone are required.', 'error');
       return;
     }
-    if (!form.terms) {
-      toast('Please accept the terms to register the patient.', 'error');
-      return;
-    }
     setSaving(true);
     const conditions = buildConditions();
     const payload = {
       clinic_id: clinicId,
       name: form.name.trim(),
+      dob: form.dob || null,
       age: form.age ? parseInt(form.age, 10) : null,
       gender: form.gender,
       phone: form.phone.trim(),
@@ -230,8 +257,28 @@ function PatientFormModal({
               <input className="input" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} placeholder="+91 98765 43210" />
             </div>
             <div>
-              <label className="label">Age</label>
-              <input type="number" min="0" max="120" className="input" value={form.age} onChange={(e) => setForm({ ...form, age: e.target.value })} />
+              <label className="label">Date of Birth (DOB)</label>
+              <input
+                type="date"
+                className="input"
+                max={localDateISO(new Date())}
+                value={formatDobForInput(form.dob)}
+                onChange={(e) => handleDobChange(e.target.value)}
+              />
+            </div>
+            <div>
+              <label className="label">
+                Age {form.dob && <span className="text-[10px] text-teal-700 font-normal">(Auto-calculated)</span>}
+              </label>
+              <input
+                type="number"
+                min="0"
+                max="125"
+                className="input"
+                placeholder="Age in years"
+                value={form.age}
+                onChange={(e) => handleAgeChange(e.target.value)}
+              />
             </div>
             <div>
               <label className="label">Gender</label>
@@ -321,58 +368,5 @@ function PatientFormModal({
         </label>
       </form>
     </Modal>
-  );
-}
-
-function PatientDetailModal({ patient, onClose }: { patient: Patient | null; onClose: () => void }) {
-  if (!patient) return null;
-  return (
-    <Modal
-      open={!!patient}
-      onClose={onClose}
-      title={patient.name}
-      subtitle={`${patient.age ?? '—'} yrs · ${patient.gender ?? '—'} · ${patient.blood_group ?? 'Unknown blood group'}`}
-      size="lg"
-    >
-      <div className="space-y-4">
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-          <Detail label="Phone" value={patient.phone ?? '—'} />
-          <Detail label="Email" value={patient.email ?? '—'} />
-          <Detail label="Patient ID" value={patient.patient_id.slice(0, 8).toUpperCase()} />
-          <Detail label="Registered" value={formatDate(patient.created_at)} />
-        </div>
-        <div className="rounded-lg border border-black/5 p-3">
-          <p className="label">Address</p>
-          <p className="text-sm text-ink">{patient.address ?? 'Not provided'}</p>
-        </div>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <div className="rounded-lg bg-danger-bg/40 border border-danger/15 p-3">
-            <p className="label text-danger">Allergies</p>
-            <p className="text-sm text-ink">{patient.allergies || 'None'}</p>
-          </div>
-          <div className="rounded-lg bg-warning-bg/40 border border-warning/15 p-3">
-            <p className="label text-warning">Chronic conditions</p>
-            <p className="text-sm text-ink">{patient.chronic_conditions || 'None'}</p>
-          </div>
-        </div>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <Detail label="Emergency contact" value={patient.emergency_contact_name ?? '—'} />
-          <Detail label="Emergency phone" value={patient.emergency_contact_phone ?? '—'} />
-        </div>
-        <div className="flex items-center gap-2 text-xs text-ink-subtle rounded-lg bg-primary-50/50 p-3">
-          <FileText size={12} />
-          <span>Patient data is stored locally within the clinic's VIITSA database.</span>
-        </div>
-      </div>
-    </Modal>
-  );
-}
-
-function Detail({ label, value }: { label: string; value: string }) {
-  return (
-    <div>
-      <p className="label">{label}</p>
-      <p className="text-sm text-ink">{value}</p>
-    </div>
   );
 }

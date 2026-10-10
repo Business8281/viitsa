@@ -112,7 +112,7 @@ export function normalizePhone(phone: string | null | undefined): string {
 /**
  * Generates an easy-to-identify human-readable ID number (e.g. PAT-10482, CLN-89210, ADM-47201)
  */
-export function generateReadableId(prefix: 'PAT' | 'ADM' | 'CLN' | 'DOC', seed?: string): string {
+export function generateReadableId(prefix: 'PAT' | 'ADM' | 'CLN' | 'DOC' | 'STF', seed?: string): string {
   if (seed) {
     let hash = 0;
     for (let i = 0; i < seed.length; i++) {
@@ -125,8 +125,8 @@ export function generateReadableId(prefix: 'PAT' | 'ADM' | 'CLN' | 'DOC', seed?:
   return `${prefix}-${randomNum}`;
 }
 
-// Local storage caching for zero-downtime / permission resilience
-function getCachedIdentity(uid: string): IdentityResult | null {
+// Local storage caching for zero-downtime / sub-second instant loads
+export function getCachedIdentity(uid: string): IdentityResult | null {
   try {
     const rawU = localStorage.getItem(`viitsa_user_${uid}`);
     const rawC = localStorage.getItem(`viitsa_clinic_${uid}`);
@@ -142,7 +142,7 @@ function getCachedIdentity(uid: string): IdentityResult | null {
   return null;
 }
 
-function saveCachedIdentity(res: IdentityResult) {
+export function saveCachedIdentity(res: IdentityResult) {
   try {
     localStorage.setItem(`viitsa_user_${res.user.user_id}`, JSON.stringify(res.user));
     if (res.clinic) {
@@ -284,7 +284,7 @@ export async function resolveCanonicalIdentity(
       linked_uids: [uid],
       auth_providers: [providerId],
       patient_account_id: patientAccountId,
-      profile_completed: patData.profile_completed || false,
+      profile_completed: true,
     };
 
     canonicalUser.role_selected = true;
@@ -298,6 +298,7 @@ export async function resolveCanonicalIdentity(
       await updateDoc(doc(db, 'patient_accounts', patientAccountId), sanitizeForFirestore({
         auth_user_id: uid,
         otp_verified: true,
+        profile_completed: true,
         id_number: patientCode,
         display_id: patientCode,
         patient_code: patientCode,
@@ -312,17 +313,19 @@ export async function resolveCanonicalIdentity(
     const res: IdentityResult = {
       user: canonicalUser,
       clinic,
-      patientAccount: { ...patData, account_id: patientAccountId, auth_user_id: uid, id_number: patientCode, display_id: patientCode, patient_code: patientCode, full_name: patName },
+      patientAccount: { ...patData, account_id: patientAccountId, auth_user_id: uid, id_number: patientCode, display_id: patientCode, patient_code: patientCode, full_name: patName, profile_completed: true },
       isNewUser: false,
     };
     saveCachedIdentity(res);
     return res;
   }
 
-  // 6. Check if cached identity is already available
-  const cached = getCachedIdentity(uid);
-  if (cached) {
-    return cached;
+  // 6. Check if cached identity is available ONLY when strictly offline
+  if (typeof navigator !== 'undefined' && !navigator.onLine) {
+    const cached = getCachedIdentity(uid);
+    if (cached) {
+      return cached;
+    }
   }
 
   // 7. Completely new user registration
@@ -367,7 +370,9 @@ async function handleExistingUser(
   }
 
   if (!existingUser.id_number) {
-    const prefix = existingUser.role === 'admin' ? 'ADM' : (existingUser.role === 'company_admin' ? 'ADM' : 'PAT');
+    const isClinicRole = ['clinic_admin', 'clinic_doctor', 'clinic_staff'].includes(existingUser.role);
+    const isAdminRole = ['company_admin', 'company_manager', 'company_staff'].includes(existingUser.role);
+    const prefix = isClinicRole || isAdminRole ? 'ADM' : 'PAT';
     const genCode = generateReadableId(prefix, canonicalDocId);
     updates.id_number = genCode;
     updates.display_id = genCode;
@@ -375,8 +380,16 @@ async function handleExistingUser(
   if (!existingUser.full_name) {
     updates.full_name = existingUser.name;
   }
+  if (!existingUser.role || (existingUser.role as any) === 'unassigned') {
+    updates.role = 'patient';
+    existingUser.role = 'patient';
+  }
+  
   if (!existingUser.user_type) {
-    updates.user_type = existingUser.role === 'admin' ? 'clinic_admin' : (existingUser.role === 'patient' ? 'patient' : 'company_admin');
+    const roleToCheck = updates.role || existingUser.role;
+    const isClinicRole = ['clinic_admin', 'clinic_doctor', 'clinic_staff'].includes(roleToCheck);
+    const isAdminRole = ['company_admin', 'company_manager', 'company_staff'].includes(roleToCheck);
+    updates.user_type = isAdminRole ? 'company_admin' : (isClinicRole ? 'clinic_admin' : 'patient');
   }
   updates.updated_at = new Date().toISOString();
 
@@ -441,7 +454,76 @@ async function handleExistingUser(
       }
     }
 
-    if (patientAccount) {
+    if (!patientAccount) {
+      const patDocId = existingUser.patient_account_id || `pat_${canonicalDocId}`;
+      try {
+        const fallbackSnap = await getDoc(doc(db, 'patient_accounts', patDocId));
+        if (fallbackSnap.exists()) {
+          patientAccount = { ...fallbackSnap.data(), account_id: fallbackSnap.id } as PatientAccount;
+        }
+      } catch (e) {
+        console.warn('Fallback read patient account warning:', e);
+      }
+
+      if (!patientAccount) {
+        const nowIso = new Date().toISOString();
+        const pCode = existingUser.id_number || generateReadableId('PAT', canonicalDocId);
+        
+        patientAccount = {
+          account_id: patDocId,
+          id_number: pCode,
+          display_id: pCode,
+          patient_code: pCode,
+          phone: existingUser.phone || '',
+          name: existingUser.name,
+          full_name: existingUser.name,
+          email: existingUser.email || null,
+          age: null,
+          dob: null,
+          gender: null,
+          blood_group: null,
+          address: null,
+          current_medications: null,
+          allergies: 'None',
+          chronic_conditions: 'None',
+          emergency_contact_name: null,
+          emergency_contact_phone: null,
+          otp_code: '',
+          otp_verified: true,
+          auth_user_id: canonicalDocId,
+          profile_completed: true,
+          created_at: nowIso,
+          updated_at: nowIso,
+        };
+
+        try {
+          await setDoc(doc(db, 'patient_accounts', patDocId), sanitizeForFirestore(patientAccount), { merge: true });
+        } catch (e) {
+          console.warn('Create missing patient account warning:', e);
+        }
+      }
+
+      if (existingUser.patient_account_id !== patDocId) {
+        existingUser.patient_account_id = patDocId;
+        try {
+          await updateDoc(doc(db, 'users', canonicalDocId), { patient_account_id: patDocId, updated_at: new Date().toISOString() });
+        } catch (e) {
+          console.warn('Update user patient_account_id warning:', e);
+        }
+      }
+    } else {
+      if (existingUser.patient_account_id !== patientAccount.account_id) {
+        existingUser.patient_account_id = patientAccount.account_id;
+        try {
+          await updateDoc(doc(db, 'users', canonicalDocId), {
+            patient_account_id: patientAccount.account_id,
+            updated_at: new Date().toISOString()
+          });
+        } catch (e) {
+          console.warn('Sync user patient_account_id warning:', e);
+        }
+      }
+
       if (!patientAccount.id_number || !patientAccount.patient_code || !patientAccount.full_name) {
         const pCode = patientAccount.id_number || generateReadableId('PAT', patientAccount.account_id);
         patientAccount.id_number = pCode;
@@ -461,10 +543,27 @@ async function handleExistingUser(
     }
   }
 
+  // Already registered user: permanently mark profile_completed as true
+  if (existingUser.profile_completed !== true) {
+    existingUser.profile_completed = true;
+    try {
+      await updateDoc(doc(db, 'users', canonicalDocId), { profile_completed: true, updated_at: new Date().toISOString() });
+    } catch {}
+  }
+  if (patientAccount && patientAccount.profile_completed !== true) {
+    patientAccount.profile_completed = true;
+    try {
+      await updateDoc(doc(db, 'patient_accounts', patientAccount.account_id), { profile_completed: true, updated_at: new Date().toISOString() });
+    } catch {}
+  }
+
   return {
-    user: { ...existingUser, user_id: canonicalDocId, role_selected: true },
+    user: { ...existingUser, user_id: canonicalDocId, role_selected: true, profile_completed: true },
     clinic,
-    patientAccount,
+    patientAccount: patientAccount ? {
+      ...patientAccount,
+      profile_completed: true,
+    } : null,
     isNewUser: false,
   };
 }
@@ -480,7 +579,7 @@ async function createNewCanonicalUser(
   phone: string,
   onboardingData?: OnboardingData
 ): Promise<IdentityResult> {
-  const role: Role = onboardingData?.role || 'patient';
+  let role: Role = (onboardingData?.role as any) === 'unassigned' ? 'patient' : (onboardingData?.role || 'patient');
   const name = onboardingData?.name || firebaseUser.displayName || email.split('@')[0] || (phone ? `User ${phone.slice(-4)}` : 'User');
 
   // CRITICAL: Prevent Company Admin from registering via Google
@@ -497,7 +596,8 @@ async function createNewCanonicalUser(
     const clinicCode = generateReadableId('CLN', firebaseUser.uid);
     const clinicName = onboardingData?.clinicName || 'Viitsa Health Enterprise HQ';
     try {
-      const clinicDocRef = await addDoc(collection(db, 'clinics'), {
+      clinicId = `cln_${firebaseUser.uid}`;
+      await setDoc(doc(db, 'clinics', clinicId), {
         clinic_code: clinicCode,
         id_number: clinicCode,
         display_id: clinicCode,
@@ -513,7 +613,7 @@ async function createNewCanonicalUser(
         created_at: nowIso,
         updated_at: nowIso,
       });
-      clinicId = clinicDocRef.id;
+      // clinicId is already set above
     } catch (e) {
       console.warn('Create company clinic warning:', e);
     }
@@ -534,11 +634,12 @@ async function createNewCanonicalUser(
       created_at: nowIso,
       updated_at: nowIso,
     };
-  } else if (role === 'admin') {
+  } else if (role === 'clinic_admin') {
     const clinicCode = generateReadableId('CLN', firebaseUser.uid);
     const clinicName = onboardingData?.clinicName || `${name}'s Clinic`;
     try {
-      const clinicDocRef = await addDoc(collection(db, 'clinics'), sanitizeForFirestore({
+      clinicId = `cln_${firebaseUser.uid}`;
+      await setDoc(doc(db, 'clinics', clinicId), sanitizeForFirestore({
         clinic_code: clinicCode,
         id_number: clinicCode,
         display_id: clinicCode,
@@ -555,7 +656,7 @@ async function createNewCanonicalUser(
         created_at: nowIso,
         updated_at: nowIso,
       }));
-      clinicId = clinicDocRef.id;
+      // clinicId is already set above
     } catch (e) {
       console.warn('Create clinic warning:', e);
     }
@@ -577,7 +678,7 @@ async function createNewCanonicalUser(
       created_at: nowIso,
       updated_at: nowIso,
     };
-  } else {
+  } else if (role === 'patient') {
     // Role is 'patient' - DO NOT automatically link to any clinic
     // Patients choose their clinic explicitly from their dashboard
     clinic = null;
@@ -635,12 +736,29 @@ async function createNewCanonicalUser(
       created_at: nowIso,
       updated_at: nowIso,
     };
+  } else {
+    // Other roles (doctor, staff)
+    clinic = null;
+    clinicId = '';
+    patientAccount = null;
   }
 
   const hasExplicitRole = Boolean(onboardingData?.role);
-  const userCode = role === 'admin' 
+  
+  const isClinicRole = ['clinic_admin', 'clinic_doctor', 'clinic_staff'].includes(role);
+  const isAdminRole = ['company_admin', 'company_manager', 'company_staff'].includes(role);
+  
+  const userCode = isClinicRole 
     ? generateReadableId('ADM', firebaseUser.uid) 
-    : (role === 'company_admin' ? generateReadableId('ADM', firebaseUser.uid) : generateReadableId('PAT', firebaseUser.uid));
+    : (isAdminRole ? generateReadableId('ADM', firebaseUser.uid) : generateReadableId('PAT', firebaseUser.uid));
+
+  let resolvedUserType = 'patient';
+  if (isAdminRole) resolvedUserType = 'company_admin';
+  else if (isClinicRole) resolvedUserType = 'clinic_admin';
+
+  let avatarColor = '#2563EB';
+  if (isAdminRole) avatarColor = '#7C3AED';
+  else if (isClinicRole) avatarColor = '#0F6E56';
 
   const canonicalUser: User = {
     user_id: firebaseUser.uid,
@@ -650,13 +768,13 @@ async function createNewCanonicalUser(
     full_name: name,
     email: email || '',
     role: role,
-    user_type: role === 'company_admin' ? 'company_admin' : (role === 'admin' ? 'clinic_admin' : 'patient'),
+    user_type: resolvedUserType as User['user_type'],
     id_number: userCode,
     display_id: userCode,
     phone: phone || null,
     specialisation: null,
     active: true,
-    avatar_color: role === 'company_admin' ? '#7C3AED' : (role === 'admin' ? '#0F6E56' : '#2563EB'),
+    avatar_color: avatarColor,
     created_at: nowIso,
     updated_at: nowIso,
     linked_uids: [firebaseUser.uid],
@@ -664,7 +782,7 @@ async function createNewCanonicalUser(
     patient_account_id: patientAccount?.account_id || null,
     profile_completed: false,
     role_selected: hasExplicitRole,
-    clinic_setup_complete: role === 'admin' ? false : undefined,
+    clinic_setup_complete: role === 'clinic_admin' ? false : undefined,
   };
 
   try {

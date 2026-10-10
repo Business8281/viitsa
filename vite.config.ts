@@ -4,10 +4,20 @@ import react from '@vitejs/plugin-react';
 export default defineConfig({
   plugins: [react()],
   optimizeDeps: {
-    exclude: ['lucide-react'],
+    include: [
+      'react',
+      'react-dom',
+      'react-router-dom',
+      'firebase/app',
+      'firebase/auth',
+      'firebase/firestore',
+      'lucide-react',
+    ],
   },
   build: {
-    chunkSizeWarningLimit: 800,
+    target: 'esnext',
+    cssCodeSplit: true,
+    chunkSizeWarningLimit: 1000,
     rollupOptions: {
       output: {
         manualChunks(id) {
@@ -34,16 +44,22 @@ export default defineConfig({
           if (id.includes('node_modules/lucide-react')) {
             return 'lucide-vendor';
           }
+          if (id.includes('jspdf') || id.includes('html2canvas')) {
+            return 'pdf-vendor';
+          }
         },
       },
     },
   },
-  // SPA fallback so /patient route serves index.html
   server: {
     historyApiFallback: true,
+    headers: {
+      'Cache-Control': 'no-store, no-cache, must-revalidate',
+    },
   },
-  // Build output for SPA — all routes serve index.html
   preview: {
-    // historyApiFallback not in preview, but handled by the host
+    headers: {
+      'Cache-Control': 'public, max-age=31536000, immutable',
+    },
   },
 });
