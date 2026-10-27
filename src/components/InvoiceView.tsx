@@ -85,7 +85,7 @@ export function InvoiceView({ invoice, clinic, patient, doctor, onClose }: Props
         console.warn('PDF upload error:', uErr);
       }
 
-      const loginUrl = `${window.location.origin}/login`;
+      const loginUrl = 'https://viitsa.com/login';
       const text = `*Payment Invoice — ${c?.name ?? 'Clinic'}*\n\n` +
         `👤 Patient: ${p?.name ?? 'Patient'}\n` +
         `🧾 Invoice No: ${idStr}\n` +
@@ -141,7 +141,7 @@ export function InvoiceView({ invoice, clinic, patient, doctor, onClose }: Props
         console.warn('PDF upload:', uErr);
       }
 
-      const loginUrl = `${window.location.origin}/login`;
+      const loginUrl = 'https://viitsa.com/login';
 
       const res = await sendEmail({
         to: targetEmail.trim(),
@@ -552,7 +552,7 @@ export function InvoiceView({ invoice, clinic, patient, doctor, onClose }: Props
                 </div>
                 <div className="pl-5 space-y-1">
                   <p>📎 <strong>Official PDF Invoice:</strong> Attached directly to email</p>
-                  <p>🔐 <strong>Patient Portal Login:</strong> {typeof window !== 'undefined' ? `${window.location.origin}/login` : '/login'}</p>
+                  <p>🔐 <strong>Patient Portal Login:</strong> https://viitsa.com/login</p>
                   <p>📄 <strong>Online View Link:</strong> High-resolution cloud invoice link</p>
                 </div>
               </div>

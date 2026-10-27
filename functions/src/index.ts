@@ -6,13 +6,13 @@ import Razorpay from "razorpay";
 import * as crypto from "crypto";
 import * as dotenv from "dotenv";
 
-import { aiChat } from './aiChat';
-import { sendInstantEmail } from './email';
-import { createClinicSubscription, razorpayWebhook } from './razorpay';
-
-export { aiChat, sendInstantEmail, createClinicSubscription, razorpayWebhook };
-
 dotenv.config();
+
+import { aiChat } from './aiChat';
+import { sendInstantEmail, sendVerificationEmail, sendPasswordResetEmail } from './email';
+import { createClinicSubscription, cancelClinicSubscription, razorpayWebhook } from './razorpay';
+
+export { aiChat, sendInstantEmail, sendVerificationEmail, sendPasswordResetEmail, createClinicSubscription, cancelClinicSubscription, razorpayWebhook };
 
 if (!admin.apps.length) {
   admin.initializeApp();

@@ -276,12 +276,25 @@ export function PatientHome({ onTab, clinicId }: Props) {
                 <p className="text-xs text-gray-500">{clinic.city || clinic.address || 'Clinic registered'}</p>
               </div>
             </div>
-            <button
-              onClick={() => { setShowClinicPicker(true); fetchClinics(); }}
-              className="text-xs font-semibold text-primary px-3 py-1.5 rounded-xl border border-primary/20 hover:bg-primary/5 transition-colors"
-            >
-              Switch
-            </button>
+            <div className="flex items-center gap-1.5 shrink-0">
+              <button
+                onClick={() => { setShowClinicPicker(true); fetchClinics(); }}
+                className="text-xs font-semibold text-primary px-3 py-1.5 rounded-xl border border-primary/20 hover:bg-primary/5 transition-colors"
+              >
+                Switch
+              </button>
+              <button
+                onClick={async () => {
+                  if (window.confirm(`Disconnect from ${clinic.name}? You can reconnect or choose another clinic anytime.`)) {
+                    await selectClinic(null);
+                  }
+                }}
+                className="text-xs font-semibold text-rose-600 px-3 py-1.5 rounded-xl border border-rose-200 hover:bg-rose-50 transition-colors"
+                title="Disconnect from clinic"
+              >
+                Exit
+              </button>
+            </div>
           </div>
         ) : (
           <div className="bg-gradient-to-r from-teal-50 to-emerald-50 rounded-2xl border border-teal-100 p-4 flex items-center justify-between shadow-sm">
@@ -570,6 +583,20 @@ export function PatientHome({ onTab, clinicId }: Props) {
                 })
               )}
             </div>
+
+            {clinic && (
+              <div className="pt-3 mt-2 border-t border-gray-100">
+                <button
+                  onClick={async () => {
+                    await selectClinic(null);
+                    setShowClinicPicker(false);
+                  }}
+                  className="w-full py-2.5 rounded-xl border border-rose-200 text-rose-600 text-xs font-semibold hover:bg-rose-50 transition-colors"
+                >
+                  Disconnect from {clinic.name} (Exit)
+                </button>
+              </div>
+            )}
           </div>
         </div>
       )}

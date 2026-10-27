@@ -4,13 +4,31 @@ import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager
 import { getStorage } from "firebase/storage";
 import { getFunctions } from "firebase/functions";
 
+const getEnv = (key: string, fallback: string = ''): string => {
+  try {
+    if (typeof import.meta !== 'undefined' && (import.meta as any)?.env?.[key]) {
+      return (import.meta as any).env[key];
+    }
+  } catch {
+    // import.meta may not be available in non-Vite environments
+  }
+  try {
+    if (typeof process !== 'undefined' && process?.env?.[key]) {
+      return process.env[key] as string;
+    }
+  } catch {
+    // process may not be available in browser environments
+  }
+  return fallback;
+};
+
 export const firebaseConfig = {
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
-  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
-  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
-  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
-  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
-  appId: import.meta.env.VITE_FIREBASE_APP_ID
+  apiKey: getEnv('VITE_FIREBASE_API_KEY', 'AIzaSyD9-2htAfkvRH6cKsDHwBBNGh3Up-4hGs4'),
+  authDomain: getEnv('VITE_FIREBASE_AUTH_DOMAIN', 'viitsadb.firebaseapp.com'),
+  projectId: getEnv('VITE_FIREBASE_PROJECT_ID', 'viitsadb'),
+  storageBucket: getEnv('VITE_FIREBASE_STORAGE_BUCKET', 'viitsadb.firebasestorage.app'),
+  messagingSenderId: getEnv('VITE_FIREBASE_MESSAGING_SENDER_ID', '521152211314'),
+  appId: getEnv('VITE_FIREBASE_APP_ID', '1:521152211314:web:78d9850ea0386121a395eb')
 };
 
 export const app = initializeApp(firebaseConfig);
@@ -24,7 +42,7 @@ try {
       tabManager: persistentMultipleTabManager(),
     }),
   });
-} catch (e) {
+} catch {
   // Graceful fallback for environments with locked IndexedDB or existing instances
   firestoreDb = getFirestore(app);
 }

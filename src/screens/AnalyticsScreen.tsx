@@ -29,7 +29,7 @@ export function AnalyticsScreen() {
     const activeClinicId = clinic?.clinic_id || user?.clinic_id || DEFAULT_CLINIC_ID;
     const unsub = onSnapshot(collection(db, 'consultations'), (snap) => {
       const docs = snap.docs.map(d => ({ ...d.data(), id: d.id, consult_id: d.id } as unknown as Consultation));
-      const filtered = docs.filter(c => !c.clinic_id || c.clinic_id === activeClinicId || activeClinicId === DEFAULT_CLINIC_ID);
+      const filtered = docs.filter(c => Boolean(activeClinicId && c.clinic_id === activeClinicId));
       setConsults(filtered);
       setConsultsLoading(false);
     }, (err) => {

@@ -57,7 +57,7 @@ export function SubscriptionInvoiceView({ subscription, clinic, onClose }: Props
       setIsDownloading('whatsapp');
       const blob = await generateBlob();
       const file = new File([blob], `Invoice_${idStr}.pdf`, { type: 'application/pdf' });
-      const loginUrl = `${window.location.origin}/clinic/login`;
+      const loginUrl = 'https://viitsa.com/clinic/login';
       const msg = `*Viitsa Pro Subscription Invoice*\nInvoice No: ${idStr}\n\n🔐 Login to your Clinic Account:\n${loginUrl}\n\n— VIITSA`;
 
       if (typeof navigator !== 'undefined' && navigator.canShare && navigator.canShare({ files: [file] })) {
@@ -82,7 +82,7 @@ export function SubscriptionInvoiceView({ subscription, clinic, onClose }: Props
       setIsDownloading('email');
       const blob = await generateBlob();
       const file = new File([blob], `Invoice_${idStr}.pdf`, { type: 'application/pdf' });
-      const loginUrl = `${window.location.origin}/clinic/login`;
+      const loginUrl = 'https://viitsa.com/clinic/login';
       const subject = `Viitsa Pro Subscription Invoice - ${idStr}`;
       const body = `Hello,\n\nPlease find your Viitsa Pro subscription invoice: ${idStr}.\n\n🔐 Login to your Clinic Account:\n${loginUrl}\n\n(The PDF file has been downloaded to your computer)\n\nThank you,\nVIITSA Team`;
 

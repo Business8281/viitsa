@@ -15,41 +15,32 @@ service cloud.firestore {
         );
     }
 
-    // Users: authenticated user can read/write their own document
-    // Company admin can read all users
-    // Users: authenticated user can read/write their own document
-    // Public read for QR walkin to see doctors
+    // Users: authenticated user can read and write
     match /users/{userId} {
       allow read: if true;
-      allow write: if request.auth != null && (
-        request.auth.uid == userId 
-        || isCompanyAdmin()
-        || (
-          exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
-          (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'clinic_admin' || get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin') &&
-          request.resource.data.clinic_id == get(/databases/$(database)/documents/users/$(request.auth.uid)).data.clinic_id &&
-          (resource == null || resource.data.clinic_id == get(/databases/$(database)/documents/users/$(request.auth.uid)).data.clinic_id)
-        )
-      );
+      allow write: if request.auth != null;
     }
 
-    // Clinics: owner can read/write; any authenticated user can read (for patient clinic picker)
-    // Company admin can read/write all clinics
+    // Clinics: authenticated users can read and write clinic documents
     match /clinics/{clinicId} {
       allow read: if true;
-      allow create: if request.auth != null;
-      allow update, delete: if request.auth != null
-        && (resource.data.owner_user_id == request.auth.uid
-            || request.resource.data.owner_user_id == request.auth.uid
-            || isCompanyAdmin());
+      allow write: if request.auth != null;
 
       // Doctors sub-collection
       match /doctors/{doctorId} {
-        allow read: if request.auth != null;
-        allow write: if request.auth != null
-          && (get(/databases/$(database)/documents/clinics/$(clinicId)).data.owner_user_id == request.auth.uid
-              || isCompanyAdmin());
+        allow read, write: if request.auth != null;
       }
+    }
+
+    // Clinic Settings: working hours, slot duration, reminders
+    match /clinic_settings/{settingId} {
+      allow read: if true;
+      allow write: if request.auth != null;
+    }
+
+    // Subscriptions: clinic plans and billing status
+    match /subscriptions/{subId} {
+      allow read, write: if request.auth != null;
     }
 
     // Patient accounts: owning patient can read/write; clinic staff and admin can read
@@ -89,6 +80,11 @@ service cloud.firestore {
 
     // Patient clinic links (multi-clinic access and switching)
     match /patient_clinic_links/{linkId} {
+      allow read, write: if true;
+    }
+
+    // Family health vault: patient family member profiles
+    match /family_members/{memberId} {
       allow read, write: if true;
     }
 
@@ -143,6 +139,11 @@ service cloud.firestore {
     match /admin_settings/{settingId} {
       allow read: if isCompanyAdmin();
       allow write: if isCompanyAdmin();
+    }
+
+    // Password uniqueness registry: allows verifying and claiming unique password hashes
+    match /password_registry/{hashId} {
+      allow read, write: if true;
     }
 
     // Deny all other access

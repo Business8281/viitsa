@@ -31,6 +31,8 @@ export interface AIResponse {
   text: string;
   summary: TriageSummary | null;
   rawLevel: 'urgent' | 'moderate' | 'normal';
+  audioBase64?: string | null;
+  mimeType?: string | null;
 }
 
 export interface ClinicContext {
@@ -130,12 +132,30 @@ Language instruction: ${LANG_INSTRUCTION[language]}${readyForSummary ? triageJso
 export async function sendToAI(
   messages: AIMessage[],
   systemPrompt: string,
+  options?: {
+    audioBase64?: string | null;
+    audioMimeType?: string;
+    returnAudio?: boolean;
+    language?: Language;
+  }
 ): Promise<AIResponse> {
   try {
     const functions = getFunctions(app, "asia-south1");
-    const aiChat = httpsCallable<{ messages: AIMessage[], systemPrompt: string }, { raw: string }>(functions, 'aiChat');
-    const result = await aiChat({ messages, systemPrompt });
-    return parseAIResponse(result.data.raw || '');
+    const aiChat = httpsCallable<any, { raw: string; audioBase64?: string; mimeType?: string }>(functions, 'aiChat');
+    const result = await aiChat({ 
+      messages, 
+      systemPrompt,
+      audioBase64: options?.audioBase64 || null,
+      audioMimeType: options?.audioMimeType || 'audio/webm',
+      returnAudio: options?.returnAudio !== false,
+      language: options?.language
+    });
+    const parsed = parseAIResponse(result.data.raw || '');
+    return {
+      ...parsed,
+      audioBase64: result.data.audioBase64 || null,
+      mimeType: result.data.mimeType || null
+    };
   } catch (e) {
     console.warn('AI chat fetch failed:', e);
     return unavailableResponse();
@@ -231,62 +251,191 @@ const LANG_VOICE_CODE: Record<Language, string> = {
   te: 'te-IN',
 };
 
+let activeAudio: HTMLAudioElement | null = null;
+
 export function isSpeechRecognitionSupported(): boolean {
-  return !!(window.SpeechRecognition || window.webkitSpeechRecognition);
+  return true;
 }
 
 export function isSpeechSynthesisSupported(): boolean {
-  return 'speechSynthesis' in window;
+  return true;
 }
 
 export function startListening(
   language: Language,
   onTranscript: (interim: string, final: string) => void,
   onEnd: () => void,
+  onAudioCaptured?: (base64Audio: string, mimeType: string) => void
 ): () => void {
-  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (!SR) {
-    onEnd();
-    return () => undefined;
+  let mediaRecorder: MediaRecorder | null = null;
+  let audioChunks: Blob[] = [];
+  let userStream: MediaStream | null = null;
+
+  // 1. Microphone capture via HTML5 MediaRecorder (Cross-platform: iOS, Android, Mac, Windows)
+  if (typeof navigator !== 'undefined' && navigator.mediaDevices?.getUserMedia) {
+    navigator.mediaDevices.getUserMedia({ audio: true }).then((stream) => {
+      userStream = stream;
+      try {
+        const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+          ? 'audio/webm;codecs=opus'
+          : MediaRecorder.isTypeSupported('audio/mp4')
+          ? 'audio/mp4'
+          : 'audio/webm';
+
+        mediaRecorder = new MediaRecorder(stream, { mimeType });
+        audioChunks = [];
+
+        mediaRecorder.ondataavailable = (event) => {
+          if (event.data && event.data.size > 0) {
+            audioChunks.push(event.data);
+          }
+        };
+
+        mediaRecorder.onstop = () => {
+          if (audioChunks.length > 0 && onAudioCaptured) {
+            const finalBlob = new Blob(audioChunks, { type: mimeType });
+            const reader = new FileReader();
+            reader.onloadend = () => {
+              const base64 = (reader.result as string)?.split(',')[1];
+              if (base64) {
+                onAudioCaptured(base64, mimeType);
+              }
+            };
+            reader.readAsDataURL(finalBlob);
+          }
+          if (userStream) {
+            userStream.getTracks().forEach((track) => track.stop());
+            userStream = null;
+          }
+        };
+
+        mediaRecorder.start();
+      } catch (e) {
+        console.warn('MediaRecorder error:', e);
+      }
+    }).catch((err) => {
+      console.warn('Microphone permission not granted or unavailable:', err);
+    });
   }
 
-  const recognition = new SR();
-  recognition.lang = LANG_VOICE_CODE[language];
-  recognition.interimResults = true;
-  recognition.continuous = false;
-  recognition.maxAlternatives = 1;
+  // 2. Real-time transcript feedback via WebSpeech if available
+  const SR = typeof window !== 'undefined' ? (window.SpeechRecognition || window.webkitSpeechRecognition) : null;
+  let recognition: any = null;
 
-  recognition.onresult = (event: any) => {
-    let interim = '';
-    let final = '';
-    for (let i = event.resultIndex; i < event.results.length; i++) {
-      const transcript = event.results[i][0].transcript;
-      if (event.results[i].isFinal) {
-        final += transcript;
-      } else {
-        interim += transcript;
-      }
+  if (SR) {
+    try {
+      recognition = new SR();
+      recognition.lang = LANG_VOICE_CODE[language] || 'en-IN';
+      recognition.interimResults = true;
+      recognition.continuous = false;
+      recognition.maxAlternatives = 1;
+
+      recognition.onresult = (event: any) => {
+        let interim = '';
+        let final = '';
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          const transcript = event.results[i][0].transcript;
+          if (event.results[i].isFinal) {
+            final += transcript;
+          } else {
+            interim += transcript;
+          }
+        }
+        onTranscript(interim, final);
+      };
+
+      recognition.onerror = () => onEnd();
+      recognition.onend = () => onEnd();
+      recognition.start();
+    } catch {
+      // SpeechRecognition may be already active
     }
-    onTranscript(interim, final);
+  }
+
+  return () => {
+    if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+      try {
+        mediaRecorder.stop();
+      } catch {}
+    }
+    if (userStream) {
+      userStream.getTracks().forEach((track) => track.stop());
+      userStream = null;
+    }
+    if (recognition) {
+      try {
+        recognition.stop();
+      } catch {}
+    }
   };
-
-  recognition.onerror = () => onEnd();
-  recognition.onend = () => onEnd();
-
-  recognition.start();
-  return () => recognition.stop();
 }
 
-export function speak(text: string, language: Language): void {
-  if (!isSpeechSynthesisSupported()) return;
-  window.speechSynthesis.cancel();
-  const utter = new SpeechSynthesisUtterance(text);
-  utter.lang = LANG_VOICE_CODE[language];
-  utter.rate = 1.0;
-  utter.pitch = 1.0;
-  window.speechSynthesis.speak(utter);
+export function speak(
+  text: string, 
+  language: Language, 
+  audioBase64?: string | null,
+  onEnded?: () => void
+): void {
+  stopSpeaking();
+
+  // 1. High-Fidelity Studio Audio from Gemini Voice (audio/wav)
+  if (audioBase64) {
+    try {
+      const audioUrl = `data:audio/wav;base64,${audioBase64}`;
+      const audio = new Audio(audioUrl);
+      activeAudio = audio;
+      
+      audio.onended = () => {
+        if (activeAudio === audio) activeAudio = null;
+        onEnded?.();
+      };
+      
+      audio.onerror = () => {
+        if (activeAudio === audio) activeAudio = null;
+        fallbackBrowserSpeak(text, language, onEnded);
+      };
+
+      audio.play().catch((err) => {
+        console.warn('Audio auto-play policy or error, falling back:', err);
+        fallbackBrowserSpeak(text, language, onEnded);
+      });
+      return;
+    } catch (e) {
+      console.warn('Could not initialize audio player:', e);
+    }
+  }
+
+  // 2. Fallback to browser SpeechSynthesis
+  fallbackBrowserSpeak(text, language, onEnded);
+}
+
+function fallbackBrowserSpeak(text: string, language: Language, onEnded?: () => void): void {
+  if (typeof window === 'undefined' || !('speechSynthesis' in window)) {
+    onEnded?.();
+    return;
+  }
+  try {
+    window.speechSynthesis.cancel();
+    const cleanText = text.replace(/\n*TRIAGE_JSON:[\s\S]*$/i, '').replace(/[*#]/g, '').trim();
+    const utter = new SpeechSynthesisUtterance(cleanText);
+    utter.lang = LANG_VOICE_CODE[language] || 'en-IN';
+    utter.rate = 1.0;
+    utter.pitch = 1.0;
+    utter.onend = () => onEnded?.();
+    utter.onerror = () => onEnded?.();
+    window.speechSynthesis.speak(utter);
+  } catch {
+    onEnded?.();
+  }
 }
 
 export function stopSpeaking(): void {
-  if (isSpeechSynthesisSupported()) window.speechSynthesis.cancel();
+  if (activeAudio) {
+    activeAudio.pause();
+    activeAudio.currentTime = 0;
+    activeAudio = null;
+  }
+  if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+    window.speechSynthesis.cancel();
+  }
 }

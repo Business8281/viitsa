@@ -71,6 +71,9 @@ export function PatientBooking({ onTab, clinic: initialClinic, patientId, aiSumm
       if (step === 'clinic') {
         setStep('doctor');
       }
+    } else {
+      setClinic(null);
+      setStep('clinic');
     }
   }, [initialClinic]);
 

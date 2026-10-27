@@ -19,8 +19,8 @@ interface Props {
 }
 
 export function PatientOnboardingProfile({ onComplete }: Props) {
-  const { account, updateProfile, clinic, logout } = usePatientAuth();
-  const { user } = useAuth();
+  const { account, updateProfile, clinic, logout, refreshAccount } = usePatientAuth();
+  const { user, refreshSession } = useAuth();
 
   const getCleanPhone = (val?: string | null) => {
     if (!val) return '';
@@ -210,24 +210,35 @@ export function PatientOnboardingProfile({ onComplete }: Props) {
 
     if (res.ok) {
       // Save completed flag in localStorage
+      const profileObj = {
+        name: name.trim(),
+        email: cleanEmail,
+        phone: cleanPhone,
+        dob,
+        age: finalAge,
+        gender,
+        blood_group: bloodGroup,
+        address: address.trim(),
+        emergency_contact_name: emergencyName.trim(),
+        emergency_contact_phone: cleanEmergPhone,
+        chronic_conditions: conditionsString,
+        allergies: allergies.trim() || 'None',
+        current_medications: medications.trim() || 'None',
+        profile_completed: true,
+      };
+
       try {
         const id = account?.account_id || user?.user_id || 'active';
-        localStorage.setItem(`viitsa_patient_profile_${id}`, JSON.stringify({
-          name: name.trim(),
-          email: cleanEmail,
-          phone: cleanPhone,
-          dob,
-          age: finalAge,
-          gender,
-          blood_group: bloodGroup,
-          address: address.trim(),
-          emergency_contact_name: emergencyName.trim(),
-          emergency_contact_phone: cleanEmergPhone,
-          chronic_conditions: conditionsString,
-          allergies: allergies.trim() || 'None',
-          current_medications: medications.trim() || 'None',
-          profile_completed: true,
-        }));
+        localStorage.setItem(`viitsa_patient_profile_${id}`, JSON.stringify(profileObj));
+        if (user?.user_id) {
+          localStorage.setItem(`viitsa_patient_profile_${user.user_id}`, JSON.stringify(profileObj));
+          localStorage.setItem(`viitsa_pat_${user.user_id}`, JSON.stringify(profileObj));
+        }
+      } catch {}
+
+      try {
+        if (refreshSession) await refreshSession();
+        if (refreshAccount) await refreshAccount();
       } catch {}
 
       try {

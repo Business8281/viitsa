@@ -1,12 +1,11 @@
 import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  Activity, ArrowRight, BarChart3, Building2, Calendar, ClipboardList, CreditCard,
-  FileText, Heart, LayoutDashboard, LineChart, Lock, Pill, QrCode, Shield, Smartphone,
-  Stethoscope, Timer, Users, Video, Zap, Menu, X, Brain, Mic, Globe, CheckCircle,
-  ChevronRight, Star, TrendingUp, Clock, ShieldCheck, DatabaseZap, Sparkles,
-  BrainCircuit, HeartPulse, Linkedin, Instagram, Mail, Phone as PhoneIcon, Globe2,
-  Check, ArrowUpRight, Layers, WifiOff, Wifi, Printer, Tablet, Home, ArrowLeft,
+  Activity, ArrowRight, BarChart3, Building2, Calendar, CreditCard,
+  FileText, Heart, LayoutDashboard, Lock, QrCode, Shield, Smartphone,
+  Stethoscope, Users, Zap, Menu, X, Brain, Mic, Globe, CheckCircle,
+  TrendingUp, ShieldCheck, Sparkles, BrainCircuit, HeartPulse, Linkedin,
+  Instagram, Mail, Phone as PhoneIcon, Globe2, Check, Printer, Tablet, Home,
 } from 'lucide-react';
 import { ViitsaLogo } from '../components/ViitsaLogo';
 
@@ -26,7 +25,7 @@ function useInView(threshold = 0.12) {
     );
     obs.observe(el);
     return () => obs.disconnect();
-  }, []);
+  }, [threshold]);
   return [ref, visible] as const;
 }
 
@@ -69,13 +68,35 @@ export function LandingPage() {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [activeSection, setActiveSection] = useState('home');
   const [workflowTab, setWorkflowTab] = useState<'clinic' | 'patient'>('clinic');
+  const [billingCycle, setBillingCycle] = useState<'monthly' | 'annual'>('monthly');
   const [floatOffset, setFloatOffset] = useState(0);
 
   useEffect(() => {
-    let t: ReturnType<typeof setInterval>;
-    t = setInterval(() => setFloatOffset(p => p + 1), 60);
+    const t = setInterval(() => setFloatOffset(p => p + 1), 60);
     return () => clearInterval(t);
   }, []);
+
+  // Forward any incoming auth action parameters (e.g. from Firebase email links landing on root)
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const searchParams = new URLSearchParams(window.location.search);
+    const mode = searchParams.get('mode');
+    const oobCode = searchParams.get('oobCode');
+    if (!mode && !oobCode) return;
+
+    const continueUrl = searchParams.get('continueUrl');
+    const returnUrl = searchParams.get('return');
+    const isClinic = Boolean(continueUrl && continueUrl.includes('/clinic')) ||
+      Boolean(returnUrl && returnUrl.includes('/clinic')) ||
+      sessionStorage.getItem('viitsa_portal_intent') === 'clinic';
+
+    if (mode === 'resetPassword' || (oobCode && mode !== 'verifyEmail')) {
+      navigate(`/reset-password?${searchParams.toString()}`, { replace: true });
+    } else if (mode === 'verifyEmail') {
+      const target = isClinic ? '/clinic/login' : '/login';
+      navigate(`${target}?${searchParams.toString()}`, { replace: true });
+    }
+  }, [navigate]);
 
   useEffect(() => {
     const onScroll = () => {
@@ -622,53 +643,273 @@ export function LandingPage() {
         </div>
       </section>
 
-      {/* ── PRICING PLACEHOLDER ── */}
+      {/* ── PRICING SECTION (SPEC V1.0) ── */}
       <section id="pricing" className="py-20 lg:py-28 bg-slate-50">
         <div className="w-[90%] max-w-[1400px] mx-auto px-2 sm:px-4">
-          <FadeIn className="text-center mb-14">
-            <p className="text-sm font-semibold text-emerald-600 uppercase tracking-wider mb-2">Simple Pricing</p>
+          <FadeIn className="text-center mb-10">
+            <p className="text-sm font-semibold text-emerald-600 uppercase tracking-wider mb-2">Transparent Pricing</p>
             <h2 className="text-3xl sm:text-4xl font-bold text-slate-900 mb-4">Start Free, Scale as You Grow</h2>
-            <p className="text-lg text-slate-600">30-day free pilot for clinics in India. No credit card required.</p>
+            <p className="text-lg text-slate-600 max-w-2xl mx-auto">
+              30-day free pilot for clinics in India with no credit card required. Upgrade or change anytime.
+            </p>
+
+            {/* Monthly / Annual Billing Toggle */}
+            <div className="mt-8 inline-flex items-center gap-3 p-1.5 bg-slate-200/70 rounded-2xl">
+              <button
+                type="button"
+                onClick={() => setBillingCycle('monthly')}
+                className={`px-5 py-2 text-sm font-semibold rounded-xl transition-all ${
+                  billingCycle === 'monthly'
+                    ? 'bg-white text-slate-900 shadow-sm'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                Monthly
+              </button>
+              <button
+                type="button"
+                onClick={() => setBillingCycle('annual')}
+                className={`px-5 py-2 text-sm font-semibold rounded-xl transition-all flex items-center gap-2 ${
+                  billingCycle === 'annual'
+                    ? 'bg-emerald-600 text-white shadow-sm'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <span>Annual</span>
+                <span className={`text-[11px] font-bold px-2 py-0.5 rounded-full ${
+                  billingCycle === 'annual' ? 'bg-white/20 text-white' : 'bg-emerald-100 text-emerald-800'
+                }`}>
+                  2 Months Free
+                </span>
+              </button>
+            </div>
+            <p className="text-xs text-slate-500 mt-2 font-medium">
+              All plans include a <strong className="text-emerald-700">30-Day Free Trial</strong> with automated UPI / Card mandate renewal. Cancel anytime. Prices in INR. 18% GST applicable.
+            </p>
           </FadeIn>
-          <div className="grid md:grid-cols-2 gap-8">
+
+          <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6">
             {[
               {
-                name: 'Starter Pilot', price: 'Free', period: '30 days',
-                desc: 'Perfect for clinics exploring AI-powered operations.',
-                features: ['Up to 3 staff accounts', 'AI Health Navigator', 'Appointment management', 'Basic analytics', 'WhatsApp reminders'],
-                cta: 'Start Free Pilot', action: '/register', highlight: false,
+                id: 'solo',
+                name: 'Solo',
+                price: billingCycle === 'annual' ? '₹29,990' : '₹2,999',
+                period: billingCycle === 'annual' ? 'year' : 'month',
+                desc: 'Single-doctor practices and independent consultants.',
+                trialBadge: '30-Day Free Trial',
+                autoDebitNote: billingCycle === 'annual' ? 'Auto-renews at ₹29,990/yr on Day 31' : 'Auto-renews at ₹2,999/mo on Day 31',
+                features: [
+                  '1 Doctor included',
+                  'Up to 3 Staff seats',
+                  '1 Location',
+                  '300 AI Intakes / month',
+                  '800 WhatsApp msgs / month',
+                  'Unlimited Document Storage',
+                  'Standard Billing & Queue',
+                  'Priority Support'
+                ],
+                cta: 'Start 30-Day Free Trial',
+                action: `/register?plan=solo&cycle=${billingCycle}`,
+                directLink: billingCycle === 'annual' ? 'https://rzp.io/rzp/xlfXiVqg' : null,
+                directPrice: '₹29,990',
+                highlight: false,
+                badge: null,
               },
               {
-                name: 'Pro Clinic', price: '₹2,999', period: 'per month',
-                desc: 'For growing clinics that need the full VIITSA platform.',
-                features: ['Unlimited staff accounts', 'Advanced AI triage', 'Full billing suite', 'Inventory management', 'Priority support', 'Custom branding'],
-                cta: 'Register Your Clinic', action: '/register', highlight: true,
+                id: 'clinic',
+                name: 'Clinic',
+                price: billingCycle === 'annual' ? '₹59,990' : '₹5,999',
+                period: billingCycle === 'annual' ? 'year' : 'month',
+                desc: 'Growing clinics with multiple doctors and high patient volume.',
+                trialBadge: '30-Day Free Trial',
+                autoDebitNote: billingCycle === 'annual' ? 'Auto-renews at ₹59,990/yr on Day 31' : 'Auto-renews at ₹5,999/mo on Day 31',
+                features: [
+                  'Up to 3 Doctors included',
+                  'Up to 6 Staff seats',
+                  '1 Location',
+                  '1,000 AI Intakes / month',
+                  '2,500 WhatsApp msgs / month',
+                  'Unlimited Document Storage',
+                  'Full Billing & Purchase Orders',
+                  'Automated Rescheduling CRM',
+                  'Audit Logs & Custom Roles'
+                ],
+                cta: 'Start 30-Day Free Trial',
+                action: `/register?plan=clinic&cycle=${billingCycle}`,
+                directLink: billingCycle === 'annual' ? 'https://rzp.io/rzp/9OYAB40N' : 'https://rzp.io/rzp/OhKLJYzS',
+                directPrice: billingCycle === 'annual' ? '₹59,990' : '₹5,999',
+                highlight: true,
+                badge: 'Most Popular',
+              },
+              {
+                id: 'multispecialty',
+                name: 'Multi-Specialty',
+                price: billingCycle === 'annual' ? '₹1,19,990' : '₹11,999',
+                period: billingCycle === 'annual' ? 'year' : 'month',
+                desc: 'Polyclinics and busy specialty centres running multiple departments.',
+                trialBadge: '30-Day Free Trial',
+                autoDebitNote: billingCycle === 'annual' ? 'Auto-renews at ₹1,19,990/yr on Day 31' : 'Auto-renews at ₹11,999/mo on Day 31',
+                features: [
+                  'Up to 8 Doctors included',
+                  'Up to 20 Staff seats',
+                  '1 Location',
+                  '2,000 AI Intakes / month',
+                  '5,000 WhatsApp msgs / month',
+                  'Unlimited Document Storage',
+                  'TPA & Insurance Billing',
+                  'Multi-Store Inventory',
+                  'Custom Branding on All Reports'
+                ],
+                cta: 'Start 30-Day Free Trial',
+                action: `/register?plan=multispecialty&cycle=${billingCycle}`,
+                directLink: billingCycle === 'annual' ? 'https://rzp.io/rzp/0PqwSVE' : 'https://rzp.io/rzp/XDAYYlHQ',
+                directPrice: billingCycle === 'annual' ? '₹1,19,990' : '₹11,999',
+                highlight: false,
+                badge: 'Specialty Care',
+              },
+              {
+                id: 'hospital',
+                name: 'Hospital',
+                price: billingCycle === 'annual' ? '₹2,49,990' : '₹24,999',
+                period: billingCycle === 'annual' ? 'year' : 'month',
+                desc: 'Small hospitals, nursing homes, and surgical care facilities.',
+                trialBadge: 'Tailored Pilot',
+                autoDebitNote: 'Dedicated On-Premise / Cloud SLA',
+                features: [
+                  'Up to 25 Doctors included',
+                  'Up to 60 Staff seats',
+                  '3 Locations included',
+                  '5,000 AI Intakes / month',
+                  '12,000 WhatsApp msgs / month',
+                  'Unlimited Document Storage',
+                  'Full IPD, Bed & OT Suite',
+                  '24/7 Dedicated Support Lead'
+                ],
+                cta: 'Contact Sales / Inquire',
+                action: '/contact',
+                directLink: null,
+                directPrice: null,
+                highlight: false,
+                badge: 'Enterprise',
               },
             ].map((plan, i) => (
-              <FadeIn key={plan.name} delay={i * 150}>
-                <div className={`rounded-3xl p-8 h-full flex flex-col justify-between ${plan.highlight ? 'bg-gradient-to-br from-emerald-600 to-teal-600 text-white shadow-2xl shadow-emerald-500/30' : 'bg-white border border-slate-100 shadow-lg'}`}>
-                  <div>
-                    <div className="mb-6">
-                      <p className={`text-sm font-semibold uppercase tracking-wider mb-1 ${plan.highlight ? 'text-emerald-200' : 'text-emerald-600'}`}>{plan.name}</p>
-                      <div className="flex items-baseline gap-1">
-                        <span className={`text-4xl font-bold ${plan.highlight ? 'text-white' : 'text-slate-900'}`}>{plan.price}</span>
-                        <span className={`text-sm ${plan.highlight ? 'text-emerald-200' : 'text-slate-400'}`}>/{plan.period}</span>
-                      </div>
-                      <p className={`text-sm mt-2 ${plan.highlight ? 'text-emerald-100' : 'text-slate-500'}`}>{plan.desc}</p>
+              <FadeIn key={plan.name} delay={i * 100}>
+                <div
+                  className={`rounded-3xl p-7 h-full flex flex-col justify-between relative ${
+                    plan.highlight
+                      ? 'bg-gradient-to-br from-emerald-600 to-teal-700 text-white shadow-xl shadow-emerald-600/20 ring-2 ring-emerald-500'
+                      : 'bg-white border border-slate-200/80 shadow-md hover:shadow-lg transition-all'
+                  }`}
+                >
+                  {plan.badge && (
+                    <div className="absolute -top-3.5 left-1/2 -translate-x-1/2">
+                      <span
+                        className={`text-[11px] font-bold uppercase tracking-wider px-3 py-1 rounded-full shadow-sm ${
+                          plan.highlight
+                            ? 'bg-amber-400 text-amber-950 font-extrabold'
+                            : 'bg-emerald-100 text-emerald-800'
+                        }`}
+                      >
+                        {plan.badge}
+                      </span>
                     </div>
-                    <ul className="space-y-3 mb-8">
-                      {plan.features.map(f => (
-                        <li key={f} className={`flex items-center gap-2.5 text-sm ${plan.highlight ? 'text-emerald-50' : 'text-slate-600'}`}>
-                          <Check size={15} className={plan.highlight ? 'text-emerald-200' : 'text-emerald-500'} />
-                          {f}
+                  )}
+
+                  <div>
+                    <div className="mb-5">
+                      <p
+                        className={`text-sm font-bold uppercase tracking-wider mb-1 ${
+                          plan.highlight ? 'text-emerald-100' : 'text-emerald-600'
+                        }`}
+                      >
+                        {plan.name}
+                      </p>
+                      <div className="flex items-baseline gap-1">
+                        <span
+                          className={`text-3xl font-extrabold tracking-tight ${
+                            plan.highlight ? 'text-white' : 'text-slate-900'
+                          }`}
+                        >
+                          {plan.price}
+                        </span>
+                        <span
+                          className={`text-xs font-medium ${
+                            plan.highlight ? 'text-emerald-100' : 'text-slate-400'
+                          }`}
+                        >
+                          /{plan.period}
+                        </span>
+                      </div>
+
+                      <div className="mt-2 flex items-center gap-1.5 flex-wrap">
+                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                          plan.highlight ? 'bg-white/20 text-white' : 'bg-emerald-100 text-emerald-800'
+                        }`}>
+                          ✓ {plan.trialBadge}
+                        </span>
+                        <span className={`text-[10px] ${plan.highlight ? 'text-emerald-100' : 'text-slate-500'}`}>
+                          {plan.autoDebitNote}
+                        </span>
+                      </div>
+
+                      <p
+                        className={`text-xs mt-3 leading-relaxed ${
+                          plan.highlight ? 'text-emerald-50' : 'text-slate-500'
+                        }`}
+                      >
+                        {plan.desc}
+                      </p>
+                    </div>
+
+                    <div className={`h-[1px] my-5 ${plan.highlight ? 'bg-white/20' : 'bg-slate-100'}`} />
+
+                    <ul className="space-y-2.5 mb-8">
+                      {plan.features.map((f) => (
+                        <li
+                          key={f}
+                          className={`flex items-center gap-2 text-xs leading-normal ${
+                            plan.highlight ? 'text-emerald-50' : 'text-slate-600'
+                          }`}
+                        >
+                          <Check
+                            size={14}
+                            className={`shrink-0 ${plan.highlight ? 'text-emerald-200' : 'text-emerald-500'}`}
+                          />
+                          <span>{f}</span>
                         </li>
                       ))}
                     </ul>
                   </div>
-                  <button onClick={() => goTo(plan.action)}
-                    className={`w-full py-3.5 rounded-xl font-semibold transition-all text-center ${plan.highlight ? 'bg-white text-emerald-700 hover:bg-emerald-50' : 'bg-gradient-to-r from-emerald-500 to-teal-500 text-white shadow-lg shadow-emerald-500/20 hover:shadow-xl hover:-translate-y-0.5'}`}>
-                    {plan.cta}
-                  </button>
+
+                  <div>
+                    <button
+                      onClick={() => {
+                        goTo(plan.action);
+                      }}
+                      className={`w-full py-3 rounded-xl font-bold text-xs uppercase tracking-wider transition-all text-center ${
+                        plan.highlight
+                          ? 'bg-white text-emerald-700 hover:bg-emerald-50 shadow-md'
+                          : 'bg-gradient-to-r from-emerald-500 to-teal-600 text-white shadow-md hover:shadow-lg'
+                      }`}
+                    >
+                      {plan.cta}
+                    </button>
+
+                    {plan.directLink && (
+                      <div className="mt-2.5 text-center">
+                        <a
+                          href={plan.directLink}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className={`text-[11px] font-semibold hover:underline inline-flex items-center gap-1 ${
+                            plan.highlight ? 'text-emerald-100 hover:text-white' : 'text-emerald-600 hover:text-emerald-700'
+                          }`}
+                        >
+                          Or pay directly ({plan.directPrice}) →
+                        </a>
+                      </div>
+                    )}
+                  </div>
                 </div>
               </FadeIn>
             ))}

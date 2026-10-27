@@ -138,7 +138,9 @@ export function PatientAINavigator({ onTab, clinicId, patientId, onBookWithSumma
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
   }, [messages, typing]);
 
-  const handleAIResponse = useCallback(async (userText: string) => {
+  const capturedAudioRef = useRef<{ base64: string; mimeType: string } | null>(null);
+
+  const handleAIResponse = useCallback(async (userText: string, audioData?: { base64: string; mimeType: string } | null) => {
     userExchanges.current += 1;
     const systemPrompt = buildSystemPrompt(
       language,
@@ -147,9 +149,20 @@ export function PatientAINavigator({ onTab, clinicId, patientId, onBookWithSumma
       userExchanges.current,
     );
 
-    const response = await sendToAI(aiHistory.current, systemPrompt);
+    const response = await sendToAI(aiHistory.current, systemPrompt, {
+      audioBase64: audioData?.base64,
+      audioMimeType: audioData?.mimeType,
+      returnAudio: ttsEnabled,
+      language
+    });
+
     aiHistory.current.push({ role: 'assistant', content: response.text });
-    setMessages((prev) => [...prev, { role: 'ai', text: response.text, ts: Date.now() }]);
+    setMessages((prev) => [...prev, { 
+      role: 'ai', 
+      text: response.text, 
+      ts: Date.now(),
+      audioBase64: response.audioBase64 
+    } as any]);
     setTyping(false);
 
     if (response.summary) {
@@ -159,10 +172,7 @@ export function PatientAINavigator({ onTab, clinicId, patientId, onBookWithSumma
 
     if (ttsEnabled && canSpeak) {
       setSpeaking(true);
-      speak(response.text, language);
-      // Approximate duration: ~150ms per word
-      const words = response.text.split(/\s+/).length;
-      setTimeout(() => setSpeaking(false), words * 150 + 500);
+      speak(response.text, language, response.audioBase64, () => setSpeaking(false));
     }
 
     // Save conversation to DB
@@ -206,22 +216,24 @@ export function PatientAINavigator({ onTab, clinicId, patientId, onBookWithSumma
     }
   }, [language, clinicContext, clinicId, patientId, account, ttsEnabled, canSpeak, conversationId, saved]);
 
-  const send = useCallback(async (text: string) => {
+  const send = useCallback(async (text: string, audioData?: { base64: string; mimeType: string } | null) => {
     const trimmed = text.trim();
-    if (!trimmed || typing) return;
+    if ((!trimmed && !audioData) || typing) return;
 
-    // Auto-detect language from first user message
-    if (userExchanges.current === 0) {
+    const userDisplayText = trimmed || (language === 'te' ? '🎤 వాయిస్ సందేశం' : language === 'hi' ? '🎤 वॉयस संदेश' : '🎤 Voice message');
+
+    // Auto-detect language from first user message if text is typed
+    if (userExchanges.current === 0 && trimmed) {
       const detected = detectLanguage(trimmed);
       if (detected !== language) setLanguage(detected);
     }
 
-    aiHistory.current.push({ role: 'user', content: trimmed });
-    setMessages((prev) => [...prev, { role: 'user', text: trimmed, ts: Date.now() }]);
+    aiHistory.current.push({ role: 'user', content: trimmed || 'Audio symptom description' });
+    setMessages((prev) => [...prev, { role: 'user', text: userDisplayText, ts: Date.now() }]);
     setInput('');
     setTyping(true);
 
-    await handleAIResponse(trimmed);
+    await handleAIResponse(trimmed || 'Audio description', audioData);
   }, [typing, language, handleAIResponse]);
 
   const toggleListening = useCallback(() => {
@@ -237,6 +249,7 @@ export function PatientAINavigator({ onTab, clinicId, patientId, onBookWithSumma
 
     setListening(true);
     let finalAccumulated = '';
+    capturedAudioRef.current = null;
 
     const stop = startListening(
       language,
@@ -252,10 +265,16 @@ export function PatientAINavigator({ onTab, clinicId, patientId, onBookWithSumma
       () => {
         setListening(false);
         setInterimText('');
-        if (finalAccumulated.trim()) {
-          void send(finalAccumulated.trim());
+        const textToSend = finalAccumulated.trim();
+        const audio = capturedAudioRef.current;
+        capturedAudioRef.current = null;
+        if (textToSend || audio) {
+          void send(textToSend, audio);
         }
       },
+      (base64Audio, mimeType) => {
+        capturedAudioRef.current = { base64: base64Audio, mimeType };
+      }
     );
 
     stopListenRef.current = stop;
@@ -354,7 +373,25 @@ export function PatientAINavigator({ onTab, clinicId, patientId, onBookWithSumma
                   ? 'bg-white text-gray-800 rounded-bl-sm border border-gray-100 shadow-sm'
                   : 'bg-primary text-white rounded-br-sm'
               }`}>
-                {m.text}
+                <div>{m.text}</div>
+                {isAI && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (speaking) {
+                        stopSpeaking();
+                        setSpeaking(false);
+                      } else {
+                        setSpeaking(true);
+                        speak(m.text, language, (m as any).audioBase64, () => setSpeaking(false));
+                      }
+                    }}
+                    className="mt-1.5 inline-flex items-center gap-1 text-[11px] font-semibold text-primary/80 hover:text-primary transition-colors bg-primary/5 hover:bg-primary/10 px-2 py-0.5 rounded-md"
+                  >
+                    <Volume2 size={12} />
+                    <span>{speaking ? 'Stop Voice' : 'Listen Voice'}</span>
+                  </button>
+                )}
               </div>
             </div>
           );

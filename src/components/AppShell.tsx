@@ -57,6 +57,8 @@ export function AppShell({ children }: AppShellProps) {
   if (!user) return null;
 
   const role = (user.role || 'patient') as Role;
+  const isDoctor = role === 'clinic_doctor' || role === 'doctor' || location.pathname.startsWith('/doctor');
+  const basePath = isDoctor ? '/doctor' : '/clinic';
   const clinicName = clinic?.name || user.clinic_name || 'VIITSA Health Clinic';
   const items = NAV_ITEMS.filter((n) => n.roles.includes(role));
 
@@ -76,7 +78,7 @@ export function AppShell({ children }: AppShellProps) {
         return (
           <Link
             key={item.key}
-            to={`/clinic/${item.key}`}
+            to={`${basePath}/${item.key}`}
             onMouseEnter={() => prefetchRoute(item.key)}
             onFocus={() => prefetchRoute(item.key)}
             onClick={() => setMobileOpen(false)}

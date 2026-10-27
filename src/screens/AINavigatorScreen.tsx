@@ -53,6 +53,7 @@ interface Message {
   role: 'ai' | 'patient';
   text: string;
   ts: number;
+  audioBase64?: string | null;
 }
 
 const GREETING = "Hello, I'm VIITSA AI Navigator. Can you describe your symptoms? Please mention how long you've had them.";
@@ -145,9 +146,15 @@ export function AINavigatorScreen() {
       : null;
 
     const systemPrompt = buildSystemPrompt(language, ctx, selectedPatient?.name?.split(' ')[0], userExchanges.current);
-    const response = await sendToAI(aiHistory.current, systemPrompt);
+    const response = await sendToAI(aiHistory.current, systemPrompt, {
+      audioBase64: audioData?.base64,
+      audioMimeType: audioData?.mimeType,
+      returnAudio: ttsEnabled,
+      language
+    });
+
     aiHistory.current.push({ role: 'assistant', content: response.text });
-    setMessages((prev) => [...prev, { role: 'ai', text: response.text, ts: Date.now() }]);
+    setMessages((prev) => [...prev, { role: 'ai', text: response.text, ts: Date.now(), audioBase64: response.audioBase64 }]);
     setTyping(false);
 
     if (response.summary) {
@@ -158,9 +165,7 @@ export function AINavigatorScreen() {
 
     if (ttsEnabled && canSpeak) {
       setSpeaking(true);
-      speak(response.text, language);
-      const words = response.text.split(/\s+/).length;
-      setTimeout(() => setSpeaking(false), words * 150 + 500);
+      speak(response.text, language, response.audioBase64, () => setSpeaking(false));
     }
 
     // Persist conversation
@@ -198,21 +203,25 @@ export function AINavigatorScreen() {
     }
   }, [language, clinic, clinicContext, selectedPatient, appt, ttsEnabled, canSpeak, conversationId, toast]);
 
-  const sendMessage = useCallback(async (text: string) => {
-    const trimmed = text.trim();
-    if (!trimmed || typing) return;
+  const capturedAudioRef = useRef<{ base64: string; mimeType: string } | null>(null);
 
-    if (userExchanges.current === 0) {
+  const sendMessage = useCallback(async (text: string, audioData?: { base64: string; mimeType: string } | null) => {
+    const trimmed = text.trim();
+    if ((!trimmed && !audioData) || typing) return;
+
+    const userDisplayText = trimmed || (language === 'te' ? '🎤 వాయిస్ సందేశం' : language === 'hi' ? '🎤 वॉयस संदेश' : '🎤 Voice message');
+
+    if (userExchanges.current === 0 && trimmed) {
       const detected = detectLanguage(trimmed);
       if (detected !== language) setLanguage(detected);
     }
 
-    aiHistory.current.push({ role: 'user', content: trimmed });
-    setMessages((prev) => [...prev, { role: 'patient', text: trimmed, ts: Date.now() }]);
+    aiHistory.current.push({ role: 'user', content: trimmed || 'Audio symptom description' });
+    setMessages((prev) => [...prev, { role: 'patient', text: userDisplayText, ts: Date.now() }]);
     setInput('');
     setTyping(true);
 
-    await handleAIResponse(trimmed);
+    await handleAIResponse(trimmed || 'Audio description', audioData);
   }, [typing, language, handleAIResponse]);
 
   const resetChat = (patient: Patient) => {
@@ -239,6 +248,8 @@ export function AINavigatorScreen() {
     if (!canListen) return;
     setListening(true);
     let finalAccumulated = '';
+    capturedAudioRef.current = null;
+
     const stop = startListening(
       language,
       (interim, final) => {
@@ -248,8 +259,14 @@ export function AINavigatorScreen() {
       () => {
         setListening(false);
         setInterimText('');
-        if (finalAccumulated.trim()) void sendMessage(finalAccumulated.trim());
+        const textToSend = finalAccumulated.trim();
+        const audio = capturedAudioRef.current;
+        capturedAudioRef.current = null;
+        if (textToSend || audio) void sendMessage(textToSend, audio);
       },
+      (base64Audio, mimeType) => {
+        capturedAudioRef.current = { base64: base64Audio, mimeType };
+      }
     );
     stopListenRef.current = stop;
   }, [listening, canListen, language, sendMessage]);
@@ -362,7 +379,22 @@ export function AINavigatorScreen() {
 
           <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-3 min-h-0">
             {messages.map((m, i) => (
-              <ChatBubble key={i} msg={m} patientName={selectedPatient?.name ?? 'Patient'} />
+              <ChatBubble
+                key={i}
+                msg={m}
+                patientName={selectedPatient?.name ?? 'Patient'}
+                language={language}
+                speaking={speaking}
+                onToggleVoice={(msgToPlay) => {
+                  if (speaking) {
+                    stopSpeaking();
+                    setSpeaking(false);
+                  } else {
+                    setSpeaking(true);
+                    speak(msgToPlay.text, language, msgToPlay.audioBase64, () => setSpeaking(false));
+                  }
+                }}
+              />
             ))}
             {typing && <TypingIndicator />}
             {triage && <AdminTriageSummary triage={triage} saved={reviewSaved} onReview={() => setShowReview(true)} />}
@@ -523,7 +555,19 @@ export function AINavigatorScreen() {
   );
 }
 
-function ChatBubble({ msg, patientName }: { msg: Message; patientName: string }) {
+function ChatBubble({
+  msg,
+  patientName,
+  language: _language,
+  speaking,
+  onToggleVoice,
+}: {
+  msg: Message;
+  patientName: string;
+  language: Language;
+  speaking: boolean;
+  onToggleVoice: (msg: Message) => void;
+}) {
   const isAI = msg.role === 'ai';
   return (
     <div className={`flex items-end gap-2 ${isAI ? 'justify-start' : 'justify-end'}`}>
@@ -533,9 +577,19 @@ function ChatBubble({ msg, patientName }: { msg: Message; patientName: string })
         </div>
       )}
       <div className={`max-w-[75%] rounded-2xl px-3.5 py-2 text-sm ${
-        isAI ? 'bg-white border border-black/5 text-ink rounded-bl-sm' : 'bg-primary text-white rounded-br-sm'
+        isAI ? 'bg-white border border-black/5 text-ink rounded-bl-sm shadow-sm' : 'bg-primary text-white rounded-br-sm'
       }`}>
         <p className="leading-relaxed whitespace-pre-wrap">{msg.text}</p>
+        {isAI && (
+          <button
+            type="button"
+            onClick={() => onToggleVoice(msg)}
+            className="mt-1.5 inline-flex items-center gap-1 text-[11px] font-semibold text-primary/80 hover:text-primary transition-colors bg-primary/5 hover:bg-primary/10 px-2 py-0.5 rounded-md"
+          >
+            <Volume2 size={12} />
+            <span>{speaking ? 'Stop Voice' : 'Listen Voice'}</span>
+          </button>
+        )}
       </div>
       {!isAI && (
         <div className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-ink/10 text-ink shrink-0 text-xs font-bold">

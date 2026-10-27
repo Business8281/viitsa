@@ -1,69 +1,108 @@
-import React from 'react';
-import { Crown, CheckCircle2, CalendarClock, Building2 } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Crown, CheckCircle2, CalendarClock, Building2, Sparkles, RefreshCw, Layers } from 'lucide-react';
+import { DEFAULT_PLANS, ensureDefaultPlansSeeded } from '../lib/entitlementsService';
+import type { SubscriptionPlan } from '../lib/types';
 
 export default function AdminSubscriptionPlans() {
+  const [plans, setPlans] = useState<SubscriptionPlan[]>(DEFAULT_PLANS);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    ensureDefaultPlansSeeded().then((res) => {
+      if (res && res.length > 0) setPlans(res);
+    }).catch(console.error);
+  }, []);
+
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-xl sm:text-2xl font-bold text-ink flex items-center gap-2">
-          <span>Subscription Plans</span>
-        </h1>
-        <p className="text-sm text-ink-muted">Manage available pricing plans for clinics.</p>
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div>
+          <h1 className="text-xl sm:text-2xl font-bold text-ink flex items-center gap-2">
+            <span>Subscription Tier Catalog (Spec v1.0)</span>
+          </h1>
+          <p className="text-sm text-ink-muted">
+            Config-driven plans, limits, and allowances for Viitsa Clinics.
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-xs bg-emerald-50 text-emerald-700 font-semibold px-3 py-1.5 rounded-lg border border-emerald-200 flex items-center gap-1.5">
+            <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
+            Config-Driven Firestore
+          </span>
+        </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 max-w-5xl">
-        {/* Clinic Pro Plan */}
-        <div className="bg-white border border-black/5 rounded-2xl p-6 shadow-sm relative overflow-hidden flex flex-col h-full">
-          <div className="absolute top-0 inset-x-0 h-1.5 bg-gradient-to-r from-primary to-accent"></div>
-          
-          <div className="mb-4">
-            <h3 className="text-lg font-bold text-ink flex items-center gap-2">
-              <Crown size={18} className="text-accent" />
-              Clinic Pro Plan
-            </h3>
-            <p className="text-ink-subtle text-xs mt-1">Perfect for clinics exploring AI-powered operations.</p>
-          </div>
-          
-          <div className="mb-6 pb-6 border-b border-black/5">
-            <div className="flex items-end gap-1 mb-1">
-              <span className="text-3xl font-bold text-ink">Free</span>
-              <span className="text-ink-subtle text-sm mb-1">/ 30 days</span>
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 max-w-7xl">
+        {plans.map((plan) => (
+          <div 
+            key={plan.id}
+            className={`bg-white border rounded-2xl p-6 shadow-sm relative overflow-hidden flex flex-col justify-between ${
+              plan.popular ? 'border-primary ring-2 ring-primary/20' : 'border-black/5'
+            }`}
+          >
+            {plan.popular && (
+              <div className="absolute top-0 right-0 bg-primary text-white text-[10px] font-bold uppercase tracking-wider px-3 py-1 rounded-bl-xl">
+                Most Popular
+              </div>
+            )}
+            {plan.coming_soon && (
+              <div className="absolute top-0 right-0 bg-slate-500 text-white text-[10px] font-bold uppercase tracking-wider px-3 py-1 rounded-bl-xl">
+                Coming Soon
+              </div>
+            )}
+            
+            <div>
+              <div className="mb-4">
+                <h3 className="text-lg font-bold text-ink flex items-center gap-2">
+                  <Crown size={18} className={plan.popular ? 'text-accent' : 'text-primary'} />
+                  {plan.name}
+                </h3>
+                <p className="text-ink-subtle text-xs mt-1 leading-relaxed">{plan.description}</p>
+              </div>
+              
+              <div className="mb-6 pb-6 border-b border-black/5">
+                <div className="flex items-baseline gap-1 mb-1">
+                  <span className="text-2xl font-bold text-ink">₹{plan.monthly_price_inr.toLocaleString('en-IN')}</span>
+                  <span className="text-ink-subtle text-xs mb-1">/ month</span>
+                </div>
+                <div className="flex items-center gap-1.5 text-primary font-medium text-xs mt-1 bg-primary/5 px-2 py-1 rounded-lg inline-flex">
+                  <CalendarClock size={12} />
+                  Annual: ₹{plan.annual_price_inr.toLocaleString('en-IN')}/yr
+                </div>
+              </div>
+              
+              <div className="space-y-2 mb-6 text-xs">
+                <div className="font-semibold text-ink-subtle uppercase text-[10px] tracking-wider mb-2">Entitlements</div>
+                <div className="flex justify-between py-1 border-b border-black/5">
+                  <span className="text-ink-subtle">Doctors</span>
+                  <span className="font-bold text-ink">{plan.limits.doctors_included} included</span>
+                </div>
+                <div className="flex justify-between py-1 border-b border-black/5">
+                  <span className="text-ink-subtle">Staff Seats</span>
+                  <span className="font-bold text-ink">{plan.limits.staff_seats_included} included</span>
+                </div>
+                <div className="flex justify-between py-1 border-b border-black/5">
+                  <span className="text-ink-subtle">AI Intakes</span>
+                  <span className="font-bold text-ink">{plan.limits.ai_intakes_monthly.toLocaleString()} / mo</span>
+                </div>
+                <div className="flex justify-between py-1 border-b border-black/5">
+                  <span className="text-ink-subtle">WhatsApp</span>
+                  <span className="font-bold text-ink">{plan.limits.whatsapp_messages_monthly.toLocaleString()} / mo</span>
+                </div>
+                <div className="flex justify-between py-1">
+                  <span className="text-ink-subtle">Storage</span>
+                  <span className="font-bold text-emerald-600">Unlimited</span>
+                </div>
+              </div>
             </div>
-            <div className="flex items-center gap-1.5 text-primary font-medium text-xs mt-2 bg-primary/5 px-2 py-1.5 rounded-lg inline-flex">
-              <CalendarClock size={14} />
-              ₹2,999/month after trial
+
+            <div className="pt-4 border-t border-black/5">
+              <span className="text-[11px] text-ink-muted block text-center font-medium">
+                SLA: {plan.features.sla_support.replace('_', ' ')}
+              </span>
             </div>
           </div>
-          
-          <ul className="space-y-3 mb-8 flex-1">
-            {[
-              'Up to 3 staff accounts',
-              'AI Health Navigator',
-              'Appointment management',
-              'Basic analytics',
-              'WhatsApp reminders'
-            ].map((feature, i) => (
-              <li key={i} className="flex items-start gap-2.5">
-                <CheckCircle2 size={16} className="text-primary shrink-0 mt-0.5" />
-                <span className="text-sm text-ink leading-tight">{feature}</span>
-              </li>
-            ))}
-          </ul>
-          
-          <button className="w-full btn-ghost border border-black/10 text-sm py-2 pointer-events-none opacity-80">
-            Current Default Plan
-          </button>
-        </div>
-        
-        {/* Placeholder for future plans */}
-        <div className="border-2 border-dashed border-black/10 rounded-2xl p-6 flex flex-col items-center justify-center text-center opacity-60">
-          <Building2 size={32} className="text-ink-subtle mb-3" />
-          <h3 className="text-base font-semibold text-ink">Add Custom Plan</h3>
-          <p className="text-xs text-ink-subtle mt-1 mb-4">Create Enterprise or specific usage-based plans.</p>
-          <button className="btn-primary text-xs py-1.5 px-4 shadow-sm" onClick={() => alert('Custom plan builder coming soon')}>
-            Create New Plan
-          </button>
-        </div>
+        ))}
       </div>
     </div>
   );

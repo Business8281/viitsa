@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Calendar, Brain, Phone, ArrowRight, Smartphone, X, CheckCircle, Shield } from 'lucide-react';
+import { Calendar, Brain, Phone, ArrowRight, Smartphone, X } from 'lucide-react';
 import type { Clinic } from '../lib/types';
 import { ViitsaLogo } from '../components/ViitsaLogo';
 import { useNavigate } from 'react-router-dom';
@@ -35,7 +35,7 @@ function GoogleIcon({ className = "w-5 h-5" }: { className?: string }) {
   );
 }
 
-export function PatientLanding({ clinic, onBook, onAI }: Props) {
+export function PatientLanding({ clinic, onBook, onAI, onLogin }: Props) {
   const navigate = useNavigate();
   const clinicName = clinic?.name ?? 'VIITSA Healthcare';
 
@@ -44,17 +44,13 @@ export function PatientLanding({ clinic, onBook, onAI }: Props) {
   const [otpCode, setOtpCode] = useState('');
   const [otpSent, setOtpSent] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [googleLoading, setGoogleLoading] = useState(false);
 
   const handleBook = onBook || (() => navigate('/patient/book'));
   const handleAI = onAI || (() => navigate('/patient/ai'));
 
   const handleGoogleSignIn = () => {
-    setGoogleLoading(true);
-    setTimeout(() => {
-      setGoogleLoading(false);
-      navigate('/patient/dashboard');
-    }, 800);
+    if (onLogin) onLogin();
+    else navigate('/login');
   };
 
   const handleSendOtp = (e: React.FormEvent) => {
@@ -137,18 +133,16 @@ export function PatientLanding({ clinic, onBook, onAI }: Props) {
             </span>
           </button>
 
-          {/* Phone OTP Login Button */}
+          {/* Sign in with Email / Phone */}
           <button
             onClick={() => {
-              setOtpSent(false);
-              setPhoneNumber('');
-              setOtpCode('');
-              setShowPhoneModal(true);
+              if (onLogin) onLogin();
+              else navigate('/login');
             }}
             className="w-full rounded-2xl py-3.5 px-6 flex items-center justify-center gap-3 font-medium text-sm transition-all hover:bg-white/10 active:scale-[0.98] border border-white/20 bg-white/5 backdrop-blur-sm shadow-md"
           >
             <Smartphone size={20} className="text-teal-400 shrink-0" />
-            <span className="text-white font-medium">Sign in with Phone OTP</span>
+            <span className="text-white font-medium">Sign in with Email or Phone</span>
           </button>
         </div>
 

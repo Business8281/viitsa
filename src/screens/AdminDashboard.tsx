@@ -1,4 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
+import { useLocation, useNavigate, Link } from 'react-router-dom';
+import { SectionErrorBoundary } from '../components/SectionErrorBoundary';
 import {
   LogOut, Menu, X, Building2, Users, UserCheck, Calendar,
   ChevronRight, RefreshCw, Phone, Mail, MapPin, ShieldCheck,
@@ -19,6 +21,8 @@ import { InvoiceView } from '../components/InvoiceView';
 import AdminAISettings from './AdminAISettings';
 import AdminSubscriptionPlans from './AdminSubscriptionPlans';
 import AdminLiveSubscriptions from './AdminLiveSubscriptions';
+import { getPasswordValidationError, assertPasswordUniqueness, claimPasswordHash } from '../lib/passwordSecurity';
+import { PasswordRequirementsGuide } from '../components/PasswordRequirementsGuide';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 interface ClinicRow {
@@ -26,11 +30,12 @@ interface ClinicRow {
   email?: string; owner_name?: string; clinic_setup_complete?: boolean; created_at?: string;
   documents_uploaded?: boolean; verification_status?: string; rejection_reason?: string;
   onboarding_documents?: { name: string; url: string }[];
-  owner_user_id?: string; id_number?: string;
+  owner_user_id?: string; id_number?: string; linked_ids?: string[];
 }
 interface PatientAccountRow {
   id: string; name?: string; full_name?: string; email?: string;
   phone?: string; id_number?: string; created_at?: string;
+  account_id?: string; patient_id?: string; linked_ids?: string[];
 }
 interface UserRow {
   id: string; name?: string; email?: string; role?: string;
@@ -38,6 +43,7 @@ interface UserRow {
   phone?: string; specialisation?: string; active?: boolean;
   onboarding_documents?: { name: string; url: string }[];
   certificates?: { name: string; url: string }[];
+  user_id?: string; linked_ids?: string[];
 }
 interface AppointmentRow {
   id: string; patient_name?: string; patient_id?: string; clinic_name?: string; clinic_id?: string;
@@ -45,8 +51,8 @@ interface AppointmentRow {
   display_token?: string; token_number?: number; time?: string; slot?: string; doctor_name?: string;
 }
 interface PatientRow {
-  id: string; patient_id?: string; name?: string; full_name?: string; clinic_id?: string; phone?: string;
-  email?: string; created_at?: string;
+  id: string; patient_id?: string; account_id?: string; name?: string; full_name?: string; clinic_id?: string; phone?: string;
+  email?: string; created_at?: string; id_number?: string; linked_ids?: string[];
 }
 interface ConsultationRow {
   id: string; patient_name?: string; patient_id?: string; clinic_id?: string;
@@ -54,11 +60,17 @@ interface ConsultationRow {
 }
 interface InvoiceRow {
   id: string; patient_name?: string; patient_id?: string; clinic_id?: string; amount?: number;
-  payment_status?: string; created_at?: string;
+  payment_status?: string; payment_method?: string; created_at?: string;
+  invoice_id?: string; bill_id?: string; appointment_id?: string; invoice_number?: string;
+  doctor_id?: string; line_items?: any[]; consultation_fee?: number; total?: number;
+  linked_ids?: string[];
 }
 interface BillingRow {
   id: string; patient_name?: string; patient_id?: string; clinic_id?: string; amount?: number;
   payment_status?: string; payment_method?: string; created_at?: string;
+  bill_id?: string; invoice_id?: string; appointment_id?: string; invoice_number?: string;
+  doctor_id?: string; line_items?: any[]; consultation_fee?: number; total?: number;
+  linked_ids?: string[];
 }
 interface SupportTicketRow {
   id: string; subject?: string; user_email?: string; status?: string; created_at?: string;
@@ -189,6 +201,88 @@ const ADMIN_NAV = [
   { id: 'audit_logs', label: 'Audit Logs' },
   { id: 'system_settings', label: 'System Settings' },
 ];
+
+export const ADMIN_TAB_TO_PATH: Record<string, string> = {
+  dashboard: '/admin/dashboard',
+  hn_clinics: '/admin/clinics',
+  hn_doctors: '/admin/doctors',
+  hn_patients: '/admin/patients',
+  hn_employees: '/admin/employees',
+  hn_laboratories: '/admin/laboratories',
+  hn_pharmacies: '/admin/pharmacies',
+  hn_hospitals: '/admin/hospitals',
+  vc_pending_clinics: '/admin/verification/clinics',
+  vc_pending_doctors: '/admin/verification/doctors',
+  vc_documents: '/admin/verification/documents',
+  vc_history: '/admin/verification/history',
+  op_appointments: '/admin/appointments',
+  op_schedules: '/admin/schedules',
+  op_activity: '/admin/activity',
+  ai_navigator: '/admin/ai/navigator',
+  ai_usage: '/admin/ai/usage',
+  ai_models: '/admin/ai/models',
+  ai_versions: '/admin/ai/versions',
+  ai_safety: '/admin/ai/safety',
+  sb_plans: '/admin/plans',
+  sb_subscriptions: '/admin/subscriptions',
+  sb_payments: '/admin/payments',
+  sb_invoices: '/admin/invoices',
+  hi_abdm: '/admin/integrations/abdm',
+  hi_labs: '/admin/integrations/labs',
+  hi_hospitals: '/admin/integrations/hospitals',
+  hi_pharmacies: '/admin/integrations/pharmacies',
+  hi_insurance: '/admin/integrations/insurance',
+  hi_apis: '/admin/integrations/apis',
+  pc_consent: '/admin/privacy/consent',
+  pc_data_requests: '/admin/privacy/data-requests',
+  pc_retention: '/admin/privacy/retention',
+  pc_incidents: '/admin/privacy/incidents',
+  pc_records: '/admin/privacy/records',
+  sec_login: '/admin/security/login',
+  sec_alerts: '/admin/security/alerts',
+  sec_sessions: '/admin/security/sessions',
+  sec_incidents: '/admin/security/incidents',
+  sup_tickets: '/admin/support/tickets',
+  sup_complaints: '/admin/support/complaints',
+  sup_reports: '/admin/support/reports',
+  ana_platform: '/admin/analytics',
+  ana_geographic: '/admin/analytics/geographic',
+  ana_clinic: '/admin/analytics/clinic',
+  ana_ai: '/admin/analytics/ai',
+  notifications: '/admin/notifications',
+  content_management: '/admin/content',
+  users_roles: '/admin/users-roles',
+  audit_logs: '/admin/audit-logs',
+  system_settings: '/admin/settings',
+};
+
+export const ADMIN_PATH_TO_TAB: Record<string, string> = {
+  ...Object.entries(ADMIN_TAB_TO_PATH).reduce((acc, [tab, path]) => {
+    acc[path] = tab;
+    return acc;
+  }, {} as Record<string, string>),
+  '/admin': 'dashboard',
+  '/admin/': 'dashboard',
+  '/admin/dashboard': 'dashboard',
+  '/admin/clinics': 'hn_clinics',
+  '/admin/doctors': 'hn_doctors',
+  '/admin/patients': 'hn_patients',
+  '/admin/employees': 'hn_employees',
+  '/admin/laboratories': 'hn_laboratories',
+  '/admin/pharmacies': 'hn_pharmacies',
+  '/admin/hospitals': 'hn_hospitals',
+  '/admin/verification': 'vc_pending_clinics',
+  '/admin/ai': 'ai_navigator',
+  '/admin/plans': 'sb_plans',
+  '/admin/subscriptions': 'sb_subscriptions',
+  '/admin/payments': 'sb_payments',
+  '/admin/invoices': 'sb_invoices',
+  '/admin/appointments': 'op_appointments',
+  '/admin/security': 'sec_login',
+  '/admin/support': 'sup_tickets',
+  '/admin/integrations': 'hi_abdm',
+  '/admin/privacy': 'pc_consent',
+};
 
 function formatDate(s?: any) {
   if (!s) return '—';
@@ -427,23 +521,25 @@ function AdminSidebar({ activeTab, setActiveTab, mobileOpen, setMobileOpen }: {
               {section.label}
             </div>
           ) : (
-            <button
+            <Link
+              to={ADMIN_TAB_TO_PATH[section.id] || `/admin/${section.id}`}
               onClick={() => { setActiveTab(section.id); setMobileOpen(false); }}
               className={`nav-item w-full text-left mb-1 ${activeTab === section.id ? 'nav-item-active' : ''}`}
             >
               <span className="flex-1 font-semibold">{section.label}</span>
-            </button>
+            </Link>
           )}
           {section.subItems && (
             <div className="space-y-0.5">
               {section.subItems.map(item => (
-                <button
+                <Link
                   key={item.id}
+                  to={ADMIN_TAB_TO_PATH[item.id] || `/admin/${item.id}`}
                   onClick={() => { setActiveTab(item.id); setMobileOpen(false); }}
                   className={`nav-item w-full text-left ${activeTab === item.id ? 'nav-item-active bg-primary-50/50 text-primary' : 'text-ink-muted hover:text-ink hover:bg-black/5'}`}
                 >
                   <span className="flex-1 ml-3 text-[13px]">{item.label}</span>
-                </button>
+                </Link>
               ))}
             </div>
           )}
@@ -516,7 +612,16 @@ let adminMemoryCache: {
 // ── AdminDashboard ─────────────────────────────────────────────────────────────
 export function AdminDashboard() {
   const { user } = useAuth();
-  const [activeTab,    setActiveTab]    = useState<ActiveTab>('dashboard');
+  const location = useLocation();
+  const navigate = useNavigate();
+
+  const currentPath = location.pathname.replace(/\/+$/, '') || '/admin/dashboard';
+  const activeTab: ActiveTab = ADMIN_PATH_TO_TAB[currentPath] || ADMIN_PATH_TO_TAB[location.pathname] || 'dashboard';
+
+  const setActiveTab = (newTab: ActiveTab) => {
+    const targetPath = ADMIN_TAB_TO_PATH[newTab] || `/admin/${newTab}`;
+    navigate(targetPath);
+  };
   const [mobileOpen,   setMobileOpen]   = useState(false);
   const [lastRefresh,  setLastRefresh]  = useState(new Date());
 
@@ -657,28 +762,328 @@ export function AdminDashboard() {
     };
   }, [clinics, patientAccts, clinicPats, users, appointments, consultations, invoices, billing, supportTickets, complaints, reports, subscriptions]);
 
-  // ── Derived stats (all from live data) ────────────────────────────────────
-  const totalClinics      = clinics.length;
-  const setupClinics      = clinics.filter(c => c.clinic_setup_complete === true).length;
+  // ── Multi-Key Deduplicated Data Sets ──────────────────────────────────────
+  // 1. Patients: Deduplicate master patient accounts & clinic patient records across IDs, account_ids, phone & email
+  const displayPatients: (PatientAccountRow | PatientRow)[] = useMemo(() => {
+    const list: (PatientAccountRow | PatientRow)[] = [];
+    const keyToIndex = new Map<string, number>();
+
+    const getKeys = (p: any): string[] => {
+      const keys: string[] = [];
+      if (p.id) keys.push(`id:${p.id}`);
+      if (p.account_id) keys.push(`id:${p.account_id}`);
+      if (p.patient_id) keys.push(`id:${p.patient_id}`);
+      if (p.id_number) keys.push(`idno:${String(p.id_number).trim().toUpperCase()}`);
+      const normEmail = p.email?.trim().toLowerCase();
+      if (normEmail && normEmail.includes('@')) keys.push(`email:${normEmail}`);
+      const digits = p.phone ? String(p.phone).replace(/\D/g, '').slice(-10) : '';
+      if (digits && digits.length >= 10) keys.push(`phone:${digits}`);
+      return keys;
+    };
+
+    const registerRecord = (record: PatientAccountRow | PatientRow) => {
+      const keys = getKeys(record);
+      let existingIdx: number | undefined = undefined;
+      for (const k of keys) {
+        if (keyToIndex.has(k)) {
+          existingIdx = keyToIndex.get(k);
+          break;
+        }
+      }
+
+      if (existingIdx !== undefined) {
+        // Merge into existing canonical patient record
+        const existing = list[existingIdx];
+        const linked = new Set<string>([
+          ...(existing.linked_ids || []),
+          existing.id,
+          (existing as any).account_id,
+          (existing as any).patient_id,
+          record.id,
+          (record as any).account_id,
+          (record as any).patient_id,
+        ].filter(Boolean));
+        existing.linked_ids = Array.from(linked);
+
+        // Fill in any missing fields from this record
+        if (!existing.name && ((record as any).name || (record as any).full_name)) {
+          existing.name = (record as any).name || (record as any).full_name;
+        }
+        if (!(existing as any).id_number && (record as any).id_number) {
+          (existing as any).id_number = (record as any).id_number;
+        }
+        if (!existing.email && record.email) existing.email = record.email;
+        if (!existing.phone && record.phone) existing.phone = record.phone;
+        if (!existing.created_at && record.created_at) existing.created_at = record.created_at;
+
+        // Associate all keys of this record with the existing canonical record index
+        for (const k of keys) {
+          keyToIndex.set(k, existingIdx);
+        }
+      } else {
+        const newRecord = {
+          ...record,
+          linked_ids: [
+            record.id,
+            (record as any).account_id,
+            (record as any).patient_id,
+          ].filter(Boolean),
+        };
+        const newIdx = list.length;
+        list.push(newRecord);
+        for (const k of keys) {
+          keyToIndex.set(k, newIdx);
+        }
+      }
+    };
+
+    // First register global master patient accounts
+    for (const pa of patientAccts) {
+      registerRecord(pa);
+    }
+    // Then merge clinic-scoped patient records
+    for (const cp of clinicPats) {
+      registerRecord(cp);
+    }
+
+    return list.slice(0, 500);
+  }, [patientAccts, clinicPats]);
+
+  const totalPatients = displayPatients.length;
+
+  // 2. Users: Deduplicate users by id, user_id, email, and phone
+  const displayUsers: UserRow[] = useMemo(() => {
+    const list: UserRow[] = [];
+    const keyToIndex = new Map<string, number>();
+
+    const getKeys = (u: any): string[] => {
+      const keys: string[] = [];
+      if (u.id) keys.push(`id:${u.id}`);
+      if (u.user_id) keys.push(`id:${u.user_id}`);
+      const normEmail = u.email?.trim().toLowerCase();
+      if (normEmail && normEmail.includes('@')) keys.push(`email:${normEmail}`);
+      const digits = u.phone ? String(u.phone).replace(/\D/g, '').slice(-10) : '';
+      if (digits && digits.length >= 10) keys.push(`phone:${digits}`);
+      return keys;
+    };
+
+    for (const u of users) {
+      const keys = getKeys(u);
+      let existingIdx: number | undefined = undefined;
+      for (const k of keys) {
+        if (keyToIndex.has(k)) {
+          existingIdx = keyToIndex.get(k);
+          break;
+        }
+      }
+
+      if (existingIdx !== undefined) {
+        const existing = list[existingIdx];
+        const linked = new Set<string>([
+          ...(existing.linked_ids || []),
+          existing.id,
+          (existing as any).user_id,
+          u.id,
+          (u as any).user_id,
+        ].filter(Boolean));
+        existing.linked_ids = Array.from(linked);
+        if (!existing.name && u.name) existing.name = u.name;
+        if (!existing.clinic_id && u.clinic_id) existing.clinic_id = u.clinic_id;
+        if (!existing.role && u.role) existing.role = u.role;
+        if (!existing.specialisation && u.specialisation) existing.specialisation = u.specialisation;
+        for (const k of keys) {
+          keyToIndex.set(k, existingIdx);
+        }
+      } else {
+        const newRecord = {
+          ...u,
+          linked_ids: [u.id, (u as any).user_id].filter(Boolean),
+        };
+        const newIdx = list.length;
+        list.push(newRecord);
+        for (const k of keys) {
+          keyToIndex.set(k, newIdx);
+        }
+      }
+    }
+    return list;
+  }, [users]);
+
+  const totalUsers        = displayUsers.length;
+  const companyAdmins     = displayUsers.filter(u => u.role === 'company_admin' || u.role === 'company_manager' || u.role === 'company_staff').length;
+  const clinicAdmins      = displayUsers.filter(u => u.role === 'clinic_admin').length;
+  const doctorUsers       = displayUsers.filter(u => u.role === 'clinic_doctor').length;
+  const staffUsers        = displayUsers.filter(u => u.role === 'clinic_staff').length;
+
+  // 3. Clinics: Deduplicate clinics by id, owner_user_id, email, and phone
+  const displayClinics: ClinicRow[] = useMemo(() => {
+    const list: ClinicRow[] = [];
+    const seen = new Set<string>();
+
+    for (const c of clinics) {
+      const keys: string[] = [];
+      if (c.id) keys.push(`id:${c.id}`);
+      if (c.owner_user_id) keys.push(`owner:${c.owner_user_id}`);
+      const normEmail = c.email?.trim().toLowerCase();
+      if (normEmail && normEmail.includes('@')) keys.push(`email:${normEmail}`);
+      const digits = c.phone ? String(c.phone).replace(/\D/g, '').slice(-10) : '';
+      if (digits && digits.length >= 10) keys.push(`phone:${digits}`);
+
+      const isDup = keys.some(k => seen.has(k));
+      if (!isDup) {
+        keys.forEach(k => seen.add(k));
+        list.push(c);
+      }
+    }
+    return list;
+  }, [clinics]);
+
+  const totalClinics      = displayClinics.length;
+  const setupClinics      = displayClinics.filter(c => c.clinic_setup_complete === true).length;
   const pendingClinics    = totalClinics - setupClinics;
-
-  // Merge both patient sources for total unique count
-  const allPatientIds = new Set([
-    ...patientAccts.map(p => p.id),
-    ...clinicPats.map(p => p.id),
-  ]);
-  const totalPatients = allPatientIds.size;
-
-  const totalUsers        = users.length;
-  const companyAdmins     = users.filter(u => u.role === 'company_admin' || u.role === 'company_manager' || u.role === 'company_staff').length;
-  const clinicAdmins      = users.filter(u => u.role === 'clinic_admin').length;
-  const doctorUsers       = users.filter(u => u.role === 'clinic_doctor').length;
-  const staffUsers        = users.filter(u => u.role === 'clinic_staff').length;
 
   const totalAppointments = appointments.length;
   const totalConsultations = consultations.length;
 
-  const allBillingRows    = [...invoices, ...billing];
+  const getTime = (d: any): number => {
+    if (!d) return 0;
+    if (typeof d === 'object') {
+      if (typeof d.seconds === 'number') return d.seconds * 1000;
+      if (typeof d.toMillis === 'function') return d.toMillis();
+      if (typeof d.getTime === 'function') return d.getTime();
+    }
+    const parsed = new Date(d).getTime();
+    return isNaN(parsed) ? 0 : parsed;
+  };
+
+  // 4. Billing: Deduplicate across invoices and billing collections so every transaction appears exactly once
+  const displayBilling: (InvoiceRow | BillingRow)[] = useMemo(() => {
+    const list: (InvoiceRow | BillingRow)[] = [];
+    const keyToIndex = new Map<string, number>();
+
+    const getKeys = (b: any): string[] => {
+      const keys: string[] = [];
+      if (b.id) keys.push(`id:${b.id}`);
+      if (b.invoice_id) keys.push(`inv:${b.invoice_id}`);
+      if (b.bill_id) keys.push(`bill:${b.bill_id}`);
+      if (b.invoice_number) keys.push(`invnum:${String(b.invoice_number).trim().toUpperCase()}`);
+      if (b.appointment_id) keys.push(`appt:${b.appointment_id}`);
+      return keys;
+    };
+
+    const registerItem = (item: any, isInvoice: boolean) => {
+      const keys = getKeys(item);
+      let existingIdx: number | undefined = undefined;
+
+      // 1. Direct key match (by document id, invoice_id, bill_id, appointment_id, invoice_number)
+      for (const k of keys) {
+        if (keyToIndex.has(k)) {
+          existingIdx = keyToIndex.get(k);
+          break;
+        }
+      }
+
+      // 2. Cross-reference match: item.bill_id matches existing invoice's id or vice versa
+      if (existingIdx === undefined) {
+        if (item.bill_id && keyToIndex.has(`id:${item.bill_id}`)) {
+          existingIdx = keyToIndex.get(`id:${item.bill_id}`);
+        } else if (item.invoice_id && keyToIndex.has(`id:${item.invoice_id}`)) {
+          existingIdx = keyToIndex.get(`id:${item.invoice_id}`);
+        } else if (item.id) {
+          if (keyToIndex.has(`bill:${item.id}`)) {
+            existingIdx = keyToIndex.get(`bill:${item.id}`);
+          } else if (keyToIndex.has(`inv:${item.id}`)) {
+            existingIdx = keyToIndex.get(`inv:${item.id}`);
+          }
+        }
+      }
+
+      // 3. Fallback semantic match: same patient, same clinic, same amount, within 5 minutes
+      if (existingIdx === undefined && item.patient_id && item.clinic_id) {
+        const itemTime = getTime(item.created_at);
+        const itemAmt = Number(item.amount || item.total || 0);
+        for (let i = 0; i < list.length; i++) {
+          const ex = list[i] as any;
+          const samePatient = ex.patient_id === item.patient_id ||
+            Boolean(ex.linked_ids && ex.linked_ids.includes(item.patient_id));
+          const sameClinic = ex.clinic_id === item.clinic_id;
+          const sameAmt = Math.abs(Number(ex.amount || ex.total || 0) - itemAmt) < 0.01;
+
+          if (samePatient && sameClinic && sameAmt) {
+            const exTime = getTime(ex.created_at);
+            // If timestamps match within 5 minutes or both are empty/same day
+            if (!itemTime || !exTime || Math.abs(exTime - itemTime) <= 300000) {
+              existingIdx = i;
+              break;
+            }
+          }
+        }
+      }
+
+      if (existingIdx !== undefined) {
+        const existing = list[existingIdx] as any;
+        // Merge fields: prefer non-empty values
+        if (!existing.payment_method && item.payment_method) existing.payment_method = item.payment_method;
+        if (!existing.payment_status && item.payment_status) existing.payment_status = item.payment_status;
+        if (!existing.patient_name && item.patient_name) existing.patient_name = item.patient_name;
+        if (!existing.clinic_name && item.clinic_name) existing.clinic_name = item.clinic_name;
+        if (!existing.appointment_id && item.appointment_id) existing.appointment_id = item.appointment_id;
+        if (!existing.invoice_number && item.invoice_number) existing.invoice_number = item.invoice_number;
+        if (!existing.line_items && item.line_items) existing.line_items = item.line_items;
+        if (!existing.consultation_fee && item.consultation_fee) existing.consultation_fee = item.consultation_fee;
+        if (!existing.doctor_id && item.doctor_id) existing.doctor_id = item.doctor_id;
+
+        const linked = new Set<string>([
+          ...(existing.linked_ids || []),
+          existing.id,
+          existing.bill_id,
+          existing.invoice_id,
+          item.id,
+          item.bill_id,
+          item.invoice_id,
+        ].filter(Boolean));
+        existing.linked_ids = Array.from(linked);
+
+        // Register all keys of this merged item
+        for (const k of keys) {
+          keyToIndex.set(k, existingIdx);
+        }
+        if (item.id) {
+          keyToIndex.set(`id:${item.id}`, existingIdx);
+          keyToIndex.set(`bill:${item.id}`, existingIdx);
+          keyToIndex.set(`inv:${item.id}`, existingIdx);
+        }
+      } else {
+        const newRecord = {
+          ...item,
+          linked_ids: [item.id, item.bill_id, item.invoice_id].filter(Boolean),
+        };
+        const newIdx = list.length;
+        list.push(newRecord);
+        for (const k of keys) {
+          keyToIndex.set(k, newIdx);
+        }
+        if (item.id) {
+          keyToIndex.set(`id:${item.id}`, newIdx);
+          keyToIndex.set(`bill:${item.id}`, newIdx);
+          keyToIndex.set(`inv:${item.id}`, newIdx);
+        }
+      }
+    };
+
+    // First process invoices (primary fiscal records)
+    for (const inv of invoices) {
+      registerItem(inv, true);
+    }
+    // Then process billing entries (merging matches or registering standalone bills)
+    for (const bill of billing) {
+      registerItem(bill, false);
+    }
+
+    return list.sort((a, b) => getTime(b.created_at) - getTime(a.created_at)).slice(0, 500);
+  }, [invoices, billing]);
+
+  const allBillingRows    = displayBilling;
   const totalRevenue      = allBillingRows
     .filter(b => b.payment_status === 'paid')
     .reduce((s, b) => s + Number(b.amount || 0), 0);
@@ -686,36 +1091,24 @@ export function AdminDashboard() {
     .filter(b => b.payment_status !== 'paid')
     .reduce((s, b) => s + Number(b.amount || 0), 0);
 
-  // Combined patients list (prefer patient_accounts, top up with clinic patients)
-  const displayPatients: (PatientAccountRow | PatientRow)[] = [
-    ...patientAccts,
-    ...clinicPats.filter(cp => !patientAccts.find(pa => pa.id === cp.id)),
-  ].slice(0, 500);
-
-  const getTime = (d: any) => typeof d === 'object' && d?.seconds ? d.seconds * 1000 : new Date(d || 0).getTime();
-  // All billing
-  const displayBilling: (InvoiceRow | BillingRow)[] = [...invoices, ...billing]
-    .sort((a, b) => getTime(b.created_at) - getTime(a.created_at))
-    .slice(0, 500);
-
   const resolveClinicName = (id?: string, name?: string) => {
     if (name) return name;
     if (!id) return '—';
-    const c = clinics.find(c => c.id === id);
+    const c = displayClinics.find(c => c.id === id);
     return c?.name || c?.id_number || 'Unknown Clinic';
   };
 
   const resolvePatientName = (id?: string, name?: string) => {
     if (name) return name;
     if (!id) return '—';
-    const p = displayPatients.find(p => p.id === id || (p as any).patient_id === id);
-    return p?.name || p?.full_name || (p as any)?.id_number || 'Unknown Patient';
+    const p = displayPatients.find(p => p.id === id || (p as any).patient_id === id || (p as any).account_id === id || (p as any).linked_ids?.includes(id));
+    return (p as any)?.name || (p as any)?.full_name || (p as any)?.id_number || 'Unknown Patient';
   };
 
   const resolveDoctorName = (id?: string, name?: string) => {
     if (name) return name;
     if (!id) return '—';
-    const d = users.find(u => u.id === id || u.user_id === id);
+    const d = displayUsers.find(u => u.id === id || (u as any).user_id === id || (u as any).linked_ids?.includes(id));
     return d?.name || 'Unknown Doctor';
   };
 
@@ -868,8 +1261,22 @@ export function AdminDashboard() {
   const handleAddAdmin = async (e: React.FormEvent) => {
     e.preventDefault();
     setAddAdminError(null);
+
+    const pwdErr = getPasswordValidationError(newAdminPass);
+    if (pwdErr) {
+      setAddAdminError(pwdErr);
+      return;
+    }
+
     setAddAdminLoading(true);
     try {
+      const uniqCheck = await assertPasswordUniqueness(newAdminPass);
+      if (!uniqCheck.ok) {
+        setAddAdminError(uniqCheck.error || 'This password is already in use by another account. Please choose a different password.');
+        setAddAdminLoading(false);
+        return;
+      }
+
       const secondaryApp = initializeApp(firebaseConfig, 'SecondaryAppForAdmin_' + Date.now());
       const secondaryAuth = getAuth(secondaryApp);
       const cred = await createUserWithEmailAndPassword(secondaryAuth, newAdminEmail, newAdminPass);
@@ -879,6 +1286,7 @@ export function AdminDashboard() {
         role: 'company_admin',
         created_at: new Date().toISOString(),
       });
+      claimPasswordHash(uniqCheck.hash, cred.user.uid, newAdminEmail).catch(() => {});
       secondaryAuth.signOut();
       setShowAddAdmin(false);
       setNewAdminEmail('');
@@ -966,6 +1374,7 @@ export function AdminDashboard() {
 
         {/* Main content */}
         <main className="p-4 sm:p-6 max-w-[1600px] mx-auto">
+          <SectionErrorBoundary sectionName="Admin Panel View" fallbackUrl="/admin/dashboard">
           <>
             {/* ── OVERVIEW ── */}
             {activeTab === 'dashboard' && (
@@ -997,13 +1406,13 @@ export function AdminDashboard() {
                       <SectionHeader
                         title="Recent Clinics"
                         subtitle={`${totalClinics} total`}
-                        action={<button onClick={() => setActiveTab('clinics')} className="text-xs font-semibold text-primary hover:underline flex items-center gap-1">View all <ChevronRight size={14} /></button>}
+                        action={<button onClick={() => setActiveTab('hn_clinics')} className="text-xs font-semibold text-primary hover:underline flex items-center gap-1">View all <ChevronRight size={14} /></button>}
                       />
-                      {clinics.length === 0 ? (
+                      {displayClinics.length === 0 ? (
                         <EmptyState icon={<Building2 size={18} />} title="No clinics registered yet" />
                       ) : (
                         <div className="space-y-2">
-                          {clinics.slice(0, 5).map(c => (
+                          {displayClinics.slice(0, 5).map(c => (
                             <div key={c.id} className="flex items-center gap-3 rounded-lg border border-black/5 px-3 py-2.5">
                               <div className="inline-flex h-9 w-9 items-center justify-center rounded-lg bg-primary-50 text-primary font-bold text-xs shrink-0">
                                 {(c.name || 'C').charAt(0).toUpperCase()}
@@ -1084,10 +1493,10 @@ export function AdminDashboard() {
                   <DataTable
                     headers={['Clinic', 'Owner', 'Contact', 'City', 'Status', 'Created']}
                     hiddenFrom={[null, 'sm', 'md', 'lg', null, 'lg']}
-                    empty={clinics.length === 0}
+                    empty={displayClinics.length === 0}
                     emptyLabel="No clinics registered yet"
                   >
-                    {clinics.map(c => (
+                    {displayClinics.map(c => (
                       <tr key={c.id} className="hover:bg-surface/60 transition-colors cursor-pointer" onClick={() => setSelectedClinicId(c.id)}>
                         <td className="px-4 py-3">
                           <div className="flex items-center gap-2.5">
@@ -1123,7 +1532,7 @@ export function AdminDashboard() {
                 <div className="space-y-4">
                   <div>
                     <h1 className="text-xl sm:text-2xl font-bold text-ink">Patients</h1>
-                    <p className="text-sm text-ink-muted">{totalPatients} total unique patients</p>
+                    <p className="text-sm text-ink-muted">{totalPatients} total unique patient{totalPatients === 1 ? '' : 's'}</p>
                   </div>
                   <DataTable
                     headers={['Patient', 'ID No.', 'Contact', 'Registered']}
@@ -1131,33 +1540,38 @@ export function AdminDashboard() {
                     empty={displayPatients.length === 0}
                     emptyLabel="No patients yet"
                   >
-                    {displayPatients.map(p => (
-                      <tr key={p.id} className="hover:bg-surface/60 transition-colors">
-                        <td className="px-4 py-3">
-                          <div className="flex items-center gap-2.5">
-                            <div className="inline-flex h-8 w-8 rounded-full bg-primary-50 text-primary font-bold text-xs items-center justify-center shrink-0">
-                              {((p as PatientAccountRow).name || (p as PatientAccountRow).full_name || (p as PatientRow).name || 'P').charAt(0).toUpperCase()}
+                    {displayPatients.map(p => {
+                      const pName = (p as any).name || (p as any).full_name || '—';
+                      const pInitial = (pName !== '—' ? pName : 'P').charAt(0).toUpperCase();
+                      const pIdNumber = (p as any).id_number || '—';
+                      return (
+                        <tr key={p.id} className="hover:bg-surface/60 transition-colors">
+                          <td className="px-4 py-3">
+                            <div className="flex items-center gap-2.5">
+                              <div className="inline-flex h-8 w-8 rounded-full bg-primary-50 text-primary font-bold text-xs items-center justify-center shrink-0">
+                                {pInitial}
+                              </div>
+                              <div>
+                                <p className="font-semibold text-ink text-sm truncate max-w-[140px]">
+                                  {pName}
+                                </p>
+                                <p className="text-[10px] text-ink-subtle font-mono truncate">{p.id}</p>
+                              </div>
                             </div>
-                            <div>
-                              <p className="font-semibold text-ink text-sm truncate max-w-[140px]">
-                                {(p as PatientAccountRow).name || (p as PatientAccountRow).full_name || (p as PatientRow).name || '—'}
-                              </p>
-                              <p className="text-[10px] text-ink-subtle font-mono truncate">{p.id}</p>
+                          </td>
+                          <td className="px-4 py-3 text-ink-muted text-xs font-mono hidden sm:table-cell">
+                            {pIdNumber}
+                          </td>
+                          <td className="px-4 py-3 hidden md:table-cell">
+                            <div className="text-xs text-ink-muted space-y-0.5">
+                              {p.phone && <p className="flex items-center gap-1"><Phone size={11} />{p.phone}</p>}
+                              {p.email && <p className="flex items-center gap-1 truncate max-w-[180px]"><Mail size={11} />{p.email}</p>}
                             </div>
-                          </div>
-                        </td>
-                        <td className="px-4 py-3 text-ink-muted text-xs font-mono hidden sm:table-cell">
-                          {(p as PatientAccountRow).id_number || '—'}
-                        </td>
-                        <td className="px-4 py-3 hidden md:table-cell">
-                          <div className="text-xs text-ink-muted space-y-0.5">
-                            {p.phone && <p className="flex items-center gap-1"><Phone size={11} />{p.phone}</p>}
-                            {p.email && <p className="flex items-center gap-1 truncate max-w-[180px]"><Mail size={11} />{p.email}</p>}
-                          </div>
-                        </td>
-                        <td className="px-4 py-3 text-ink-subtle text-xs hidden lg:table-cell">{formatDate(p.created_at)}</td>
-                      </tr>
-                    ))}
+                          </td>
+                          <td className="px-4 py-3 text-ink-subtle text-xs hidden lg:table-cell">{formatDate(p.created_at)}</td>
+                        </tr>
+                      );
+                    })}
                   </DataTable>
                 </div>
               )}
@@ -1172,10 +1586,10 @@ export function AdminDashboard() {
                   <DataTable
                     headers={['Clinic', 'Email', 'Status', 'Documents', 'Actions']}
                     hiddenFrom={[null, 'sm', null, null, null]}
-                    empty={clinics.filter(c => c.verification_status === 'pending').length === 0}
+                    empty={displayClinics.filter(c => c.verification_status === 'pending').length === 0}
                     emptyLabel="No clinics pending verification"
                   >
-                    {clinics.filter(c => c.verification_status === 'pending').map(c => (
+                    {displayClinics.filter(c => c.verification_status === 'pending').map(c => (
                       <tr key={c.id} className="hover:bg-surface/60 transition-colors">
                         <td className="px-4 py-3">
                           <div className="flex items-center gap-2.5">
@@ -1251,10 +1665,10 @@ export function AdminDashboard() {
                   <DataTable
                     headers={['User', 'Email', 'Role', 'Clinic ID', 'Created']}
                     hiddenFrom={[null, 'sm', null, 'lg', 'lg']}
-                    empty={users.length === 0}
+                    empty={displayUsers.length === 0}
                     emptyLabel="No users found"
                   >
-                    {users.map(u => (
+                    {displayUsers.map(u => (
                       <tr key={u.id} className="hover:bg-surface/60 transition-colors cursor-pointer" onClick={() => setSelectedUserId(u.id)}>
                         <td className="px-4 py-3">
                           <div className="flex items-center gap-2.5">
@@ -1579,16 +1993,16 @@ export function AdminDashboard() {
                   </div>
                   <DataTable
                     headers={['City / Region', 'Active Clinics', 'Total Users', 'Performance Tier']}
-                    empty={clinics.length === 0}
+                    empty={displayClinics.length === 0}
                     emptyLabel="No geographic data available"
                     hiddenFrom={[null, null, 'sm', 'md']}
                   >
                     {Object.entries(
-                      clinics.reduce((acc, c) => {
+                      displayClinics.reduce((acc, c) => {
                         const city = (c.city || 'Unknown/Unspecified').trim();
                         if (!acc[city]) acc[city] = { count: 0, users: 0 };
                         acc[city].count += 1;
-                        acc[city].users += users.filter(u => u.clinic_id === c.id).length;
+                        acc[city].users += displayUsers.filter(u => u.clinic_id === c.id).length;
                         return acc;
                       }, {} as Record<string, { count: number; users: number }>)
                     ).sort((a, b) => b[1].count - a[1].count).map(([city, stats]) => (
@@ -1614,12 +2028,12 @@ export function AdminDashboard() {
                   </div>
                   <DataTable
                     headers={['Clinic Name', 'Doctors', 'Patients (Est.)', 'Appointments', 'Total Billing']}
-                    empty={clinics.length === 0}
+                    empty={displayClinics.length === 0}
                     emptyLabel="No clinics found"
                     hiddenFrom={[null, 'sm', 'md', 'lg', null]}
                   >
-                    {clinics.map(c => {
-                      const cDocs = users.filter(u => u.clinic_id === c.id && u.role === 'clinic_doctor').length;
+                    {displayClinics.map(c => {
+                      const cDocs = displayUsers.filter(u => u.clinic_id === c.id && u.role === 'clinic_doctor').length;
                       const cPats = clinicPats.filter(p => p.clinic_id === c.id).length;
                       const cAppts = appointments.filter(a => a.clinic_id === c.id).length;
                       const cRev = displayBilling.filter(b => b.clinic_id === c.id && b.payment_status === 'paid').reduce((s, b) => s + Number(b.amount || 0), 0);
@@ -1689,7 +2103,7 @@ export function AdminDashboard() {
                     hiddenFrom={[null, null, 'sm', 'md', null]}
                   >
                     {auditLogs.filter((a: any) => a.event_type === 'USER_LOGIN').map((log: any) => {
-                      const resolvedUser = users.find(u => u.id === log.actor_id || (u as any).user_id === log.actor_id) || displayPatients.find(p => p.id === log.actor_id || (p as any).patient_id === log.actor_id);
+                      const resolvedUser = displayUsers.find(u => u.id === log.actor_id || (u as any).user_id === log.actor_id || (u as any).linked_ids?.includes(log.actor_id)) || displayPatients.find(p => p.id === log.actor_id || (p as any).patient_id === log.actor_id || (p as any).account_id === log.actor_id || (p as any).linked_ids?.includes(log.actor_id));
                       const displayName = resolvedUser ? (resolvedUser.name || (resolvedUser as any).full_name || 'Unnamed') : log.actor_id;
 
                       return (
@@ -1720,8 +2134,8 @@ export function AdminDashboard() {
           {!['dashboard', 'hn_clinics', 'hn_patients', 'vc_pending_clinics', 'users_roles', 'op_appointments', 'sb_payments', 'sb_plans', 'sb_subscriptions', 'ana_platform', 'ana_geographic', 'ana_clinic', 'ana_ai', 'sec_login'].includes(activeTab) && (
             <GenericDataView
               activeTab={activeTab}
-              users={users}
-              clinics={clinics}
+              users={displayUsers}
+              clinics={displayClinics}
               appointments={appointments}
               invoices={invoices}
               billing={displayBilling}
@@ -1734,16 +2148,17 @@ export function AdminDashboard() {
               auditLogs={auditLogs}
             />
           )}
+          </SectionErrorBoundary>
         </main>
       </div>
 
       {/* Clinic Profile Modal */}
       <Modal open={!!selectedClinicId} onClose={() => setSelectedClinicId(null)} title="Clinic Profile">
         {(() => {
-          const c = clinics.find(x => x.id === selectedClinicId);
+          const c = displayClinics.find(x => x.id === selectedClinicId) || clinics.find(x => x.id === selectedClinicId);
           if (!c) return <div className="p-4"><p>Clinic not found.</p></div>;
           
-          const clinicStaff = users.filter(u => u.clinic_id === c.id);
+          const clinicStaff = displayUsers.filter(u => u.clinic_id === c.id);
           
           return (
             <div className="space-y-6 pt-2">
@@ -1839,7 +2254,7 @@ export function AdminDashboard() {
       {/* User/Doctor Profile Modal */}
       <Modal open={!!selectedUserId} onClose={() => setSelectedUserId(null)} title="User Profile">
         {(() => {
-          const u = users.find(x => x.id === selectedUserId);
+          const u = displayUsers.find(x => x.id === selectedUserId || (x as any).user_id === selectedUserId || (x as any).linked_ids?.includes(selectedUserId)) || users.find(x => x.id === selectedUserId);
           if (!u) return <div className="p-4"><p>User not found.</p></div>;
           
           const clinicName = resolveClinicName(u.clinic_id);
@@ -1942,7 +2357,8 @@ export function AdminDashboard() {
           </div>
           <div>
             <label className="label">Temporary Password</label>
-            <input required type="password" minLength={6} value={newAdminPass} onChange={e => setNewAdminPass(e.target.value)} className="input" placeholder="At least 6 characters" />
+            <input required type="password" minLength={8} value={newAdminPass} onChange={e => setNewAdminPass(e.target.value)} className="input" placeholder="Min. 8 chars with upper, lower, number & symbol" />
+            <PasswordRequirementsGuide password={newAdminPass} showAlways={true} />
           </div>
           <div className="pt-2">
             <button type="submit" disabled={addAdminLoading} className="btn-primary w-full h-11">
@@ -1970,8 +2386,8 @@ export function AdminDashboard() {
             </button>
             <InvoiceView
               invoice={adminViewingInvoice}
-              clinic={(clinics.find(c => c.id === adminViewingInvoice.clinic_id || c.name === adminViewingInvoice.clinic_name) || { name: adminViewingInvoice.clinic_name || 'VIITSA Partner Clinic' }) as any}
-              patient={(patientAccts.find(p => p.id === adminViewingInvoice.patient_id || p.id_number === adminViewingInvoice.patient_id) || clinicPats.find(p => p.id === adminViewingInvoice.patient_id) || { name: adminViewingInvoice.patient_name || 'Patient' }) as any}
+              clinic={(displayClinics.find(c => c.id === adminViewingInvoice.clinic_id || c.name === adminViewingInvoice.clinic_name) || clinics.find(c => c.id === adminViewingInvoice.clinic_id || c.name === adminViewingInvoice.clinic_name) || { name: adminViewingInvoice.clinic_name || 'VIITSA Partner Clinic' }) as any}
+              patient={(displayPatients.find(p => p.id === adminViewingInvoice.patient_id || (p as any).id_number === adminViewingInvoice.patient_id || (p as any).account_id === adminViewingInvoice.patient_id || (p as any).linked_ids?.includes(adminViewingInvoice.patient_id)) || { name: adminViewingInvoice.patient_name || 'Patient' }) as any}
               onClose={() => setAdminViewingInvoice(null)}
             />
           </div>

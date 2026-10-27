@@ -41,12 +41,29 @@ export interface Clinic {
   verification_status?: 'unverified' | 'pending' | 'approved' | 'rejected';
   rejection_reason?: string;
   onboarding_documents?: { name: string; url: string }[];
-  subscription_status?: 'pending' | 'active' | 'deactivated' | 'free_plan' | 'cancelled';
+  subscription_status?: 'pending' | 'active' | 'deactivated' | 'free_plan' | 'cancelled' | 'trial';
   subscription_updated_at?: string;
   subscription_activated_at?: string;
+  subscription_period_end?: string;
+  subscription_billing_cycle?: 'monthly' | 'annual';
   subscription_deactivated_at?: string;
   subscription_cancelled_at?: string;
   subscription_plan?: string;
+  subscription_auto_renew?: boolean;
+  cancel_at_period_end?: boolean;
+  cancel_effective_date?: string;
+  cancellation_reason?: string;
+  cancellation_feedback?: string;
+  change_scheduled?: boolean;
+  scheduled_plan?: string;
+  scheduled_billing_cycle?: 'monthly' | 'annual';
+  scheduled_change_type?: 'upgrade' | 'downgrade';
+  scheduled_effective_date?: string;
+  scheduled_at?: string;
+  trial_used?: boolean;
+  has_used_trial?: boolean;
+  trial_started_at?: string;
+  trial_ends_at?: string;
   documents?: any;
   created_at: string;
   updated_at?: string;
@@ -172,7 +189,7 @@ export interface AuditEvent {
   actor_id: string;
   actor_name?: string;
   actor_role: string;
-  patient_id: string;
+  patient_id?: string;
   patient_name?: string;
   clinic_id?: string;
   clinic_name?: string;
@@ -409,4 +426,99 @@ export interface PatientNotification {
   read: boolean;
   action_url: string | null;
   created_at: string;
+}
+
+// ── Subscription & Entitlements Models (Spec v1.0) ──
+
+export type SubscriptionTier = 'solo' | 'clinic' | 'multispecialty' | 'hospital' | 'enterprise';
+export type BillingCycle = 'monthly' | 'annual';
+export type ClinicSubscriptionState = 'trialing' | 'active' | 'past_due' | 'read_only' | 'cancelled' | 'pending';
+
+export interface PlanLimits {
+  doctors_included: number;
+  staff_seats_included: number;
+  locations_included: number;
+  ai_intakes_monthly: number;
+  whatsapp_messages_monthly: number;
+  storage_gb: number;
+}
+
+export interface PlanFeatures {
+  ai_triage: 'basic' | 'standard' | 'advanced' | 'custom';
+  schedules_queues: 'single' | 'multi_doc' | 'advanced_multi' | 'multi_department';
+  whatsapp_automation: 'reminders_only' | 'confirm_reschedule' | 'full_crm' | 'custom_flows';
+  billing_suite: 'standard' | 'full' | 'tpa_insurance' | 'full_ipd';
+  inventory: 'none' | 'basic' | 'purchase_orders' | 'multi_store';
+  custom_roles: boolean;
+  audit_log: boolean;
+  custom_branding: boolean;
+  multi_location: boolean;
+  sla_support: string;
+}
+
+export interface SubscriptionPlan {
+  id: string; // 'solo' | 'clinic' | 'multispecialty' | 'hospital' | 'enterprise'
+  name: string;
+  code: SubscriptionTier;
+  tier_rank: number;
+  monthly_price_paise: number;
+  annual_price_paise: number;
+  monthly_price_inr: number;
+  annual_price_inr: number;
+  description: string;
+  popular?: boolean;
+  coming_soon?: boolean;
+  is_active: boolean;
+  limits: PlanLimits;
+  features: PlanFeatures;
+  razorpay_plan_id_monthly?: string;
+  razorpay_plan_id_annual?: string;
+}
+
+export interface AddonDefinition {
+  id: string;
+  code: 'extra_doctor' | 'extra_staff' | 'extra_location' | 'ai_pack_500' | 'whatsapp_pack_1000';
+  name: string;
+  price_paise: number;
+  price_inr: number;
+  billing_type: 'recurring_monthly' | 'one_time';
+  description: string;
+  unit_quantity: number;
+}
+
+export interface ClinicSubscription {
+  subscription_id?: string;
+  clinic_id: string;
+  plan_id: SubscriptionTier;
+  billing_cycle: BillingCycle;
+  status: ClinicSubscriptionState;
+  current_period_start: string;
+  current_period_end: string;
+  trial_start?: string;
+  trial_end?: string;
+  cancel_at_period_end?: boolean;
+  razorpay_subscription_id?: string;
+  razorpay_customer_id?: string;
+  doctor_seat_override?: number;
+  staff_seat_override?: number;
+  location_override?: number;
+  ai_intake_override?: number;
+  whatsapp_override?: number;
+  storage_gb_override?: number;
+  active_addons?: {
+    addon_code: string;
+    quantity: number;
+    purchased_at: string;
+  }[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface UsageCounter {
+  clinic_id: string;
+  billing_period: string; // YYYY-MM
+  ai_intakes_used: number;
+  whatsapp_messages_used: number;
+  storage_bytes_used: number;
+  updated_at: string;
 }

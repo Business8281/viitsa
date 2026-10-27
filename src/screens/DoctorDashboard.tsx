@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import { Stethoscope, Siren, Clock, User, ArrowRight, FileText, Printer, Save, Sparkles, AlertTriangle, Activity, Receipt, CheckCircle, Search, History, FolderHeart, Pill, Eye } from 'lucide-react';
 import { db } from '../lib/firebase';
 import { collection, query, where, orderBy, limit, getDocs, onSnapshot, addDoc, updateDoc, doc, serverTimestamp } from 'firebase/firestore';
@@ -20,6 +20,9 @@ import { logClinicalRecordCreated } from '../lib/auditLogger';
 
 export function DoctorDashboard() {
   const { user } = useAuth();
+  const location = useLocation();
+  const isDoctorRoute = location.pathname.startsWith('/doctor');
+  const billingPath = isDoctorRoute ? '/doctor/billing' : '/clinic/billing';
   const { appointments, bills, loading, refresh } = useClinicData();
   const { toast } = useToast();
   const [openAppt, setOpenAppt] = useState<Appointment | null>(null);
@@ -201,7 +204,7 @@ export function DoctorDashboard() {
           <h1 className="text-xl sm:text-2xl font-bold text-ink">Welcome, {user?.name}</h1>
           <p className="text-sm text-ink-muted">Your patient queue for today · {myQueue.length} patient{myQueue.length !== 1 ? 's' : ''}</p>
         </div>
-        <Link to="/clinic/billing" className="btn-outline text-xs self-start sm:self-auto flex items-center gap-1.5">
+        <Link to={billingPath} className="btn-outline text-xs self-start sm:self-auto flex items-center gap-1.5">
           <Receipt size={14} /> View All Billing
         </Link>
       </div>
@@ -222,7 +225,7 @@ export function DoctorDashboard() {
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-          <Link to="/clinic/billing" className="card bg-primary text-white border-none hover:opacity-95 transition-opacity">
+          <Link to={billingPath} className="card bg-primary text-white border-none hover:opacity-95 transition-opacity">
             <div className="flex items-center justify-between">
               <p className="text-white/80 text-xs font-semibold uppercase tracking-wider">Total Collections (All Time)</p>
               <Receipt size={16} className="text-white/70" />
@@ -230,7 +233,7 @@ export function DoctorDashboard() {
             <p className="text-2xl font-bold mt-1">{formatRs(billingStats.allTimeCollections)}</p>
             <p className="text-xs text-white/70 mt-2">{billingStats.allTimePaidTransactions} paid transactions all-time</p>
           </Link>
-          <Link to="/clinic/billing" className="card hover:shadow-card-hover transition-shadow border-primary/20 bg-primary/5">
+          <Link to={billingPath} className="card hover:shadow-card-hover transition-shadow border-primary/20 bg-primary/5">
             <div className="flex items-center justify-between">
               <p className="text-primary text-xs font-semibold uppercase tracking-wider">{billingPresetLabel} Collections</p>
               <Receipt size={16} className="text-primary" />
@@ -238,7 +241,7 @@ export function DoctorDashboard() {
             <p className="text-2xl font-bold text-ink mt-1">{formatRs(billingStats.periodCollections)}</p>
             <p className="text-xs text-ink-subtle mt-2">{billingStats.periodPaidTransactions} paid transaction{billingStats.periodPaidTransactions !== 1 ? 's' : ''}</p>
           </Link>
-          <Link to="/clinic/billing" className="card bg-accent text-white border-none hover:opacity-95 transition-opacity">
+          <Link to={billingPath} className="card bg-accent text-white border-none hover:opacity-95 transition-opacity">
             <div className="flex items-center justify-between">
               <p className="text-white/80 text-xs font-semibold uppercase tracking-wider">Total Pending (All Time)</p>
               <Clock size={16} className="text-white/70" />
@@ -246,7 +249,7 @@ export function DoctorDashboard() {
             <p className="text-2xl font-bold mt-1">{formatRs(billingStats.totalPendingAllTime)}</p>
             <p className="text-xs text-white/70 mt-2">{billingStats.totalPendingCount > 0 ? `${billingStats.totalPendingCount} pending bills` : 'No pending dues'}</p>
           </Link>
-          <Link to="/clinic/billing" className="card hover:shadow-card-hover transition-shadow border-amber-500/20 bg-amber-500/5">
+          <Link to={billingPath} className="card hover:shadow-card-hover transition-shadow border-amber-500/20 bg-amber-500/5">
             <div className="flex items-center justify-between">
               <p className="text-amber-800 text-xs font-semibold uppercase tracking-wider">{billingPresetLabel} Pending</p>
               <Clock size={16} className="text-amber-600" />
@@ -285,7 +288,7 @@ export function DoctorDashboard() {
           {nextPatient ? (
             <NextPatientPanel 
               appt={nextPatient} 
-              patient={nextPatient.patient} 
+              patient={nextPatient.patient || patients.find((p) => p.patient_id === nextPatient.patient_id) || (nextPatient.patient_id ? { patient_id: nextPatient.patient_id, name: (nextPatient as any).patient_name, phone: (nextPatient as any).patient_phone } as any : undefined)} 
               onViewDossier={(p) => setViewingPatientRecords(p || nextPatient.patient || { patient_id: nextPatient.patient_id, name: (nextPatient as any).patient_name, phone: (nextPatient as any).patient_phone })} 
             />
           ) : (
@@ -516,39 +519,47 @@ function NextPatientPanel({ appt, patient, onViewDossier }: { appt: Appointment;
   const [vitals, setVitals] = useState<Vital | null>(null);
 
   useEffect(() => {
-    if (!patient) {
+    const patientId = patient?.patient_id || (patient as any)?.id || appt?.patient_id;
+    if (!patientId) {
       setAiSession(null);
       setVitals(null);
       return;
     }
     
-    const qAi = query(collection(db, 'ai_sessions'), where('patient_id', '==', patient.patient_id));
-    const unsubAi = onSnapshot(qAi, (snap) => {
-      if (!snap.empty) {
-        const sorted = snap.docs.map(d => d.data() as AISession);
-        sorted.sort((a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime());
-        setAiSession(sorted[0] || null);
-      } else {
-        setAiSession(null);
-      }
-    });
+    let unsubAi: (() => void) | undefined;
+    let unsubVitals: (() => void) | undefined;
 
-    const qVitals = query(collection(db, 'vitals'), where('patient_id', '==', patient.patient_id));
-    const unsubVitals = onSnapshot(qVitals, (snap) => {
-      if (!snap.empty) {
-        const sorted = snap.docs.map(d => d.data() as Vital);
-        sorted.sort((a, b) => new Date(b.recorded_at || (b as any).created_at || 0).getTime() - new Date(a.recorded_at || (a as any).created_at || 0).getTime());
-        setVitals(sorted[0] || null);
-      } else {
-        setVitals(null);
-      }
-    });
+    try {
+      const qAi = query(collection(db, 'ai_sessions'), where('patient_id', '==', patientId));
+      unsubAi = onSnapshot(qAi, (snap) => {
+        if (!snap.empty) {
+          const sorted = snap.docs.map(d => d.data() as AISession);
+          sorted.sort((a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime());
+          setAiSession(sorted[0] || null);
+        } else {
+          setAiSession(null);
+        }
+      }, (err) => console.warn('NextPatientPanel AI onSnapshot error:', err));
+
+      const qVitals = query(collection(db, 'vitals'), where('patient_id', '==', patientId));
+      unsubVitals = onSnapshot(qVitals, (snap) => {
+        if (!snap.empty) {
+          const sorted = snap.docs.map(d => d.data() as Vital);
+          sorted.sort((a, b) => new Date(b.recorded_at || (b as any).created_at || 0).getTime() - new Date(a.recorded_at || (a as any).created_at || 0).getTime());
+          setVitals(sorted[0] || null);
+        } else {
+          setVitals(null);
+        }
+      }, (err) => console.warn('NextPatientPanel Vitals onSnapshot error:', err));
+    } catch (e) {
+      console.warn('NextPatientPanel query error:', e);
+    }
 
     return () => {
-      unsubAi();
-      unsubVitals();
+      unsubAi?.();
+      unsubVitals?.();
     };
-  }, [patient]);
+  }, [patient, appt?.patient_id]);
 
   if (!patient) {
     return <EmptyState icon={<User size={18} />} title="No patient data" />;
@@ -675,13 +686,14 @@ function ConsultationModal({
   const [saving, setSaving] = useState(false);
   const [showA4Rx, setShowA4Rx] = useState(false);
 
-  const patient = patients.find((p) => p.patient_id === appt.patient_id) ?? appt.patient;
+  const patient = patients.find((p) => p.patient_id === appt.patient_id) ?? appt.patient ?? (appt.patient_id ? { patient_id: appt.patient_id, name: (appt as any).patient_name, phone: (appt as any).patient_phone } as any : null);
 
   useEffect(() => {
-    if (!patient) return;
+    const patientId = patient?.patient_id || (patient as any)?.id || appt?.patient_id;
+    if (!patientId) return;
     const fetchAll = async () => {
       try {
-        const q1 = query(collection(db, 'ai_sessions'), where('patient_id', '==', patient.patient_id));
+        const q1 = query(collection(db, 'ai_sessions'), where('patient_id', '==', patientId));
         const snap1 = await getDocs(q1);
         if (!snap1.empty) {
           const sList = snap1.docs.map(d => d.data() as AISession);
@@ -691,21 +703,21 @@ function ConsultationModal({
           if (s.symptoms_entered) setSymptoms(s.symptoms_entered);
         }
 
-        const q2 = query(collection(db, 'consultations'), where('patient_id', '==', patient.patient_id));
+        const q2 = query(collection(db, 'consultations'), where('patient_id', '==', patientId));
         const snap2 = await getDocs(q2);
         let cList = snap2.docs.map(d => ({ ...d.data(), consult_id: d.id } as Consultation));
         cList.sort((a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime());
         
         // Clinic data isolation: If viewing from a previous clinic, only view records from that clinic
         const doctorClinicId = clinic?.clinic_id || user?.clinic_id;
-        const activeClinicId = (patient as any).current_clinic_id || patient.clinic_id;
+        const activeClinicId = (patient as any)?.current_clinic_id || patient?.clinic_id;
         const isTreatingActiveClinic = !doctorClinicId || !activeClinicId || doctorClinicId === activeClinicId || (appt && appt.clinic_id === doctorClinicId);
         if (!isTreatingActiveClinic && doctorClinicId) {
           cList = cList.filter(c => c.clinic_id === doctorClinicId);
         }
         setPrevConsults(cList.slice(0, 3));
 
-        const q3 = query(collection(db, 'vitals'), where('patient_id', '==', patient.patient_id));
+        const q3 = query(collection(db, 'vitals'), where('patient_id', '==', patientId));
         const snap3 = await getDocs(q3);
         if (!snap3.empty) {
           const vList = snap3.docs.map(d => d.data() as Vital);
@@ -717,7 +729,7 @@ function ConsultationModal({
       }
     };
     fetchAll();
-  }, [patient]);
+  }, [patient, appt?.patient_id]);
 
   if (!patient) {
     return (

@@ -9,6 +9,7 @@ import {
   signOut, 
   onAuthStateChanged,
   sendEmailVerification,
+  applyActionCode,
   ConfirmationResult,
   User as FirebaseUser 
 } from 'firebase/auth';
@@ -18,14 +19,67 @@ import type { Clinic, User, PatientAccount, Role } from './types';
 import { PATIENT_ROLES, ADMIN_ROLES, CLINIC_ROLES } from './types';
 import { resolveCanonicalIdentity, generateReadableId, sanitizeForFirestore, getOrInitializeClinic, getCachedIdentity, saveCachedIdentity, type OnboardingData, type IdentityResult } from './identityResolver';
 import { clearAllViitsaCaches } from './cacheCleaner';
+import { logUserLogin } from './auditLogger';
+import { sendVerificationNotificationEmail } from './emailService';
+import { getPasswordValidationError, assertPasswordUniqueness, claimPasswordHash } from './passwordSecurity';
 
-interface AuthResponse {
+export interface AuthResponse {
   ok: boolean;
   user?: User;
+  clinic?: Clinic | null;
+  patientAccount?: PatientAccount | null;
   role?: Role;
   error?: string;
   isNewUser?: boolean;
 }
+
+export type PortalType = 'clinic' | 'admin' | 'patient';
+
+export const getPortalType = (expectedRole?: Role): PortalType => {
+  if (typeof window !== 'undefined') {
+    if (window.location.pathname.startsWith('/admin') || sessionStorage.getItem('viitsa_portal_intent') === 'admin') return 'admin';
+    if (window.location.pathname.startsWith('/clinic') || sessionStorage.getItem('viitsa_portal_intent') === 'clinic') return 'clinic';
+  }
+  if (expectedRole) {
+    if (ADMIN_ROLES.includes(expectedRole)) return 'admin';
+    if (CLINIC_ROLES.includes(expectedRole)) return 'clinic';
+  }
+  return 'patient';
+};
+
+export const validatePortalRole = (role: Role, portal: PortalType | boolean): { ok: boolean; error?: string } => {
+  const resolvedPortal: PortalType = typeof portal === 'boolean' ? (portal ? 'clinic' : 'patient') : portal;
+  if (resolvedPortal === 'admin') {
+    if (!ADMIN_ROLES.includes(role)) {
+      return {
+        ok: false,
+        error: 'This account does not have Admin access. Please sign in with an Administrator account.'
+      };
+    }
+  } else if (resolvedPortal === 'clinic') {
+    if (!CLINIC_ROLES.includes(role)) {
+      return {
+        ok: false,
+        error: 'This account is not registered as a Clinic account. The Clinic Portal requires a Clinic Staff or Clinic Admin account. Please sign in via the correct portal.'
+      };
+    }
+  } else {
+    // Patient portal
+    if (CLINIC_ROLES.includes(role)) {
+      return {
+        ok: false,
+        error: 'This account is registered as a Clinic account. The Patient Portal only accepts Patient accounts. Please sign in via the Clinic Portal (/clinic/login).'
+      };
+    }
+    if (ADMIN_ROLES.includes(role)) {
+      return {
+        ok: false,
+        error: 'This account is registered as an Admin account. Please sign in via the Admin Portal (/admin/login).'
+      };
+    }
+  }
+  return { ok: true };
+};
 
 interface AuthState {
   user: User | null;
@@ -37,6 +91,7 @@ interface AuthState {
   switchClinic: (clinic: Clinic) => Promise<void>;
   loginWithEmail: (email: string, password: string, expectedRole?: Role) => Promise<AuthResponse>;
   registerWithEmail: (email: string, password: string, onboarding: OnboardingData) => Promise<AuthResponse>;
+  resendVerificationEmail: (email: string, name?: string, portal?: 'clinic' | 'patient') => Promise<{ ok: boolean; error?: string }>;
   loginWithGoogle: (onboarding?: OnboardingData) => Promise<AuthResponse>;
   sendPhoneOtp: (phone: string, recaptchaContainerId: string) => Promise<{ ok: boolean; error?: string }>;
   verifyPhoneOtp: (otp: string, onboarding?: OnboardingData) => Promise<AuthResponse>;
@@ -44,6 +99,7 @@ interface AuthState {
   logout: () => Promise<void>;
   refreshSession: () => Promise<void>;
   clearError: () => void;
+  applyVerificationCode: (code: string) => Promise<{ ok: boolean; error?: string }>;
   // Legacy aliases for backward-compatibility with screens
   login: (email: string, password: string) => Promise<{ ok: boolean; error?: string }>;
   loginWithGoogleLegacy: () => Promise<{ ok: boolean; error?: string }>;
@@ -85,11 +141,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         } catch (err: any) {
           console.warn('Fallback on auth state change resolution:', err);
           if (!cached) {
-            const activeClinic = await getOrInitializeClinic();
             const fallbackUser: User = {
               user_id: firebaseUser.uid,
-              clinic_id: activeClinic?.clinic_id || undefined,
-              clinic_name: activeClinic?.name || undefined,
+              clinic_id: undefined,
+              clinic_name: undefined,
               name: firebaseUser.displayName || firebaseUser.email?.split('@')[0] || 'User',
               email: firebaseUser.email || '',
               role: 'patient',
@@ -102,7 +157,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
               auth_providers: firebaseUser.providerData.map(p => p.providerId),
             };
             setUser(fallbackUser);
-            setClinic(activeClinic);
+            setClinic(null);
           }
         } finally {
           setLoading(false);
@@ -158,7 +213,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   // Email + Password Login
   const loginWithEmail = useCallback(async (email: string, password: string, expectedRole?: Role): Promise<AuthResponse> => {
-    setLoading(true);
     setError(null);
     try {
       const cred = await signInWithEmailAndPassword(auth, email.trim().toLowerCase(), password);
@@ -166,26 +220,55 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const onboardingData = expectedRole ? { role: expectedRole, name: email.split('@')[0], email } : undefined;
       const res = await resolveCanonicalIdentity(cred.user, onboardingData);
 
-      // Enforce email verification for patients only
-      const isAdminOrStaff = res.user?.role && (ADMIN_ROLES.includes(res.user.role) || CLINIC_ROLES.includes(res.user.role));
-      if (!cred.user.emailVerified && !isAdminOrStaff) {
-        try { await sendEmailVerification(cred.user); } catch (e) {}
+      // Enforce email verification for both patients and clinics (only company admin accounts exempt)
+      const isCompanyAdmin = res.user?.role && ADMIN_ROLES.includes(res.user.role);
+      if (!cred.user.emailVerified && !isCompanyAdmin) {
+        try {
+          const isClinic = res.user?.role && CLINIC_ROLES.includes(res.user.role);
+          const origin = (typeof window !== 'undefined' && window.location.origin && !window.location.origin.includes('localhost') && !window.location.origin.includes('127.0.0.1'))
+            ? window.location.origin
+            : 'https://viitsa.com';
+          const continueUrl = `${origin}${isClinic ? '/clinic/login?verified=true' : '/login?verified=true'}`;
+          try {
+            await sendEmailVerification(cred.user, { url: continueUrl, handleCodeInApp: true });
+          } catch (urlErr: any) {
+            if (urlErr.code === 'auth/unauthorized-continue-uri') {
+              await sendEmailVerification(cred.user);
+            } else {
+              await sendVerificationNotificationEmail(email.trim().toLowerCase(), res.user?.name, continueUrl, isClinic ? 'clinic' : 'patient');
+            }
+          }
+        } catch (e) {
+          console.warn('Could not re-dispatch verification email on unverified login:', e);
+        }
         await signOut(auth);
-        throw new Error('Please verify your email address before logging in. A new confirmation link has been sent to your inbox.');
+        throw new Error('Please verify your email address before logging in. A confirmation link has been sent to your inbox.');
+      }
+      
+      const portalType = getPortalType(expectedRole);
+      const portalCheck = validatePortalRole(res.user.role, portalType);
+      if (!portalCheck.ok) {
+        try {
+          await signOut(auth);
+        } catch {}
+        clearAllViitsaCaches();
+        setUser(null);
+        setClinic(null);
+        setPatientAccount(null);
+        setError(portalCheck.error || 'Unauthorized portal role.');
+        return { ok: false, error: portalCheck.error };
       }
       
       setUser(res.user);
       setClinic(res.clinic);
       setPatientAccount(res.patientAccount);
-      setLoading(false);
       logUserLogin(res.user.id || res.user.user_id, res.user.role, res.user.clinic_id, { method: 'email' });
-      return { ok: true, user: res.user, role: res.user.role, isNewUser: res.isNewUser };
+      return { ok: true, user: res.user, clinic: res.clinic, patientAccount: res.patientAccount, role: res.user.role, isNewUser: res.isNewUser };
     } catch (err: any) {
       const msg = err.code === 'auth/invalid-credential' || err.code === 'auth/user-not-found' || err.code === 'auth/wrong-password'
         ? 'Invalid email or password.'
         : (err.message || 'Login failed.');
       setError(msg);
-      setLoading(false);
       return { ok: false, error: msg };
     }
   }, []);
@@ -196,81 +279,184 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     password: string, 
     onboarding: OnboardingData
   ): Promise<AuthResponse> => {
-    setLoading(true);
     setError(null);
+    const isClinic = onboarding?.role === 'clinic_admin' || 
+      (onboarding?.role !== 'patient' && typeof window !== 'undefined' && (
+        window.location.pathname.startsWith('/clinic') ||
+        sessionStorage.getItem('viitsa_portal_intent') === 'clinic'
+      ));
+    const origin = (typeof window !== 'undefined' && window.location.origin && !window.location.origin.includes('localhost') && !window.location.origin.includes('127.0.0.1'))
+      ? window.location.origin
+      : 'https://viitsa.com';
+    const continueUrl = `${origin}${isClinic ? '/clinic/login?verified=true' : '/login?verified=true'}`;
+    const actionCodeSettings = {
+      url: continueUrl,
+      handleCodeInApp: true,
+    };
+
     try {
-      const cred = await createUserWithEmailAndPassword(auth, email.trim().toLowerCase(), password);
-      const res = await resolveCanonicalIdentity(cred.user, { ...onboarding, email });
-      
-      await sendEmailVerification(cred.user);
-      await signOut(auth);
-      
-      setUser(null);
-      setClinic(null);
-      setPatientAccount(null);
-      setLoading(false);
-      return { ok: false, error: 'Registration successful! Please check your email and click the confirmation link before logging in.' };
+      const cleanEmail = email.trim().toLowerCase();
+
+      // Strict password complexity check (min 8 chars, 1 uppercase, 1 lowercase, 1 digit, 1 special symbol)
+      const pwdError = getPasswordValidationError(password);
+      if (pwdError) {
+        setError(pwdError);
+        return { ok: false, error: pwdError };
+      }
+
+      // Global password uniqueness check across all users
+      const uniqueness = await assertPasswordUniqueness(password);
+      if (!uniqueness.ok) {
+        const err = uniqueness.error || 'This password is already in use by another user. Please choose a different password.';
+        setError(err);
+        return { ok: false, error: err };
+      }
+
+      const cred = await createUserWithEmailAndPassword(auth, cleanEmail, password);
+
+      // Claim password hash globally for this user
+      claimPasswordHash(uniqueness.hash, cred.user.uid, cleanEmail).catch(() => {});
+
+      // 1. Instantly dispatch verification email via Titan SMTP (support@viitsa.com)
+      try {
+        const verifRes = await sendVerificationNotificationEmail(cleanEmail, onboarding.name, continueUrl, isClinic ? 'clinic' : 'patient');
+        if (!verifRes.success) {
+          await sendEmailVerification(cred.user, actionCodeSettings).catch(() => sendEmailVerification(cred.user).catch(console.warn));
+        }
+      } catch (verifErr: any) {
+        console.warn('Direct sendVerificationNotificationEmail warning, trying client SDK fallback:', verifErr);
+        await sendEmailVerification(cred.user, actionCodeSettings).catch(() => sendEmailVerification(cred.user).catch(console.warn));
+      }
+
+      // 2. Resolve database identity concurrently
+      const res = await resolveCanonicalIdentity(cred.user, { ...onboarding, email: cleanEmail, role: isClinic ? 'clinic_admin' : (onboarding.role || 'patient') });
+
+      // Keep user in active session without signing out so they stay on page waiting for confirmation
+      setUser(res.user);
+      setClinic(res.clinic);
+      setPatientAccount(res.patientAccount);
+      return { ok: true, user: res.user, clinic: res.clinic, patientAccount: res.patientAccount, role: res.user.role, isNewUser: true };
     } catch (err: any) {
       const msg = err.code === 'auth/email-already-in-use'
         ? 'An account with this email already exists. Please sign in instead.'
         : (err.message || 'Registration failed.');
       setError(msg);
-      setLoading(false);
       return { ok: false, error: msg };
     }
   }, []);
 
-  // Google Sign-In
+  // Resend Verification Email
+  const resendVerificationEmail = useCallback(async (
+    email: string,
+    name?: string,
+    portal?: 'clinic' | 'patient'
+  ): Promise<{ ok: boolean; error?: string }> => {
+    try {
+      const cleanEmail = email.trim().toLowerCase();
+      const isClinic = portal === 'clinic' || (typeof window !== 'undefined' && (
+        sessionStorage.getItem('viitsa_portal_intent') === 'clinic' || 
+        window.location.pathname.startsWith('/clinic')
+      ));
+      const origin = (typeof window !== 'undefined' && window.location.origin && !window.location.origin.includes('localhost') && !window.location.origin.includes('127.0.0.1'))
+        ? window.location.origin
+        : 'https://viitsa.com';
+      const continueUrl = `${origin}${isClinic ? '/clinic/login?verified=true' : '/login?verified=true'}`;
+
+      // 1. Primary: Cloud Function via Titan SMTP (support@viitsa.com)
+      const res = await sendVerificationNotificationEmail(cleanEmail, name, continueUrl, isClinic ? 'clinic' : 'patient');
+      if (res.success) {
+        return { ok: true };
+      }
+
+      // 2. Client SDK fallback if active session
+      if (auth.currentUser && auth.currentUser.email?.toLowerCase() === cleanEmail) {
+        try {
+          await sendEmailVerification(auth.currentUser, { url: continueUrl, handleCodeInApp: true });
+          return { ok: true };
+        } catch (urlErr: any) {
+          if (urlErr.code === 'auth/unauthorized-continue-uri') {
+            await sendEmailVerification(auth.currentUser);
+            return { ok: true };
+          }
+          console.warn('Firebase client resend fallback warning:', urlErr);
+        }
+      }
+
+      return { ok: false, error: res.error || 'Failed to resend verification email.' };
+    } catch (err: any) {
+      console.error('Failed to resend verification email:', err);
+      return { ok: false, error: err.message || 'Failed to resend verification email.' };
+    }
+  }, []);
+
+  // Google Sign-In (Exclusively for Patients)
   const loginWithGoogle = useCallback(async (onboarding?: OnboardingData): Promise<AuthResponse> => {
-    setLoading(true);
     setError(null);
     try {
+      if (typeof window !== 'undefined') {
+        sessionStorage.setItem('viitsa_portal_intent', 'patient');
+      }
       const provider = new GoogleAuthProvider();
       provider.setCustomParameters({ prompt: 'select_account' });
       const cred = await signInWithPopup(auth, provider);
       
+      const effectiveOnboarding: OnboardingData = {
+        role: 'patient',
+        ...onboarding,
+      };
+
       let res: IdentityResult;
       try {
-        res = await resolveCanonicalIdentity(cred.user, onboarding);
+        res = await resolveCanonicalIdentity(cred.user, effectiveOnboarding);
       } catch (e: any) {
-        console.warn('Fallback inside loginWithGoogle:', e);
-        const activeClinic = await getOrInitializeClinic();
-        const fallbackUser: User = {
-          user_id: cred.user.uid,
-          clinic_id: activeClinic?.clinic_id || undefined,
-          clinic_name: activeClinic?.name || undefined,
-          name: cred.user.displayName || onboarding?.name || cred.user.email?.split('@')[0] || 'User',
-          email: cred.user.email || '',
-          role: onboarding?.role || 'patient',
-          phone: onboarding?.phone || null,
-          specialisation: null,
-          active: true,
-          avatar_color: '#0F6E56',
-          created_at: new Date().toISOString(),
-          linked_uids: [cred.user.uid],
-          auth_providers: ['google.com'],
-        };
-        res = {
-          user: fallbackUser,
-          clinic: activeClinic,
-          patientAccount: null,
-        };
+        console.error('resolveCanonicalIdentity error in loginWithGoogle:', e);
+        try {
+          await signOut(auth);
+        } catch {}
+        clearAllViitsaCaches();
+        setUser(null);
+        setClinic(null);
+        setPatientAccount(null);
+        const errMsg = e.message || 'Authentication failed.';
+        setError(errMsg);
+        return { ok: false, error: errMsg };
+      }
+
+      // STRICT PATIENT CHECK: Clinic/Admin accounts are not permitted to log in via Google
+      if (CLINIC_ROLES.includes(res.user.role) || ADMIN_ROLES.includes(res.user.role)) {
+        try {
+          await signOut(auth);
+        } catch {}
+        clearAllViitsaCaches();
+        setUser(null);
+        setClinic(null);
+        setPatientAccount(null);
+        const isAdminUser = ADMIN_ROLES.includes(res.user.role);
+        const msg = isAdminUser
+          ? 'This Google account is registered as an Administrator account. Google Sign-In is only enabled for Patients. Please sign in to the Admin Portal (/admin/login) using your credentials.'
+          : 'This Google account is registered as a Clinic / Staff account. Google Sign-In is only enabled for Patients. Please sign in to the Clinic Portal (/clinic/login) using your email and password.';
+        setError(msg);
+        return { ok: false, error: msg };
       }
 
       setUser(res.user);
       setClinic(res.clinic);
       setPatientAccount(res.patientAccount);
-      setLoading(false);
       logUserLogin(res.user.id || res.user.user_id, res.user.role, res.user.clinic_id, { method: 'google' });
-      return { ok: true, user: res.user, role: res.user.role, isNewUser: res.isNewUser };
+      return { ok: true, user: res.user, clinic: res.clinic, patientAccount: res.patientAccount, role: res.user.role, isNewUser: res.isNewUser };
     } catch (err: any) {
       if (err.code === 'auth/popup-closed-by-user' || err.code === 'auth/cancelled-popup-request') {
-        setLoading(false);
         return { ok: false };
       }
+      try {
+        await signOut(auth);
+      } catch {}
+      clearAllViitsaCaches();
+      setUser(null);
+      setClinic(null);
+      setPatientAccount(null);
       const msg = err.message || 'Google sign in failed.';
       setError(msg);
-      setLoading(false);
       return { ok: false, error: msg };
     }
   }, []);
@@ -329,25 +515,36 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return { ok: false, error: msg };
     }
 
-    setLoading(true);
     setError(null);
 
     try {
       const cred = await confirmationResult.confirm(otp.trim());
       const res = await resolveCanonicalIdentity(cred.user, onboarding);
+      const portalType = getPortalType(onboarding?.role);
+      const portalCheck = validatePortalRole(res.user.role, portalType);
+      if (!portalCheck.ok) {
+        try {
+          await signOut(auth);
+        } catch {}
+        clearAllViitsaCaches();
+        setUser(null);
+        setClinic(null);
+        setPatientAccount(null);
+        setError(portalCheck.error || 'Unauthorized portal role.');
+        return { ok: false, error: portalCheck.error };
+      }
+
       setUser(res.user);
       setClinic(res.clinic);
       setPatientAccount(res.patientAccount);
-      setLoading(false);
       logUserLogin(res.user.id || res.user.user_id, res.user.role, res.user.clinic_id, { method: 'phone' });
-      return { ok: true, user: res.user, role: res.user.role, isNewUser: res.isNewUser };
+      return { ok: true, user: res.user, clinic: res.clinic, patientAccount: res.patientAccount, role: res.user.role, isNewUser: res.isNewUser };
     } catch (err: any) {
       console.error('verifyPhoneOtp error:', err);
       const msg = err.code === 'auth/invalid-verification-code' 
         ? 'Incorrect OTP. Please try again.' 
         : (err.message || 'OTP verification failed.');
       setError(msg);
-      setLoading(false);
       return { ok: false, error: msg };
     }
   }, [confirmationResult]);
@@ -364,8 +561,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
     await clearAllViitsaCaches();
     let loginPath = '/login';
-    if (role === 'company_admin') loginPath = '/admin/login';
-    else if (role === 'clinic_admin' || role === 'clinic_doctor' || role === 'clinic_staff') loginPath = '/clinic/login';
+    if (role && ADMIN_ROLES.includes(role)) loginPath = '/admin/login';
+    else if (role && CLINIC_ROLES.includes(role)) loginPath = '/clinic/login';
     if (window.location.pathname !== loginPath) {
       window.location.href = loginPath;
     }
@@ -384,6 +581,42 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       } catch (err) {
         console.warn('refreshSession error:', err);
       }
+    }
+  }, []);
+
+  // Process email verification action code securely with Firebase Authentication
+  const applyVerificationCode = useCallback(async (code: string): Promise<{ ok: boolean; error?: string }> => {
+    setError(null);
+    try {
+      await applyActionCode(auth, code);
+      if (auth.currentUser) {
+        await auth.currentUser.reload();
+        await auth.currentUser.getIdToken(true);
+        const res = await resolveCanonicalIdentity(auth.currentUser);
+        setUser(res.user);
+        setClinic(res.clinic);
+        setPatientAccount(res.patientAccount);
+      }
+      return { ok: true };
+    } catch (err: any) {
+      if (auth.currentUser) {
+        try {
+          await auth.currentUser.reload();
+          await auth.currentUser.getIdToken(true);
+          if (auth.currentUser.emailVerified) {
+            const res = await resolveCanonicalIdentity(auth.currentUser);
+            setUser(res.user);
+            setClinic(res.clinic);
+            setPatientAccount(res.patientAccount);
+            return { ok: true };
+          }
+        } catch {}
+      }
+      const msg = err.code === 'auth/invalid-action-code'
+        ? 'This verification link is invalid or has already been used.'
+        : (err.message || 'Email verification failed.');
+      setError(msg);
+      return { ok: false, error: msg };
     }
   }, []);
 
@@ -605,6 +838,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       switchClinic,
       loginWithEmail,
       registerWithEmail,
+      resendVerificationEmail,
       loginWithGoogle,
       sendPhoneOtp,
       verifyPhoneOtp,
@@ -612,6 +846,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       logout,
       refreshSession,
       clearError,
+      applyVerificationCode,
       login,
       loginWithGoogleLegacy,
       loginWithOtp,
@@ -627,6 +862,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       switchClinic,
       loginWithEmail,
       registerWithEmail,
+      resendVerificationEmail,
       loginWithGoogle,
       sendPhoneOtp,
       verifyPhoneOtp,
@@ -634,6 +870,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       logout,
       refreshSession,
       clearError,
+      applyVerificationCode,
       login,
       loginWithGoogleLegacy,
       loginWithOtp,

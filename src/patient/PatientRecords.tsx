@@ -762,7 +762,7 @@ export function PatientRecords({ patientId, onTab }: Props) {
 
                         <button
                           onClick={() => {
-                            const loginUrl = `${window.location.origin}/login`;
+                            const loginUrl = 'https://viitsa.com/login';
                             const msg = `*Doctor Prescription — ${cName}*\n📅 Date: ${formatDate(presc.created_at)}\n👨‍⚕️ Doctor: ${dName}\n🩺 Diagnosis: ${presc.diagnosis || 'Consultation'}\n\n🔐 View & Download from your Patient Account:\n${loginUrl}\n\n— VIITSA Healthcare Platform`;
                             window.open(`https://wa.me/?text=${encodeURIComponent(msg)}`, '_blank', 'noopener');
                           }}

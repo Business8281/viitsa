@@ -26,8 +26,8 @@ export function PatientBottomNav({ aiBadge, paymentBadge }: PatientBottomNavProp
         {TABS.map(({ key, label, Icon }) => {
           // 'home' tab maps to 'dashboard' path
           const isActive = currentPath === (key === 'home' ? 'dashboard' : key);
-          const showBadge = key === 'ai' ? aiBadge : key === 'payments' && paymentBadge && paymentBadge > 0;
-          const badgeCount = key === 'payments' ? paymentBadge : undefined;
+          const hasNumericBadge = key === 'payments' && typeof paymentBadge === 'number' && paymentBadge > 0;
+          const showDotBadge = key === 'ai' && Boolean(aiBadge);
           return (
             <Link
               key={key}
@@ -41,14 +41,14 @@ export function PatientBottomNav({ aiBadge, paymentBadge }: PatientBottomNavProp
               )}
               <div className="relative">
                 <Icon size={22} className={isActive ? 'text-primary' : 'text-gray-400'} />
-                {showBadge && !badgeCount && (
+                {showDotBadge ? (
                   <span className="absolute -top-1 -right-1 h-2 w-2 rounded-full bg-danger" />
-                )}
-                {badgeCount && badgeCount > 0 && (
-                  <span className="absolute -top-1.5 -right-1.5 min-w-[16px] h-4 rounded-full bg-danger text-[10px] text-white font-bold flex items-center justify-center px-1">
-                    {badgeCount > 9 ? '9+' : badgeCount}
+                ) : null}
+                {hasNumericBadge ? (
+                  <span className="absolute -top-1.5 -right-2 min-w-[16px] h-4 rounded-full bg-danger text-[10px] text-white font-bold flex items-center justify-center px-1 shadow-xs">
+                    {(paymentBadge ?? 0) > 9 ? '9+' : paymentBadge}
                   </span>
-                )}
+                ) : null}
               </div>
               <span className={`text-[10px] font-semibold ${isActive ? 'text-primary' : 'text-gray-400'}`}>{label}</span>
             </Link>

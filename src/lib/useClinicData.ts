@@ -115,7 +115,8 @@ function recomputePatients(targetClinicId: string) {
   // Also include any patient accounts linked to this clinic that aren't yet in currentPatients
   store.rawAccounts.forEach((acc) => {
     const accClinicId = acc.clinic_id;
-    if (accClinicId && accClinicId !== targetClinicId && targetClinicId !== DEFAULT_CLINIC_ID) {
+    // Patient accounts MUST explicitly match targetClinicId. Unlinked patients (null/undefined) must never be shown in any clinic.
+    if (!accClinicId || !targetClinicId || accClinicId !== targetClinicId) {
       return;
     }
     const cleanPhone = (acc.phone || '').replace(/\D/g, '');
@@ -129,7 +130,7 @@ function recomputePatients(targetClinicId: string) {
     if (!alreadyExists) {
       enriched.push({
         patient_id: acc.account_id,
-        clinic_id: acc.clinic_id || targetClinicId,
+        clinic_id: accClinicId,
         name: acc.name || acc.full_name || 'Patient',
         full_name: acc.full_name || acc.name,
         age: acc.age ?? null,
@@ -184,26 +185,54 @@ function recomputeApptsAndBills() {
       return (a.token_number || 0) - (b.token_number || 0);
     });
 
-  // Combine billing docs with invoices docs so nothing is lost
+  // Combine billing docs with invoices docs with strict bidirectional deduplication
+  const processedInvIds = new Set<string>();
   const processedBillIds = new Set<string>();
   const combinedBills: any[] = [];
 
   store.rawBills.forEach((b) => {
-    const matchingInv = store.rawInvoices.find(
-      (inv) =>
-        (inv.bill_id && inv.bill_id === b.bill_id) ||
-        (inv.appointment_id && b.appointment_id && inv.appointment_id === b.appointment_id) ||
-        inv.invoice_id === b.bill_id
-    );
+    const bId = b.bill_id || b.id;
+    const bInvId = b.invoice_id;
+    const bApptId = b.appointment_id || b.appt_id;
+    const bCreatedMs = parseDateArg(b.created_at).getTime() || 0;
+
+    // Find corresponding invoice by direct ID, bill_id, invoice_number, appointment, or exact transaction signature
+    const matchingInv = store.rawInvoices.find((inv) => {
+      const invId = inv.invoice_id || inv.id;
+      if (bInvId && (invId === bInvId || inv.id === bInvId)) return true;
+      if (inv.bill_id && (inv.bill_id === bId || inv.bill_id === b.id)) return true;
+      if (invId && bId && invId === bId) return true;
+      if (b.invoice_number && inv.invoice_number && b.invoice_number === inv.invoice_number) return true;
+      if (bApptId && (inv.appointment_id === bApptId || inv.appt_id === bApptId)) return true;
+      // Matching for manual/walk-in bills: same patient, same clinic, same amount, created within 60s
+      if (
+        b.patient_id &&
+        inv.patient_id === b.patient_id &&
+        b.clinic_id &&
+        inv.clinic_id === b.clinic_id &&
+        Math.abs(Number(b.amount || 0) - Number(inv.amount || 0)) < 0.01
+      ) {
+        const invCreatedMs = parseDateArg(inv.created_at).getTime() || 0;
+        if (bCreatedMs && invCreatedMs && Math.abs(bCreatedMs - invCreatedMs) <= 60000) {
+          return true;
+        }
+      }
+      return false;
+    });
 
     if (matchingInv) {
-      processedBillIds.add(matchingInv.invoice_id);
+      if (matchingInv.invoice_id) processedInvIds.add(matchingInv.invoice_id);
+      if (matchingInv.id) processedInvIds.add(matchingInv.id);
       if (matchingInv.bill_id) processedBillIds.add(matchingInv.bill_id);
     }
-    processedBillIds.add(b.bill_id);
+    if (bInvId) processedInvIds.add(bInvId);
+    if (bId) processedBillIds.add(bId);
+    if (b.id) processedBillIds.add(b.id);
 
     combinedBills.push({
       ...b,
+      bill_id: bId,
+      invoice_id: matchingInv?.invoice_id || matchingInv?.id || bInvId || null,
       doctor_id: b.doctor_id || matchingInv?.doctor_id || null,
       invoice_number: b.invoice_number || matchingInv?.invoice_number || null,
       consultation_fee: b.consultation_fee || matchingInv?.consultation_fee,
@@ -213,28 +242,32 @@ function recomputeApptsAndBills() {
     });
   });
 
-  // Include invoices that don't have a matching billing document
+  // Include ONLY standalone invoices that don't have a matching billing document
   store.rawInvoices.forEach((inv) => {
-    if (!processedBillIds.has(inv.invoice_id) && (!inv.bill_id || !processedBillIds.has(inv.bill_id))) {
-      processedBillIds.add(inv.invoice_id);
-      combinedBills.push({
-        bill_id: inv.invoice_id,
-        clinic_id: inv.clinic_id,
-        patient_id: inv.patient_id,
-        appointment_id: inv.appointment_id || null,
-        appt_id: inv.appointment_id || null,
-        doctor_id: inv.doctor_id || null,
-        amount: inv.amount || inv.total || inv.consultation_fee || 0,
-        payment_status: inv.payment_status || 'paid',
-        payment_method: inv.payment_method || 'cash',
-        created_at: inv.created_at,
-        invoice_number: inv.invoice_number,
-        consultation_fee: inv.consultation_fee,
-        line_items: inv.line_items,
-        visit_type: inv.visit_type,
-        invoice: inv,
-      });
-    }
+    const invId = inv.invoice_id || inv.id;
+    if (processedInvIds.has(invId)) return;
+    if (inv.bill_id && processedBillIds.has(inv.bill_id)) return;
+    if (inv.id && processedBillIds.has(inv.id)) return;
+    processedInvIds.add(invId);
+
+    combinedBills.push({
+      bill_id: inv.bill_id || invId,
+      invoice_id: invId,
+      clinic_id: inv.clinic_id,
+      patient_id: inv.patient_id,
+      appointment_id: inv.appointment_id || null,
+      appt_id: inv.appointment_id || null,
+      doctor_id: inv.doctor_id || null,
+      amount: inv.amount || inv.total || inv.consultation_fee || 0,
+      payment_status: inv.payment_status || 'paid',
+      payment_method: inv.payment_method || 'cash',
+      created_at: inv.created_at,
+      invoice_number: inv.invoice_number,
+      consultation_fee: inv.consultation_fee,
+      line_items: inv.line_items,
+      visit_type: inv.visit_type,
+      invoice: inv,
+    });
   });
 
   const mergedBills = combinedBills
@@ -282,6 +315,22 @@ function startListeners(targetClinicId: string) {
   store.activeClinicId = targetClinicId;
   store.loading = true;
 
+  if (!targetClinicId) {
+    store.patients = [];
+    store.currentPatients = [];
+    store.currentUsers = [];
+    store.inventory = [];
+    store.rawAppts = [];
+    store.rawBills = [];
+    store.rawInvoices = [];
+    store.rawAccounts = [];
+    store.appointments = [];
+    store.bills = [];
+    store.loading = false;
+    notifySubscribers();
+    return;
+  }
+
   // 1. Live Patients listener
   const unsubPatients = onSnapshot(
     collection(db, 'patients'),
@@ -294,7 +343,7 @@ function startListeners(targetClinicId: string) {
           } as Patient)
       );
       store.currentPatients = docs
-        .filter((p) => !p.clinic_id || p.clinic_id === targetClinicId || targetClinicId === DEFAULT_CLINIC_ID)
+        .filter((p) => Boolean(targetClinicId && p.clinic_id === targetClinicId))
         .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
       recomputePatients(targetClinicId);
       store.loading = false;
@@ -320,7 +369,7 @@ function startListeners(targetClinicId: string) {
           } as User)
       );
       store.currentUsers = docs.filter(
-        (u) => !u.clinic_id || u.clinic_id === targetClinicId || targetClinicId === DEFAULT_CLINIC_ID
+        (u) => Boolean(targetClinicId && u.clinic_id === targetClinicId)
       );
       recomputePatients(targetClinicId);
       recomputeApptsAndBills();
@@ -342,7 +391,7 @@ function startListeners(targetClinicId: string) {
           } as InventoryItem)
       );
       store.inventory = docs
-        .filter((i) => !i.clinic_id || i.clinic_id === targetClinicId || targetClinicId === DEFAULT_CLINIC_ID)
+        .filter((i) => Boolean(targetClinicId && i.clinic_id === targetClinicId))
         .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
       notifySubscribers();
     },
@@ -361,7 +410,7 @@ function startListeners(targetClinicId: string) {
         appt_id: doc.id,
       }));
       store.rawAppts = (docs as any[]).filter(
-        (a) => !a.clinic_id || a.clinic_id === targetClinicId || targetClinicId === DEFAULT_CLINIC_ID
+        (a) => Boolean(targetClinicId && a.clinic_id === targetClinicId)
       );
       recomputeApptsAndBills();
     },
@@ -379,7 +428,7 @@ function startListeners(targetClinicId: string) {
         bill_id: doc.id,
       }));
       store.rawBills = (docs as any[]).filter(
-        (b) => !b.clinic_id || b.clinic_id === targetClinicId || targetClinicId === DEFAULT_CLINIC_ID
+        (b) => Boolean(targetClinicId && b.clinic_id === targetClinicId)
       );
       recomputeApptsAndBills();
     },
@@ -397,7 +446,7 @@ function startListeners(targetClinicId: string) {
         invoice_id: doc.id,
       }));
       store.rawInvoices = (docs as any[]).filter(
-        (inv) => !inv.clinic_id || inv.clinic_id === targetClinicId || targetClinicId === DEFAULT_CLINIC_ID
+        (inv) => Boolean(targetClinicId && inv.clinic_id === targetClinicId)
       );
       recomputeApptsAndBills();
     },

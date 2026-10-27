@@ -333,7 +333,7 @@ export function PrescriptionView({
       }
 
       // 3. Login link for their patient account
-      const loginUrl = `${window.location.origin}/login`;
+      const loginUrl = 'https://viitsa.com/login';
 
       const text = `*Doctor Prescription — ${clinicInfo.name}*\n\n` +
         `👤 Patient: ${patientInfo.name} (${patientInfo.uhid})\n` +
@@ -405,7 +405,7 @@ export function PrescriptionView({
       }
 
       // 3. Login link to patient account
-      const loginUrl = `${window.location.origin}/login`;
+      const loginUrl = 'https://viitsa.com/login';
 
       // 4. Send official email via Cloud Function with the ACTUAL PDF ATTACHED!
       const res = await sendEmail({
@@ -983,7 +983,7 @@ export function PrescriptionView({
                 </div>
                 <div className="pl-5 space-y-1">
                   <p>📎 <strong>Official A4 PDF File:</strong> Attached directly to email</p>
-                  <p>🔐 <strong>Patient Portal Login:</strong> {typeof window !== 'undefined' ? `${window.location.origin}/login` : '/login'}</p>
+                  <p>🔐 <strong>Patient Portal Login:</strong> https://viitsa.com/login</p>
                   <p>📄 <strong>Online View Link:</strong> Direct high-resolution cloud link</p>
                 </div>
               </div>

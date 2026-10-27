@@ -114,7 +114,7 @@ export default function AdminLiveSubscriptions({ clinics, subscriptions = [], in
           description: 'Platform Subscription Payment Request',
         });
       });
-      const paymentLink = `${window.location.origin}/clinic/subscription-setup?invoice=${invoiceRef.id}`;
+      const paymentLink = `https://viitsa.com/clinic/subscription-setup?invoice=${invoiceRef.id}`;
       
       try {
         await navigator.clipboard.writeText(paymentLink);
@@ -214,7 +214,12 @@ export default function AdminLiveSubscriptions({ clinics, subscriptions = [], in
                 <p className="text-xs text-ink-subtle truncate max-w-[200px] font-mono">{clinic.clinic_id}</p>
               </td>
               <td className="px-4 py-3">
-                <StatusBadge text={clinic.subscription_status || 'pending'} />
+                <div className="flex flex-col gap-1 items-start">
+                  <StatusBadge text={clinic.subscription_status || 'pending'} />
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-primary px-1.5 py-0.5 bg-primary/5 rounded border border-primary/20">
+                    {clinic.subscription_plan || 'Solo'}
+                  </span>
+                </div>
               </td>
               <td className="px-4 py-3 text-ink-muted text-xs hidden sm:table-cell">
                 {formatDate(clinic.subscription_activated_at)}
@@ -297,7 +302,7 @@ export default function AdminLiveSubscriptions({ clinics, subscriptions = [], in
               <td className="px-4 py-3">
                 <button
                   onClick={() => {
-                    const paymentLink = `${window.location.origin}/clinic/subscription-setup?invoice=${inv.id}`;
+                    const paymentLink = `https://viitsa.com/clinic/subscription-setup?invoice=${inv.id}`;
                     navigator.clipboard.writeText(paymentLink).then(() => alert('Link copied!')).catch(() => alert(`Here is the link: ${paymentLink}`));
                   }}
                   title="Copy Payment Link"

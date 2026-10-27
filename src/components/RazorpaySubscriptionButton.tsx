@@ -5,22 +5,32 @@ import { useToast } from '../lib/toast';
 
 interface RazorpaySubscriptionButtonProps {
   clinicId: string;
-  planId: string;
+  planId?: string;
+  tier?: 'solo' | 'clinic' | 'multispecialty';
+  cycle?: 'monthly' | 'annual';
   buttonText?: string;
   className?: string;
   onSuccess?: (paymentData: any) => void;
   onError?: (error: any) => void;
   skipTrial?: boolean;
+  prefillEmail?: string;
+  prefillName?: string;
+  prefillContact?: string;
 }
 
 export function RazorpaySubscriptionButton({
   clinicId,
   planId,
+  tier = 'clinic',
+  cycle = 'monthly',
   buttonText = 'Start 30-Day Free Trial',
   className = 'btn-primary',
   onSuccess,
   onError,
   skipTrial = false,
+  prefillEmail,
+  prefillName,
+  prefillContact,
 }: RazorpaySubscriptionButtonProps) {
   const [loading, setLoading] = useState(false);
   const [scriptLoaded, setScriptLoaded] = useState(false);
@@ -54,32 +64,42 @@ export function RazorpaySubscriptionButton({
     const functions = getFunctions(app, "asia-south1");
 
     try {
-      // 1. Create subscription on backend
+      // 1. Create subscription on backend with tier & cycle
       const createSubscription = httpsCallable(functions, 'createClinicSubscription');
-      const subResult = await createSubscription({ clinicId, planId, skipTrial });
+      const subResult = await createSubscription({ 
+        clinicId, 
+        planId, 
+        skipTrial,
+        tier,
+        cycle
+      });
       const subscription = subResult.data as any;
 
       if (!subscription || !subscription.id) {
-        throw new Error('Failed to create subscription');
+        throw new Error('Failed to create subscription mandate');
       }
+
+      const isTrial = subscription.is_trial;
 
       // 2. Configure and open Razorpay modal
       const options = {
         key: import.meta.env.VITE_RAZORPAY_KEY_ID, 
         subscription_id: subscription.id,
-        name: 'VIITSA',
-        description: 'Monthly subscription for Viitsa Clinic Pro after 30-day free trial',
+        name: 'Viitsa Healthcare',
+        description: isTrial 
+          ? `30-Day Free Trial (₹0 today). Auto-renews via UPI/Card after 30 days.` 
+          : `${tier.toUpperCase()} Plan (${cycle.toUpperCase()}) Subscription`,
         handler: async function (response: any) {
-          toast('Subscription setup successful!', 'success');
-          if (onSuccess) onSuccess(response);
+          toast(isTrial ? '30-Day Free Trial activated successfully!' : 'Subscription activated successfully!', 'success');
+          if (onSuccess) onSuccess({ ...response, is_trial: isTrial });
         },
         prefill: {
-          name: '',
-          email: '',
-          contact: ''
+          name: prefillName || '',
+          email: prefillEmail || '',
+          contact: prefillContact || ''
         },
         theme: {
-          color: '#0F6E56' 
+          color: '#05C994' 
         }
       };
 

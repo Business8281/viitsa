@@ -11,11 +11,10 @@ import {
   CheckCircle2,
   Loader2,
   AlertCircle,
-  Plus,
-  Trash2,
+  LogOut,
 } from 'lucide-react';
 import { doc, setDoc, updateDoc } from 'firebase/firestore';
-import { db } from '../lib/firebase';
+import { db, auth } from '../lib/firebase';
 import { useAuth } from '../lib/auth';
 import { ViitsaLogo } from '../components/ViitsaLogo';
 import { sanitizeForFirestore, generateReadableId } from '../lib/identityResolver';
@@ -24,7 +23,7 @@ const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
 export function ClinicSetupPage() {
   const navigate = useNavigate();
-  const { user, clinic, refreshSession } = useAuth();
+  const { user, clinic, refreshSession, logout } = useAuth();
 
   // Clinic info
   const [clinicName, setClinicName] = useState(clinic?.name || '');
@@ -43,9 +42,6 @@ export function ClinicSetupPage() {
   const [closeTime, setCloseTime] = useState('19:00');
   const [workingDays, setWorkingDays] = useState<string[]>(['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']);
 
-  // Doctors list
-  const [doctors, setDoctors] = useState([{ name: '', specialisation: '' }]);
-
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -53,18 +49,6 @@ export function ClinicSetupPage() {
     setWorkingDays(prev =>
       prev.includes(day) ? prev.filter(d => d !== day) : [...prev, day]
     );
-  };
-
-  const addDoctor = () => {
-    setDoctors(prev => [...prev, { name: '', specialisation: '' }]);
-  };
-
-  const removeDoctor = (i: number) => {
-    setDoctors(prev => prev.filter((_, idx) => idx !== i));
-  };
-
-  const updateDoctor = (i: number, field: 'name' | 'specialisation', val: string) => {
-    setDoctors(prev => prev.map((d, idx) => idx === i ? { ...d, [field]: val } : d));
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -77,18 +61,16 @@ export function ClinicSetupPage() {
     if (!clinicPhone.replace(/\D/g, '') || clinicPhone.replace(/\D/g, '').length < 10) {
       setError('Please enter a valid 10-digit clinic phone number.'); return;
     }
-    if (doctors.length === 0 || !doctors[0].name.trim()) {
-      setError('At least one doctor name is required.'); return;
-    }
     if (workingDays.length === 0) { setError('Please select at least one working day.'); return; }
 
     setLoading(true);
     const nowIso = new Date().toISOString();
-    const uid = user?.user_id;
-    const clinicId = user?.clinic_id || clinic?.clinic_id;
+    const authUid = auth.currentUser?.uid;
+    const uid = user?.user_id || authUid;
+    const clinicId = clinic?.clinic_id || user?.clinic_id || (authUid ? `CLN_${authUid.slice(0, 8)}` : null);
 
-    if (!uid || !clinicId) {
-      setError('Session error. Please log out and sign in again.');
+    if (!clinicId) {
+      setError('Session error: Clinic ID could not be identified. Please log out and sign in again.');
       setLoading(false);
       return;
     }
@@ -107,9 +89,10 @@ export function ClinicSetupPage() {
       phone: cleanPhone,
       email: clinicEmail.trim().toLowerCase(),
       owner_name: ownerName.trim() || user?.name || '',
-      owner_user_id: uid,
+      owner_user_id: authUid || uid,
+      admin_user_id: uid || authUid,
       speciality: speciality.trim() || null,
-      logo_url: null,
+      logo_url: clinic?.logo_url || null,
       clinic_setup_complete: true,
       working_hours: {
         open: openTime,
@@ -120,32 +103,28 @@ export function ClinicSetupPage() {
     });
 
     try {
-      // 1. Update clinic doc
+      // 1. Update/create clinic doc
       await setDoc(doc(db, 'clinics', clinicId), clinicData, { merge: true });
 
-      // 2. Save doctors under clinic sub-collection
-      for (const dr of doctors) {
-        if (!dr.name.trim()) continue;
-        const drCode = generateReadableId('DOC', `${clinicId}_${dr.name}`);
-        const drData = sanitizeForFirestore({
+      // 2. Also initialize/sync clinic_settings with working_hours and default slot duration
+      try {
+        await setDoc(doc(db, 'clinic_settings', clinicId), sanitizeForFirestore({
           clinic_id: clinicId,
-          name: dr.name.trim(),
-          full_name: dr.name.trim(),
-          specialisation: dr.specialisation.trim() || speciality.trim() || null,
-          id_number: drCode,
-          display_id: drCode,
-          role: 'clinic_doctor',
-          user_type: 'doctor',
-          active: true,
-          avatar_color: '#0F6E56',
-          created_at: nowIso,
+          setting_id: clinicId,
+          slot_duration_minutes: 20,
+          working_hours: {
+            open: openTime,
+            close: closeTime,
+            days: workingDays,
+          },
           updated_at: nowIso,
-        });
-        await setDoc(doc(db, 'clinics', clinicId, 'doctors', drCode), drData, { merge: true });
+        }), { merge: true });
+      } catch (settingsErr) {
+        console.warn('Could not write to clinic_settings collection:', settingsErr);
       }
 
       // 3. Update user doc with setup complete + clinic metadata
-      await updateDoc(doc(db, 'users', uid), sanitizeForFirestore({
+      const userPayload = sanitizeForFirestore({
         clinic_setup_complete: true,
         clinic_id: clinicId,
         clinic_name: clinicName.trim(),
@@ -153,38 +132,87 @@ export function ClinicSetupPage() {
         full_name: ownerName.trim() || user?.name,
         phone: ownerPhone.replace(/\D/g, '') || user?.phone || null,
         updated_at: nowIso,
-      }));
+      });
 
-      // 4. Refresh session so auth context picks up the new state
+      if (authUid) {
+        try {
+          await setDoc(doc(db, 'users', authUid), userPayload, { merge: true });
+        } catch (uErr) {
+          console.warn('Could not update user doc by authUid:', uErr);
+        }
+      }
+      if (user?.user_id && user.user_id !== authUid) {
+        try {
+          await setDoc(doc(db, 'users', user.user_id), userPayload, { merge: true });
+        } catch (uErr) {
+          console.warn('Could not update user doc by user.user_id:', uErr);
+        }
+      }
+
+      // 4. Update localStorage active clinic key
+      try {
+        localStorage.setItem('viitsa_active_clinic_id', clinicId);
+      } catch {}
+
+      // 5. Refresh session so auth context picks up the new state
       await refreshSession();
 
       navigate('/clinic/upload-documents', { replace: true });
     } catch (err: any) {
       console.error('Clinic setup error:', err);
-      setError('Failed to save clinic details. Please try again.');
+      setError(err?.message || 'Failed to save clinic details. Please try again.');
     } finally {
       setLoading(false);
     }
   };
 
+  const handleLogout = async () => {
+    try {
+      await logout();
+      navigate('/clinic/login', { replace: true });
+    } catch (err) {
+      console.error('Logout error:', err);
+      navigate('/clinic/login', { replace: true });
+    }
+  };
+
   return (
-    <div className="min-h-screen bg-[#F5FAFA] py-8 px-4 sm:px-6 lg:px-8">
-      {/* Header */}
-      <div className="max-w-2xl mx-auto text-center mb-8">
-        <div className="flex justify-center mb-4">
-          <ViitsaLogo size="md" light={false} />
+    <div className="min-h-screen bg-[#F5FAFA] flex flex-col">
+      {/* Top Header Bar with Logout */}
+      <header className="bg-white border-b border-slate-200 px-4 sm:px-8 py-3.5 flex items-center justify-between sticky top-0 z-30 shadow-xs">
+        <ViitsaLogo size="md" light={false} />
+        <div className="flex items-center gap-3">
+          {user?.email && (
+            <span className="text-xs text-slate-500 font-medium hidden sm:inline-block">
+              Signed in as <strong className="text-slate-800">{user.email}</strong>
+            </span>
+          )}
+          <button
+            type="button"
+            onClick={handleLogout}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:text-rose-600 hover:bg-rose-50 border border-slate-200 hover:border-rose-200 rounded-lg transition-colors cursor-pointer"
+            title="Log out and return to sign in"
+          >
+            <LogOut size={14} />
+            <span>Logout</span>
+          </button>
         </div>
-        <div className="inline-flex items-center gap-1.5 bg-teal-50 border border-teal-200 rounded-full px-3 py-1 mb-3">
-          <CheckCircle2 className="w-3.5 h-3.5 text-teal-600" />
-          <span className="text-xs font-bold text-teal-700 uppercase tracking-wide">Account Created — Step 2 of 3</span>
+      </header>
+
+      <div className="flex-1 py-8 px-4 sm:px-6 lg:px-8">
+        {/* Header */}
+        <div className="max-w-2xl mx-auto text-center mb-8">
+          <div className="inline-flex items-center gap-1.5 bg-teal-50 border border-teal-200 rounded-full px-3 py-1 mb-3">
+            <CheckCircle2 className="w-3.5 h-3.5 text-teal-600" />
+            <span className="text-xs font-bold text-teal-700 uppercase tracking-wide">Account Created — Step 2 of 3</span>
+          </div>
+          <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-900 tracking-tight">
+            Set Up Your Clinic
+          </h1>
+          <p className="mt-2 text-sm text-slate-500 max-w-md mx-auto">
+            Fill in your clinic details. You can edit everything later from the dashboard settings.
+          </p>
         </div>
-        <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-900 tracking-tight">
-          Set Up Your Clinic
-        </h1>
-        <p className="mt-2 text-sm text-slate-500 max-w-md mx-auto">
-          Fill in your clinic details. You can edit everything later from the dashboard settings.
-        </p>
-      </div>
 
       {/* Form Card */}
       <div className="max-w-2xl mx-auto">
@@ -375,76 +403,13 @@ export function ClinicSetupPage() {
             </div>
           </div>
 
-          {/* ── Section 3: Doctors ── */}
-          <div className="bg-white border border-slate-200 shadow-sm rounded-2xl p-6">
-            <div className="flex items-center justify-between mb-5">
-              <div className="flex items-center gap-2">
-                <div className="w-8 h-8 bg-purple-100 text-purple-700 rounded-lg flex items-center justify-center">
-                  <Stethoscope className="w-4 h-4" />
-                </div>
-                <h2 className="text-base font-bold text-slate-900">Doctor(s)</h2>
-              </div>
-              <button
-                type="button"
-                onClick={addDoctor}
-                className="flex items-center gap-1.5 text-xs font-bold text-teal-700 hover:text-teal-900 bg-teal-50 hover:bg-teal-100 border border-teal-200 px-3 py-1.5 rounded-lg transition-colors"
-              >
-                <Plus className="w-3.5 h-3.5" />
-                Add Doctor
-              </button>
-            </div>
-
-            <div className="space-y-3">
-              {doctors.map((dr, i) => (
-                <div key={i} className="flex items-start gap-2">
-                  <div className="flex-1 grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <div>
-                      <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wide mb-1">
-                        Doctor Name {i === 0 && <span className="text-rose-500">*</span>}
-                      </label>
-                      <input
-                        type="text"
-                        required={i === 0}
-                        value={dr.name}
-                        onChange={e => updateDoctor(i, 'name', e.target.value)}
-                        placeholder="Dr. Full Name"
-                        className="w-full h-11 px-4 bg-white border border-slate-300 rounded-xl text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/20 transition-all"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wide mb-1">
-                        Specialisation
-                      </label>
-                      <input
-                        type="text"
-                        value={dr.specialisation}
-                        onChange={e => updateDoctor(i, 'specialisation', e.target.value)}
-                        placeholder="e.g. General Physician"
-                        className="w-full h-11 px-4 bg-white border border-slate-300 rounded-xl text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/20 transition-all"
-                      />
-                    </div>
-                  </div>
-                  {doctors.length > 1 && (
-                    <button
-                      type="button"
-                      onClick={() => removeDoctor(i)}
-                      className="mt-6 p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                  )}
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* ── Section 4: Working Hours ── */}
+          {/* ── Section 3: Working Hours ── */}
           <div className="bg-white border border-slate-200 shadow-sm rounded-2xl p-6">
             <div className="flex items-center gap-2 mb-5">
               <div className="w-8 h-8 bg-amber-100 text-amber-700 rounded-lg flex items-center justify-center">
                 <Clock className="w-4 h-4" />
               </div>
-              <h2 className="text-base font-bold text-slate-900">Working Hours</h2>
+              <h2 className="text-base font-bold text-slate-900">Working Hours & Days</h2>
             </div>
 
             {/* Days */}
@@ -477,7 +442,7 @@ export function ClinicSetupPage() {
                   Opens at
                 </label>
                 <div className="relative">
-                  <Phone className="w-4 h-4 text-slate-400 absolute left-3.5 top-3 pointer-events-none" />
+                  <Clock className="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5 pointer-events-none" />
                   <input
                     type="time"
                     value={openTime}
@@ -491,7 +456,7 @@ export function ClinicSetupPage() {
                   Closes at
                 </label>
                 <div className="relative">
-                  <Phone className="w-4 h-4 text-slate-400 absolute left-3.5 top-3 pointer-events-none" />
+                  <Clock className="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5 pointer-events-none" />
                   <input
                     type="time"
                     value={closeTime}
@@ -522,11 +487,24 @@ export function ClinicSetupPage() {
             )}
           </button>
 
-          <p className="text-center text-xs text-slate-400 pb-4">
-            All information can be updated later from Settings.
+          <p className="text-center text-xs text-slate-400">
+            All clinic details and working hours are editable from Settings. Doctors & staff are added in Dashboard Settings.
           </p>
+
+          <div className="flex items-center justify-center gap-1.5 pt-1 pb-6 text-xs text-slate-500">
+            <span>Signed in as <strong>{user?.email || 'User'}</strong> ·</span>
+            <button
+              type="button"
+              onClick={handleLogout}
+              className="font-semibold text-rose-600 hover:text-rose-700 hover:underline inline-flex items-center gap-1 cursor-pointer"
+            >
+              <LogOut size={12} />
+              Logout
+            </button>
+          </div>
         </form>
       </div>
     </div>
+  </div>
   );
 }

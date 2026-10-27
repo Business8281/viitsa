@@ -1,41 +1,112 @@
 import { useEffect, useRef, useState, useMemo } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { 
   Save, Building2, Clock, Stethoscope, Users, Bell, Plus, AlertCircle, 
   RefreshCw, QrCode, Link2, Share2, FileText, Download, Eye, ExternalLink, 
   Shield, UploadCloud, Edit3, Trash2, CheckCircle2, XCircle, PhoneCall, 
   Mail, Award, Briefcase, IndianRupee, MapPin, GraduationCap, Search, 
-  FileCheck, Check, Upload, X, ShieldCheck, Copy, Printer, Smartphone
+  FileCheck, Check, Upload, X, ShieldCheck, Copy, Printer, Smartphone,
+  Crown, Sparkles, Zap, MessageSquare, HardDrive, AlertTriangle, HelpCircle,
+  DollarSign, PauseCircle, ArrowLeftRight, ArrowUpRight, ArrowDownRight, TrendingUp, TrendingDown
 } from 'lucide-react';
-import { db, firebaseConfig, storage } from '../lib/firebase';
+import { DEFAULT_PLANS, getUsageCounter, getEffectiveLimits } from '../lib/entitlementsService';
+import type { UsageCounter, PlanLimits } from '../lib/types';
+import { db, firebaseConfig, storage, functions } from '../lib/firebase';
 import { 
   collection, query, where, getDocs, updateDoc, doc, setDoc, 
-  getDoc, onSnapshot, arrayUnion, arrayRemove 
+  getDoc, onSnapshot, arrayUnion, arrayRemove, addDoc, serverTimestamp
 } from 'firebase/firestore';
+import { httpsCallable } from 'firebase/functions';
 import { ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
 import { initializeApp } from "firebase/app";
-import { getAuth, createUserWithEmailAndPassword, sendPasswordResetEmail } from "firebase/auth";
+import { getAuth, createUserWithEmailAndPassword, sendPasswordResetEmail, updatePassword } from "firebase/auth";
+import { assertPasswordUniqueness, claimPasswordHash, getPasswordValidationError } from '../lib/passwordSecurity';
+import { PasswordRequirementsGuide } from '../components/PasswordRequirementsGuide';
+import { sendPasswordResetNotificationEmail } from '../lib/emailService';
 import { useToast } from '../lib/toast';
 import { useAuth } from '../lib/auth';
 import { Modal } from '../components/Modal';
 import { Loading, SectionHeader, Avatar, EmptyState } from '../components/ui';
 import { SubscriptionInvoiceView } from '../components/SubscriptionInvoiceView';
+import { RazorpaySubscriptionButton } from '../components/RazorpaySubscriptionButton';
 import type { ClinicSettings, User, Role } from '../lib/types';
 import { formatDate, formatTime, parseDateArg } from '../lib/format';
 import { generateReadableId } from '../lib/identityResolver';
+import { 
+  getSubscriptionPeriodEnd, 
+  checkAndResolveSubscriptionPeriod, 
+  scheduleSubscriptionPlanChange, 
+  cancelScheduledPlanChange, 
+  scheduleSubscriptionCancellation, 
+  revertSubscriptionCancellation 
+} from '../lib/subscriptionLifecycle';
+import type { Clinic } from '../lib/types';
 
 const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
+const CANCELLATION_REASONS = [
+  {
+    id: 'cost',
+    title: 'Cost is too high / Budget constraints',
+    desc: 'The subscription cost is beyond our clinic budget.',
+    icon: DollarSign
+  },
+  {
+    id: 'features',
+    title: 'Missing features needed for our clinic',
+    desc: 'The platform lacks specific clinical or operational features we need.',
+    icon: Zap
+  },
+  {
+    id: 'alternative',
+    title: 'Switching to another clinic management software',
+    desc: 'We are moving to another healthcare platform or vendor.',
+    icon: ArrowLeftRight
+  },
+  {
+    id: 'complexity',
+    title: 'Too difficult to use / Staff onboarding challenges',
+    desc: 'Our staff or doctors found the system too complex to adopt.',
+    icon: Users
+  },
+  {
+    id: 'closure',
+    title: 'Temporary closure or seasonal slowdown',
+    desc: 'Our practice is temporarily closed or downsizing operations.',
+    icon: PauseCircle
+  },
+  {
+    id: 'other',
+    title: 'Other reason (please specify)',
+    desc: 'A different reason not listed above.',
+    icon: HelpCircle
+  }
+];
+
 type Tab = 'profile' | 'hours' | 'doctors' | 'staff' | 'notifications' | 'patient-access' | 'billing';
+const VALID_TABS: Tab[] = ['profile', 'hours', 'doctors', 'staff', 'notifications', 'patient-access', 'billing'];
 
 export function SettingsScreen() {
-  const { clinic, logout } = useAuth();
+  const { clinic, user, logout } = useAuth();
   const { toast } = useToast();
-  const [tab, setTab] = useState<Tab>('profile');
+  const [searchParams, setSearchParams] = useSearchParams();
+  const rawTab = searchParams.get('tab') as Tab | null;
+  const tab: Tab = rawTab && VALID_TABS.includes(rawTab) ? rawTab : 'profile';
+
+  const setTab = (newTab: Tab) => {
+    setSearchParams(prev => {
+      const next = new URLSearchParams(prev);
+      next.set('tab', newTab);
+      return next;
+    }, { replace: true });
+  };
   const [loading, setLoading] = useState(true);
   const [viewingSubscription, setViewingSubscription] = useState<any | null>(null);
   const [settings, setSettings] = useState<ClinicSettings | null>(null);
   const [clinicName, setClinicName] = useState('');
   const [clinicAddress, setClinicAddress] = useState('');
+  const [clinicCity, setClinicCity] = useState('');
+  const [clinicSpeciality, setClinicSpeciality] = useState('');
   const [clinicPhone, setClinicPhone] = useState('');
   const [clinicEmail, setClinicEmail] = useState('');
   const [logoUrl, setLogoUrl] = useState('');
@@ -52,6 +123,69 @@ export function SettingsScreen() {
   const [savingHours, setSavingHours] = useState(false);
   const [subscriptions, setSubscriptions] = useState<any[]>([]);
 
+  // Account Security & Password State
+  const [pwdNew, setPwdNew] = useState('');
+  const [pwdConfirm, setPwdConfirm] = useState('');
+  const [showPwdNew, setShowPwdNew] = useState(false);
+  const [showPwdConfirm, setShowPwdConfirm] = useState(false);
+  const [pwdUpdating, setPwdUpdating] = useState(false);
+  const [pwdError, setPwdError] = useState<string | null>(null);
+  const [pwdSuccess, setPwdSuccess] = useState<string | null>(null);
+
+  const handleUpdateAccountPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setPwdError(null);
+    setPwdSuccess(null);
+
+    const valErr = getPasswordValidationError(pwdNew, pwdConfirm);
+    if (valErr) {
+      setPwdError(valErr);
+      return;
+    }
+
+    const authInstance = getAuth();
+    if (!authInstance.currentUser) {
+      setPwdError('No active authentication session. Please sign in again.');
+      return;
+    }
+
+    setPwdUpdating(true);
+    try {
+      const uniqCheck = await assertPasswordUniqueness(pwdNew, authInstance.currentUser.uid);
+      if (!uniqCheck.ok) {
+        setPwdError(uniqCheck.error || 'This password is already in use by another user.');
+        setPwdUpdating(false);
+        return;
+      }
+
+      await updatePassword(authInstance.currentUser, pwdNew);
+      await claimPasswordHash(uniqCheck.hash, authInstance.currentUser.uid, authInstance.currentUser.email || '');
+
+      const uid = user?.id || user?.user_id || authInstance.currentUser.uid;
+      try {
+        await updateDoc(doc(db, 'users', uid), {
+          auth_providers: arrayUnion('password'),
+          updated_at: new Date().toISOString()
+        });
+      } catch (docErr) {
+        console.warn('Update user auth_providers warning:', docErr);
+      }
+
+      setPwdSuccess('Password updated successfully!');
+      setPwdNew('');
+      setPwdConfirm('');
+      toast('Your account password has been updated successfully', 'success');
+    } catch (err: any) {
+      if (err.code === 'auth/requires-recent-login') {
+        setPwdError('For security, please sign out and sign back in before changing your password.');
+      } else {
+        setPwdError(err.message || 'Failed to update password.');
+      }
+    } finally {
+      setPwdUpdating(false);
+    }
+  };
+
   // User management modals
   const [uploadDocUser, setUploadDocUser] = useState<User | null>(null);
   const [editUser, setEditUser] = useState<User | null>(null);
@@ -60,11 +194,107 @@ export function SettingsScreen() {
   // Clinic verification documents
   const [liveClinic, setLiveClinic] = useState<any>(clinic || null);
   const [uploadClinicDocsOpen, setUploadClinicDocsOpen] = useState(false);
+  const [usageCounter, setUsageCounter] = useState<UsageCounter | null>(null);
+  const [changePlanModalOpen, setChangePlanModalOpen] = useState(false);
+  const [upgradeTier, setUpgradeTier] = useState<'solo' | 'clinic' | 'multispecialty'>('clinic');
+  const [upgradeCycle, setUpgradeCycle] = useState<'monthly' | 'annual'>('monthly');
+
+  // Cancel Subscription states
+  const [cancelModalOpen, setCancelModalOpen] = useState(false);
+  const [cancelReason, setCancelReason] = useState<string>('');
+  const [cancelCustomReason, setCancelCustomReason] = useState<string>('');
+  const [cancelFeedback, setCancelFeedback] = useState<string>('');
+  const [cancelling, setCancelling] = useState(false);
+  const [cancelSuccess, setCancelSuccess] = useState(false);
+
+  const [scheduledCancelDate, setScheduledCancelDate] = useState<string>('');
+
+  const activeClinic = (liveClinic || clinic) as Clinic;
+  const periodInfo = useMemo(() => {
+    try {
+      return getSubscriptionPeriodEnd(activeClinic);
+    } catch (e) {
+      console.warn('Fallback computing subscription period end:', e);
+      const now = new Date();
+      const fallbackEnd = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
+      return {
+        date: fallbackEnd,
+        iso: fallbackEnd.toISOString(),
+        formatted: '—',
+        daysRemaining: 30
+      };
+    }
+  }, [activeClinic]);
+
+  const handleCancelSubscription = async () => {
+    if (!activeClinic) return;
+    if (!cancelReason) {
+      toast('Please select a reason for cancelling.', 'error');
+      return;
+    }
+    if (cancelReason === 'other' && !cancelCustomReason.trim()) {
+      toast('Please specify your reason for cancelling.', 'error');
+      return;
+    }
+
+    setCancelling(true);
+    try {
+      const selectedObj = CANCELLATION_REASONS.find(r => r.id === cancelReason);
+      const reasonText = cancelReason === 'other' 
+        ? `Other: ${cancelCustomReason.trim()}`
+        : (selectedObj?.title || cancelReason);
+
+      const res = await scheduleSubscriptionCancellation(
+        activeClinic, 
+        user, 
+        reasonText, 
+        cancelFeedback.trim()
+      );
+
+      if (res.ok) {
+        setScheduledCancelDate(res.effectiveDate);
+        setCancelSuccess(true);
+        toast(`Cancellation scheduled for ${res.effectiveDate}. Your plan remains active until then.`, 'info');
+      } else {
+        toast(res.error || 'Failed to schedule cancellation. Please contact support.', 'error');
+      }
+    } catch (err: any) {
+      console.error('Cancellation error:', err);
+      toast(err?.message || 'Failed to cancel subscription. Please contact support.', 'error');
+    } finally {
+      setCancelling(false);
+    }
+  };
+
+  const [changingPlan, setChangingPlan] = useState(false);
+
+  const handleDirectPlanChange = async (targetTier: string, targetCycle: string, type: 'downgrade' | 'upgrade' | 'switch') => {
+    const activeClinic = (liveClinic || clinic) as Clinic;
+    if (!activeClinic) return;
+    setChangingPlan(true);
+    try {
+      const changeType = type === 'downgrade' ? 'downgrade' : 'upgrade';
+      const res = await scheduleSubscriptionPlanChange(activeClinic, user, targetTier, targetCycle, changeType);
+      if (res.ok) {
+        toast(`Plan ${changeType} scheduled for ${res.effectiveDate}! Full access to your current plan remains active until then.`, 'success');
+        setChangePlanModalOpen(false);
+      } else {
+        toast(res.error || 'Failed to schedule plan change', 'error');
+      }
+    } catch (err: any) {
+      console.error('Plan change error:', err);
+      toast(err?.message || 'Failed to update plan. Please try again.', 'error');
+    } finally {
+      setChangingPlan(false);
+    }
+  };
 
   useEffect(() => {
     if (!clinic) return;
     setClinicName(clinic.name);
     setClinicAddress(clinic.address ?? '');
+    setClinicCity(clinic.city ?? '');
+    setClinicSpeciality(clinic.speciality ?? '');
     setClinicPhone(clinic.phone ?? '');
     setClinicEmail(clinic.email ?? '');
     setLogoUrl(clinic.logo_url ?? '');
@@ -78,8 +308,19 @@ export function SettingsScreen() {
     // Live clinic document listener for verification docs and real-time status
     const unsubClinic = onSnapshot(doc(db, 'clinics', clinic.clinic_id), (snap) => {
       if (snap.exists()) {
-        const cData = { clinic_id: snap.id, ...snap.data() };
+        const cData = { clinic_id: snap.id, ...snap.data() } as Clinic;
         setLiveClinic(cData);
+        if (cData.city !== undefined) setClinicCity(cData.city || '');
+        if (cData.speciality !== undefined) setClinicSpeciality(cData.speciality || '');
+        if (cData.working_hours) {
+          if (cData.working_hours.open) setOpenHours(cData.working_hours.open);
+          if (cData.working_hours.close) setCloseHours(cData.working_hours.close);
+          if (cData.working_hours.days && cData.working_hours.days.length) {
+            setWorkingDays(cData.working_hours.days);
+          }
+        }
+        // Automatically check if subscription period has ended and resolve scheduled events
+        checkAndResolveSubscriptionPeriod(cData, user?.user_id).catch(() => {});
       }
     });
     unsubs.push(unsubClinic);
@@ -127,13 +368,18 @@ export function SettingsScreen() {
     const unsubSubs = onSnapshot(subsQ, (snap) => {
       const list = snap.docs.map(d => ({ id: d.id, ...d.data() }));
       list.sort((a: any, b: any) => {
-        const ta = new Date(a.created_at || 0).getTime();
-        const tb = new Date(b.created_at || 0).getTime();
+        const ta = parseDateArg(a.created_at).getTime() || 0;
+        const tb = parseDateArg(b.created_at).getTime() || 0;
         return tb - ta;
       });
       setSubscriptions(list);
     }, (err) => console.warn('Subs live sync:', err));
     unsubs.push(unsubSubs);
+
+    // Fetch monthly usage counters (AI intakes, WhatsApp, storage)
+    getUsageCounter(clinic.clinic_id).then(counter => {
+      setUsageCounter(counter);
+    }).catch(e => console.warn('Failed to load usage counter:', e));
 
     setLoading(false);
 
@@ -143,7 +389,15 @@ export function SettingsScreen() {
   const saveProfile = async () => {
     setSavingProfile(true);
     try {
-      await updateDoc(doc(db, 'clinics', clinic!.clinic_id), { name: clinicName, address: clinicAddress, phone: clinicPhone, email: clinicEmail, logo_url: logoUrl });
+      await updateDoc(doc(db, 'clinics', clinic!.clinic_id), {
+        name: clinicName,
+        address: clinicAddress,
+        city: clinicCity,
+        speciality: clinicSpeciality,
+        phone: clinicPhone,
+        email: clinicEmail,
+        logo_url: logoUrl
+      });
       toast('Clinic profile updated.', 'success');
     } catch(error) {
       toast('Unable to update clinic profile. Please try again.', 'error');
@@ -214,6 +468,25 @@ export function SettingsScreen() {
     password: string;
   }) => {
     try {
+      const planCode = (clinic?.subscription_plan as any) || 'solo';
+      const matchedPlan = DEFAULT_PLANS.find(p => p.id === planCode) || DEFAULT_PLANS[0];
+      const limits = getEffectiveLimits(matchedPlan);
+      const isDoc = data.role === 'clinic_doctor' || data.role === 'doctor';
+
+      if (isDoc) {
+        const currentDocCount = users.filter(u => u.role === 'doctor' || u.role === 'clinic_doctor').length;
+        if (currentDocCount >= limits.doctors_included) {
+          toast(`Doctor seat limit reached (${limits.doctors_included} max on ${matchedPlan.name} plan). Please upgrade your tier.`, 'error');
+          return;
+        }
+      } else {
+        const currentStaffCount = users.filter(u => u.role === 'staff' || u.role === 'clinic_staff' || u.role === 'clinic_admin').length;
+        if (currentStaffCount >= limits.staff_seats_included) {
+          toast(`Staff seat limit reached (${limits.staff_seats_included} max on ${matchedPlan.name} plan). Please upgrade your tier.`, 'error');
+          return;
+        }
+      }
+
       // create user with secondary app to avoid logging out the current user
       const secondaryApp = initializeApp(firebaseConfig, "Secondary");
       const secondaryAuth = getAuth(secondaryApp);
@@ -221,7 +494,6 @@ export function SettingsScreen() {
       const userCredential = await createUserWithEmailAndPassword(secondaryAuth, data.email.toLowerCase(), data.password);
       const userId = userCredential.user.uid;
       
-      const isDoc = data.role === 'clinic_doctor' || data.role === 'doctor';
       const resolvedRole: Role = isDoc ? 'clinic_doctor' : (data.role === 'admin' ? 'clinic_admin' : 'clinic_staff');
       const prefix = isDoc ? 'DOC' : 'STF';
       const displayId = generateReadableId(prefix, userId);
@@ -264,9 +536,12 @@ export function SettingsScreen() {
 
   const resetPassword = async (u: User) => {
     try {
-      const auth = getAuth();
-      await sendPasswordResetEmail(auth, u.email);
-      toast(`Password reset email sent to ${u.email}`, 'success');
+      const res = await sendPasswordResetNotificationEmail(u.email, '/clinic/login', 'clinic');
+      if (res.success) {
+        toast(`Password reset email sent to ${u.email}`, 'success');
+      } else {
+        toast(res.error || 'Unable to send reset email. Please try again.', 'error');
+      }
     } catch (e: any) {
       toast(e.message || 'Unable to send reset email. Please try again.', 'error');
     }
@@ -414,10 +689,16 @@ export function SettingsScreen() {
             <SectionHeader title="Clinic profile" subtitle="Basic clinic information shown across the app" />
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div><label className="label">Clinic name</label><input className="input" value={clinicName} onChange={e => setClinicName(e.target.value)} /></div>
-              <div><label className="label">Phone</label><input className="input" value={clinicPhone} onChange={e => setClinicPhone(e.target.value)} /></div>
+              <div><label className="label">Speciality / Department</label><input className="input" value={clinicSpeciality} onChange={e => setClinicSpeciality(e.target.value)} placeholder="e.g. General Practice, Paediatrics" /></div>
             </div>
-            <div><label className="label">Address</label><input className="input" value={clinicAddress} onChange={e => setClinicAddress(e.target.value)} /></div>
-            <div><label className="label">Email</label><input className="input" value={clinicEmail} onChange={e => setClinicEmail(e.target.value)} /></div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div><label className="label">Address</label><input className="input" value={clinicAddress} onChange={e => setClinicAddress(e.target.value)} /></div>
+              <div><label className="label">City</label><input className="input" value={clinicCity} onChange={e => setClinicCity(e.target.value)} placeholder="e.g. Bangalore" /></div>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div><label className="label">Phone</label><input className="input" value={clinicPhone} onChange={e => setClinicPhone(e.target.value)} /></div>
+              <div><label className="label">Email</label><input className="input" value={clinicEmail} onChange={e => setClinicEmail(e.target.value)} /></div>
+            </div>
             <div>
               <label className="label">Logo</label>
               <div className="flex items-center gap-4">
@@ -541,6 +822,90 @@ export function SettingsScreen() {
               </div>
             )}
           </div>
+
+          {/* Account Security & Password Card */}
+          <div className="card space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-black/5">
+              <div>
+                <h2 className="text-base font-bold text-ink flex items-center gap-2">
+                  <ShieldCheck size={18} className="text-teal-600" />
+                  Account Security & Password
+                </h2>
+                <p className="text-xs text-ink-muted mt-0.5">
+                  Update your authentication password for {user?.email || 'your account'}
+                </p>
+              </div>
+            </div>
+
+            {pwdSuccess && (
+              <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-xs text-emerald-800 flex items-center gap-2">
+                <CheckCircle2 size={16} className="text-emerald-600 shrink-0" />
+                <span>{pwdSuccess}</span>
+              </div>
+            )}
+
+            {pwdError && (
+              <div className="p-3 bg-red-50 border border-red-200 rounded-xl text-xs text-red-700 flex items-center gap-2">
+                <AlertCircle size={16} className="text-red-500 shrink-0" />
+                <span>{pwdError}</span>
+              </div>
+            )}
+
+            <form onSubmit={handleUpdateAccountPassword} className="space-y-4 max-w-md">
+              <div>
+                <label className="label">New Password</label>
+                <div className="relative">
+                  <input
+                    type={showPwdNew ? 'text' : 'password'}
+                    className="input pr-10"
+                    placeholder="Enter new password (min. 8 characters)"
+                    value={pwdNew}
+                    onChange={e => setPwdNew(e.target.value)}
+                    required
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPwdNew(!showPwdNew)}
+                    className="absolute right-3 top-2.5 text-gray-400 hover:text-gray-600"
+                  >
+                    {showPwdNew ? <EyeOff size={16} /> : <Eye size={16} />}
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <label className="label">Confirm New Password</label>
+                <div className="relative">
+                  <input
+                    type={showPwdConfirm ? 'text' : 'password'}
+                    className="input pr-10"
+                    placeholder="Re-enter new password"
+                    value={pwdConfirm}
+                    onChange={e => setPwdConfirm(e.target.value)}
+                    required
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPwdConfirm(!showPwdConfirm)}
+                    className="absolute right-3 top-2.5 text-gray-400 hover:text-gray-600"
+                  >
+                    {showPwdConfirm ? <EyeOff size={16} /> : <Eye size={16} />}
+                  </button>
+                </div>
+              </div>
+
+              <PasswordRequirementsGuide password={pwdNew} />
+
+              <button
+                type="submit"
+                disabled={pwdUpdating || !pwdNew}
+                className="btn-primary"
+              >
+                {pwdUpdating ? <RefreshCw size={14} className="animate-spin" /> : <Save size={14} />}
+                {pwdUpdating ? 'Updating Password…' : 'Update Password'}
+              </button>
+            </form>
+          </div>
         </div>
       )}
 
@@ -590,7 +955,25 @@ export function SettingsScreen() {
           users={users} 
           clinic={clinic}
           onAdd={() => {
-            setAddUserRole(tab === 'doctors' ? 'doctor' : 'staff');
+            const planCode = (clinic.subscription_plan as any) || 'solo';
+            const matchedPlan = DEFAULT_PLANS.find(p => p.id === planCode) || DEFAULT_PLANS[0];
+            const limits = getEffectiveLimits(matchedPlan);
+
+            if (tab === 'doctors') {
+              const currentDocCount = users.filter(u => u.role === 'doctor' || u.role === 'clinic_doctor').length;
+              if (currentDocCount >= limits.doctors_included) {
+                toast(`Doctor seat limit reached (${limits.doctors_included} max on ${matchedPlan.name} plan). Please upgrade your tier or add a doctor seat.`, 'error');
+                return;
+              }
+              setAddUserRole('doctor');
+            } else {
+              const currentStaffCount = users.filter(u => u.role === 'staff' || u.role === 'clinic_staff' || u.role === 'clinic_admin').length;
+              if (currentStaffCount >= limits.staff_seats_included) {
+                toast(`Staff seat limit reached (${limits.staff_seats_included} max on ${matchedPlan.name} plan). Please upgrade your tier to add more staff.`, 'error');
+                return;
+              }
+              setAddUserRole('staff');
+            }
             setAddUserOpen(true);
           }} 
           onReset={resetPassword} 
@@ -619,71 +1002,303 @@ export function SettingsScreen() {
       )}
 
       {tab === 'billing' && (
-        <div className="space-y-4">
-          {clinic.subscription_status !== 'active' && (
-            <div className="bg-gradient-to-r from-primary to-[#0A4B3A] rounded-2xl p-5 sm:p-6 text-white flex flex-col sm:flex-row items-center justify-between gap-4 shadow-sm">
-              <div>
-                <h2 className="text-lg sm:text-xl font-bold">Upgrade to Pro Plan</h2>
-                <p className="text-white/80 text-sm mt-1">Unlock premium features, unlimited notifications, and advanced analytics for your clinic.</p>
-              </div>
-              <a href="https://rzp.io/rzp/iBkNOiIw" target="_blank" rel="noopener noreferrer" className="shrink-0 bg-white text-primary px-6 py-2.5 rounded-xl font-bold text-sm shadow-sm hover:bg-gray-50 transition-colors">
-                Activate Subscription
-              </a>
-            </div>
-          )}
+        <div className="space-y-6">
+          {(() => {
+            const activeClinic = (liveClinic || clinic) as Clinic;
+            const planCode = (activeClinic.subscription_plan as any) || 'solo';
+            const matchedPlan = DEFAULT_PLANS.find(p => p.id === planCode) || DEFAULT_PLANS[0];
+            const limits = getEffectiveLimits(matchedPlan);
+            const periodInfo = getSubscriptionPeriodEnd(activeClinic);
+            const doctorsCount = users.filter(u => u.role === 'doctor' || u.role === 'clinic_doctor').length;
+            const staffCount = users.filter(u => u.role === 'staff' || u.role === 'clinic_staff' || u.role === 'clinic_admin').length;
+            const aiUsed = usageCounter?.ai_intakes_used || 0;
+            const whatsappUsed = usageCounter?.whatsapp_messages_used || 0;
+            const storageGbUsed = Number(((usageCounter?.storage_bytes_used || 0) / (1024 * 1024 * 1024)).toFixed(1));
 
-          <div className="card">
-            <SectionHeader title="Live Subscription Status" subtitle="Manage your Viitsa clinic subscription" />
-            
-            <div className="space-y-4">
-              {clinic.subscription_status === 'active' || clinic.subscription_status === 'free_plan' ? (
-                <div className="p-4 border border-primary/20 bg-primary-50/30 rounded-xl">
-                  <div className="flex items-center justify-between">
+            return (
+              <>
+                {activeClinic.subscription_status !== 'active' && !activeClinic.cancel_at_period_end && (
+                  <div className="bg-gradient-to-r from-primary to-[#0A4B3A] rounded-2xl p-5 sm:p-6 text-white flex flex-col sm:flex-row items-center justify-between gap-4 shadow-sm">
                     <div>
-                      <p className="text-xs font-bold text-primary uppercase tracking-wide">Current Plan</p>
-                      <h3 className="text-xl font-bold text-ink mt-0.5">
-                        {clinic.subscription_status === 'free_plan' ? '30-Day Free Trial' : 'Pro Plan'}
-                      </h3>
-                      <p className="text-sm text-ink-muted mt-1">
-                        Status: <span className="font-semibold text-primary capitalize">{clinic.subscription_status === 'free_plan' ? 'Active (Free)' : 'Active (Pro)'}</span>
+                      <h2 className="text-lg sm:text-xl font-bold">Upgrade Your Clinic Plan</h2>
+                      <p className="text-white/80 text-sm mt-1">
+                        Unlock more doctor seats, higher AI triage intake allowances, and automated WhatsApp patient CRM.
                       </p>
-                      
-                      {clinic.subscription_activated_at && (
-                        <p className="text-xs text-ink-muted mt-1">
-                          Activated on: {formatDate(clinic.subscription_activated_at)}
-                        </p>
-                      )}
-
-                      {clinic.subscription_status === 'free_plan' && clinic.subscription_activated_at && (
-                        <p className="text-xs text-warning font-semibold mt-1">
-                          Billing Date: {
-                            (() => {
-                              const d = clinic.subscription_activated_at;
-                              const dateObj = typeof d === 'object' && 'seconds' in d ? new Date((d as any).seconds * 1000) : new Date(d);
-                              dateObj.setDate(dateObj.getDate() + 30);
-                              return formatDate(dateObj);
-                            })()
-                          }
-                        </p>
-                      )}
                     </div>
-                    <div className="flex flex-col gap-2">
-                      {clinic.subscription_status === 'free_plan' && (
-                        <a href="https://rzp.io/rzp/iBkNOiIw" target="_blank" rel="noopener noreferrer" className="btn-primary">
-                          Upgrade to Pro
-                        </a>
-                      )}
+                    <button 
+                      type="button"
+                      onClick={() => {
+                        setUpgradeTier((activeClinic.subscription_plan as any) || 'clinic');
+                        setChangePlanModalOpen(true);
+                      }}
+                      className="shrink-0 bg-white text-primary px-6 py-2.5 rounded-xl font-bold text-sm shadow-sm hover:bg-gray-50 transition-colors"
+                    >
+                      View Plans & Upgrade
+                    </button>
+                  </div>
+                )}
+
+                <div className="card">
+                  <SectionHeader title="Live Subscription & Tier" subtitle="Current plan and operational entitlements" />
+                  
+                  <div className="p-5 border border-primary/20 bg-primary-50/20 rounded-2xl mb-6">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <Crown size={20} className="text-accent" />
+                          <span className="text-xs font-bold text-primary uppercase tracking-wider">Active Plan</span>
+                        </div>
+                        <h3 className="text-2xl font-bold text-ink mt-1">
+                          {matchedPlan.name} Plan
+                        </h3>
+                        <p className="text-sm text-ink-muted mt-1">
+                          Status:{' '}
+                          {activeClinic.subscription_status === 'cancelled' ? (
+                            <span className="font-semibold text-rose-700 bg-rose-50 border border-rose-200 px-2.5 py-0.5 rounded-full text-xs uppercase tracking-wide">
+                              Cancelled
+                            </span>
+                          ) : activeClinic.cancel_at_period_end ? (
+                            <span className="font-semibold text-amber-800 bg-amber-100 border border-amber-300 px-2.5 py-0.5 rounded-full text-xs uppercase tracking-wide">
+                              Active (Cancelling on {periodInfo.formatted})
+                            </span>
+                          ) : activeClinic.change_scheduled ? (
+                            <span className="font-semibold text-teal-800 bg-teal-100 border border-teal-300 px-2.5 py-0.5 rounded-full text-xs uppercase tracking-wide">
+                              Active (Switching on {periodInfo.formatted})
+                            </span>
+                          ) : activeClinic.subscription_status === 'trial' ? (
+                            <span className="font-semibold text-emerald-800 bg-emerald-100 border border-emerald-300 px-2.5 py-0.5 rounded-full text-xs uppercase tracking-wide">
+                              🌟 30-Day Free Trial Active
+                            </span>
+                          ) : (
+                            <span className="font-semibold text-primary capitalize">
+                              {activeClinic.subscription_status === 'free_plan' ? 'Active (30-Day Free Trial)' : (activeClinic.subscription_status || 'Active')}
+                            </span>
+                          )}
+                        </p>
+                        
+                        <p className="text-xs text-ink-muted mt-1.5 font-medium">
+                          Billing Cycle: <strong className="text-ink capitalize">{activeClinic.subscription_billing_cycle || 'monthly'}</strong>
+                          {activeClinic.subscription_status !== 'cancelled' && (
+                            <> • Active Until: <strong className="text-primary">{periodInfo.formatted}</strong> ({periodInfo.daysRemaining} days remaining)</>
+                          )}
+                        </p>
+
+                        {activeClinic.trial_ends_at && activeClinic.subscription_status === 'trial' && (
+                          <p className="text-xs text-emerald-700 mt-1 font-semibold">
+                            Auto-Debit Mandate: Active • First charge on {formatDate(activeClinic.trial_ends_at)} via UPI/Card
+                          </p>
+                        )}
+
+                        {activeClinic.subscription_activated_at && activeClinic.subscription_status !== 'cancelled' && activeClinic.subscription_status !== 'trial' && (
+                          <p className="text-xs text-ink-muted mt-1">
+                            Activated on: {formatDate(activeClinic.subscription_activated_at)}
+                          </p>
+                        )}
+
+                        {activeClinic.subscription_cancelled_at && activeClinic.subscription_status === 'cancelled' && (
+                          <p className="text-xs text-rose-600 mt-1 font-medium">
+                            Cancelled on: {formatDate(activeClinic.subscription_cancelled_at)}
+                          </p>
+                        )}
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-2.5">
+                        <button 
+                          type="button"
+                          onClick={() => {
+                            setUpgradeTier((activeClinic.subscription_plan as any) || 'clinic');
+                            setChangePlanModalOpen(true);
+                          }}
+                          className="btn-primary text-xs py-2 px-4 inline-flex items-center gap-1.5 shadow-sm"
+                        >
+                          <Zap size={14} />
+                          <span>{activeClinic.subscription_status === 'cancelled' ? 'Reactivate / Upgrade Plan' : 'Change Plan'}</span>
+                        </button>
+
+                        {activeClinic.subscription_status !== 'cancelled' && !activeClinic.cancel_at_period_end && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setCancelReason('');
+                              setCancelCustomReason('');
+                              setCancelFeedback('');
+                              setCancelSuccess(false);
+                              setCancelModalOpen(true);
+                            }}
+                            className="btn-ghost text-xs py-2 px-3 inline-flex items-center gap-1.5 text-rose-600 hover:text-rose-700 hover:bg-rose-50 border border-rose-200 hover:border-rose-300 transition-colors"
+                          >
+                            <XCircle size={14} className="text-rose-500" />
+                            <span>Cancel Subscription</span>
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Pending Cancellation Banner */}
+                    {activeClinic.cancel_at_period_end && (
+                      <div className="mt-4 p-4 rounded-xl border border-amber-300 bg-amber-50/90 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-amber-950 animate-fade-in">
+                        <div className="flex items-start gap-3">
+                          <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+                          <div>
+                            <p className="text-xs font-bold uppercase tracking-wider text-amber-900">
+                              Subscription Cancellation Scheduled
+                            </p>
+                            <p className="text-xs text-amber-800 mt-0.5">
+                              Your <strong>{matchedPlan.name} Plan</strong> remains <strong>100% active</strong> with all {limits.doctors_included} doctor seats and features until{' '}
+                              <strong className="underline decoration-amber-500 font-bold">{periodInfo.formatted}</strong>. Auto-renewal is turned off.
+                            </p>
+                            {activeClinic.cancellation_reason && (
+                              <p className="text-[11px] text-amber-700 mt-1 italic">
+                                Reason: {activeClinic.cancellation_reason}
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            const ok = await revertSubscriptionCancellation(activeClinic.clinic_id);
+                            if (ok) {
+                              toast('Cancellation cancelled! Your subscription will continue renewing seamlessly.', 'success');
+                            } else {
+                              toast('Failed to restore subscription. Please try again.', 'error');
+                            }
+                          }}
+                          className="shrink-0 bg-white hover:bg-amber-100/60 border border-amber-300 text-amber-950 font-bold text-xs py-2 px-3.5 rounded-lg shadow-sm transition-all inline-flex items-center gap-1.5"
+                        >
+                          <CheckCircle2 size={14} className="text-emerald-600" />
+                          <span>Keep / Resume Subscription</span>
+                        </button>
+                      </div>
+                    )}
+
+                    {/* Scheduled Plan Change Banner */}
+                    {activeClinic.change_scheduled && activeClinic.scheduled_plan && (
+                      <div className="mt-4 p-4 rounded-xl border border-teal-300 bg-teal-50/90 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-teal-950 animate-fade-in">
+                        <div className="flex items-start gap-3">
+                          <Sparkles className="w-5 h-5 text-teal-600 shrink-0 mt-0.5" />
+                          <div>
+                            <p className="text-xs font-bold uppercase tracking-wider text-teal-900">
+                              {activeClinic.scheduled_change_type === 'downgrade' ? 'Plan Downgrade Scheduled' : 'Plan Upgrade Scheduled'}
+                            </p>
+                            <p className="text-xs text-teal-800 mt-0.5">
+                              Switching to <strong className="text-teal-950 uppercase">{activeClinic.scheduled_plan} Plan ({activeClinic.scheduled_billing_cycle || 'monthly'})</strong> on{' '}
+                              <strong className="underline decoration-teal-500 font-bold">{formatDate(activeClinic.scheduled_effective_date)}</strong>. Your current plan remains fully active until then.
+                            </p>
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            const ok = await cancelScheduledPlanChange(activeClinic.clinic_id);
+                            if (ok) {
+                              toast('Scheduled plan change cancelled. You will remain on your current plan.', 'info');
+                            } else {
+                              toast('Failed to cancel scheduled change. Please try again.', 'error');
+                            }
+                          }}
+                          className="shrink-0 bg-white hover:bg-teal-100/60 border border-teal-300 text-teal-950 font-bold text-xs py-2 px-3.5 rounded-lg shadow-sm transition-all inline-flex items-center gap-1.5"
+                        >
+                          <X size={14} className="text-rose-600" />
+                          <span>Cancel Scheduled Change</span>
+                        </button>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Usage & Metering Grid */}
+                  <div>
+                    <h4 className="text-sm font-bold text-ink mb-3 flex items-center gap-2">
+                      <Sparkles size={16} className="text-primary" />
+                      Monthly Allowance & Live Consumption
+                    </h4>
+                    
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                      {/* Doctor Seats */}
+                      <div className="p-4 bg-surface-subtle border border-black/5 rounded-xl">
+                        <div className="flex justify-between items-center mb-2">
+                          <span className="text-xs font-medium text-ink-subtle flex items-center gap-1.5">
+                            <Stethoscope size={14} className="text-primary" />
+                            Doctor Seats
+                          </span>
+                          <span className="text-xs font-bold text-ink">{doctorsCount} / {limits.doctors_included}</span>
+                        </div>
+                        <div className="w-full bg-black/10 rounded-full h-2 overflow-hidden">
+                          <div 
+                            className={`h-full rounded-full ${doctorsCount >= limits.doctors_included ? 'bg-amber-500' : 'bg-primary'}`} 
+                            style={{ width: `${Math.min(100, (doctorsCount / limits.doctors_included) * 100)}%` }}
+                          />
+                        </div>
+                        <p className="text-[10px] text-ink-muted mt-1.5">
+                          {Math.max(0, limits.doctors_included - doctorsCount)} seat(s) remaining
+                        </p>
+                      </div>
+
+                      {/* Staff Seats */}
+                      <div className="p-4 bg-surface-subtle border border-black/5 rounded-xl">
+                        <div className="flex justify-between items-center mb-2">
+                          <span className="text-xs font-medium text-ink-subtle flex items-center gap-1.5">
+                            <Users size={14} className="text-primary" />
+                            Staff Accounts
+                          </span>
+                          <span className="text-xs font-bold text-ink">{staffCount} / {limits.staff_seats_included}</span>
+                        </div>
+                        <div className="w-full bg-black/10 rounded-full h-2 overflow-hidden">
+                          <div 
+                            className={`h-full rounded-full ${staffCount >= limits.staff_seats_included ? 'bg-amber-500' : 'bg-primary'}`} 
+                            style={{ width: `${Math.min(100, (staffCount / limits.staff_seats_included) * 100)}%` }}
+                          />
+                        </div>
+                        <p className="text-[10px] text-ink-muted mt-1.5">
+                          {Math.max(0, limits.staff_seats_included - staffCount)} seat(s) remaining
+                        </p>
+                      </div>
+
+                      {/* AI Intakes */}
+                      <div className="p-4 bg-surface-subtle border border-black/5 rounded-xl">
+                        <div className="flex justify-between items-center mb-2">
+                          <span className="text-xs font-medium text-ink-subtle flex items-center gap-1.5">
+                            <Sparkles size={14} className="text-primary" />
+                            AI Triage Intakes
+                          </span>
+                          <span className="text-xs font-bold text-ink">{aiUsed} / {limits.ai_intakes_monthly}</span>
+                        </div>
+                        <div className="w-full bg-black/10 rounded-full h-2 overflow-hidden">
+                          <div 
+                            className={`h-full rounded-full ${aiUsed >= limits.ai_intakes_monthly ? 'bg-amber-500' : 'bg-primary'}`} 
+                            style={{ width: `${Math.min(100, (aiUsed / limits.ai_intakes_monthly) * 100)}%` }}
+                          />
+                        </div>
+                        <p className="text-[10px] text-ink-muted mt-1.5">
+                          20% soft grace allowance active
+                        </p>
+                      </div>
+
+                      {/* WhatsApp Messages */}
+                      <div className="p-4 bg-surface-subtle border border-black/5 rounded-xl">
+                        <div className="flex justify-between items-center mb-2">
+                          <span className="text-xs font-medium text-ink-subtle flex items-center gap-1.5">
+                            <MessageSquare size={14} className="text-primary" />
+                            WhatsApp Messages
+                          </span>
+                          <span className="text-xs font-bold text-ink">{whatsappUsed} / {limits.whatsapp_messages_monthly}</span>
+                        </div>
+                        <div className="w-full bg-black/10 rounded-full h-2 overflow-hidden">
+                          <div 
+                            className={`h-full rounded-full ${whatsappUsed >= limits.whatsapp_messages_monthly ? 'bg-amber-500' : 'bg-primary'}`} 
+                            style={{ width: `${Math.min(100, (whatsappUsed / limits.whatsapp_messages_monthly) * 100)}%` }}
+                          />
+                        </div>
+                        <p className="text-[10px] text-ink-muted mt-1.5">
+                          {Math.max(0, limits.whatsapp_messages_monthly - whatsappUsed)} messages left this cycle
+                        </p>
+                      </div>
                     </div>
                   </div>
                 </div>
-              ) : (
-                <div className="p-4 border border-danger/20 bg-danger-bg/30 rounded-xl">
-                  <p className="text-sm font-semibold text-danger">No active subscription plan.</p>
-                  <p className="text-xs text-danger/80 mt-1">Your clinic features are limited. Please activate the Pro Plan.</p>
-                </div>
-              )}
-            </div>
-          </div>
+              </>
+            );
+          })()}
 
           <div className="card">
             <SectionHeader title="Payment History" subtitle="Past payments for your subscription" />
@@ -696,10 +1311,14 @@ export function SettingsScreen() {
                       <p className="text-xs text-ink-muted">
                         Date: {formatDate(sub.created_at)} at {
                           (() => {
-                            const d = parseDateArg(sub.created_at);
-                            return !isNaN(d.getTime())
-                              ? d.toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit', hour12: true })
-                              : '—';
+                            try {
+                              const d = parseDateArg(sub.created_at);
+                              return !isNaN(d.getTime())
+                                ? d.toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit', hour12: true })
+                                : '—';
+                            } catch {
+                              return '—';
+                            }
                           })()
                         }
                       </p>
@@ -720,6 +1339,543 @@ export function SettingsScreen() {
               <EmptyState title="No payment history" description="You haven't made any subscription payments yet." />
             )}
           </div>
+
+          {/* Change / Upgrade Plan Modal */}
+          {changePlanModalOpen && (() => {
+            const directPaymentLinks: Record<string, Record<string, string>> = {
+              solo: {
+                annual: 'https://rzp.io/rzp/xlfXiVqg',
+              },
+              clinic: {
+                monthly: 'https://rzp.io/rzp/OhKLJYzS',
+                annual: 'https://rzp.io/rzp/9OYAB40N',
+              },
+              multispecialty: {
+                monthly: 'https://rzp.io/rzp/XDAYYlHQ',
+                annual: 'https://rzp.io/rzp/0PqwSVE',
+              },
+            };
+
+            const handleExecutePlanAction = (targetTier: string, targetCycle: 'monthly' | 'annual') => {
+              const TIER_ORDER: Record<string, number> = { solo: 1, clinic: 2, multispecialty: 3, hospital: 4 };
+              const currentPlanCode = ((activeClinic?.subscription_plan as string) || 'solo').toLowerCase();
+              const currentBillingCycle = (((activeClinic as any)?.subscription_billing_cycle as string) || 'monthly').toLowerCase();
+              
+              if (currentPlanCode === targetTier.toLowerCase() && currentBillingCycle === targetCycle.toLowerCase()) {
+                return;
+              }
+
+              const currentRank = TIER_ORDER[currentPlanCode] || 1;
+              const targetRank = TIER_ORDER[targetTier.toLowerCase()] || 1;
+              const isDowngrade = targetRank < currentRank;
+
+              const directUrl = directPaymentLinks[targetTier]?.[targetCycle];
+              if (directUrl) {
+                try {
+                  localStorage.setItem('viitsa_pending_upgrade', JSON.stringify({
+                    clinic_id: activeClinic.clinic_id,
+                    user_id: user?.user_id,
+                    tier: targetTier,
+                    cycle: targetCycle,
+                    timestamp: Date.now()
+                  }));
+                } catch {
+                  // localStorage may not be available, ignore
+                }
+                window.open(directUrl, '_blank', 'noopener,noreferrer');
+                setChangePlanModalOpen(false);
+                return;
+              }
+
+              handleDirectPlanChange(targetTier, targetCycle, isDowngrade ? 'downgrade' : 'upgrade');
+            };
+
+            const TIER_ORDER: Record<string, number> = { solo: 1, clinic: 2, multispecialty: 3, hospital: 4 };
+            const currentPlanCode = ((activeClinic?.subscription_plan as string) || 'solo').toLowerCase();
+            const currentBillingCycle = (((activeClinic as any)?.subscription_billing_cycle as string) || 'monthly').toLowerCase();
+            const currentRank = TIER_ORDER[currentPlanCode] || 1;
+            const targetRank = TIER_ORDER[upgradeTier.toLowerCase()] || 1;
+            const isDowngrade = targetRank < currentRank;
+            const isSamePlan = currentPlanCode === upgradeTier.toLowerCase() && currentBillingCycle === upgradeCycle.toLowerCase();
+
+            const planPrices: Record<string, { monthly: string; annual: string }> = {
+              solo: { monthly: '₹2,999', annual: '₹29,990' },
+              clinic: { monthly: '₹5,999', annual: '₹59,990' },
+              multispecialty: { monthly: '₹11,999', annual: '₹1,19,990' },
+            };
+            const currentSelectedPriceStr = upgradeCycle === 'annual' ? planPrices[upgradeTier]?.annual : planPrices[upgradeTier]?.monthly;
+
+            return (
+              <Modal 
+                open={changePlanModalOpen} 
+                onClose={() => setChangePlanModalOpen(false)}
+                title="Change Clinic Subscription Tier"
+                size="2xl"
+              >
+                <div className="space-y-6 pt-1">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-black/5 pb-4">
+                    <div>
+                      <h3 className="text-base font-bold text-ink">Select New Plan</h3>
+                      <p className="text-xs text-ink-subtle">
+                        Upgrade or switch tiers. Changes and limits take effect immediately.
+                      </p>
+                    </div>
+                    
+                    {/* Billing Cycle Toggle */}
+                    <div className="inline-flex items-center gap-1.5 p-1 bg-surface-subtle border border-black/5 rounded-xl self-start sm:self-auto">
+                      <button
+                        type="button"
+                        onClick={() => setUpgradeCycle('monthly')}
+                        className={`px-3 py-1 text-xs font-semibold rounded-lg transition-all ${
+                          upgradeCycle === 'monthly' ? 'bg-white text-ink shadow-sm' : 'text-ink-subtle hover:text-ink'
+                        }`}
+                      >
+                        Monthly
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setUpgradeCycle('annual')}
+                        className={`px-3 py-1 text-xs font-semibold rounded-lg transition-all flex items-center gap-1 ${
+                          upgradeCycle === 'annual' ? 'bg-primary text-white shadow-sm' : 'text-ink-subtle hover:text-ink'
+                        }`}
+                      >
+                        <span>Annual</span>
+                        <span className={`text-[9px] font-bold px-1 rounded-full ${
+                          upgradeCycle === 'annual' ? 'bg-white/20 text-white' : 'bg-primary/10 text-primary'
+                        }`}>
+                          2 Mo Free
+                        </span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Plans Selection Grid */}
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    {[
+                      {
+                        id: 'solo',
+                        name: 'Solo',
+                        desc: 'Single-doctor practices and consultants.',
+                        priceMonthly: '₹2,999',
+                        priceAnnual: '₹29,990',
+                        features: ['1 Doctor included', '3 Staff seats', '1 Location', '300 AI Intakes/mo', '800 WhatsApp/mo', 'Unlimited document storage'],
+                      },
+                      {
+                        id: 'clinic',
+                        name: 'Clinic',
+                        desc: 'Growing multi-doctor clinics with high patient volume.',
+                        priceMonthly: '₹5,999',
+                        priceAnnual: '₹59,990',
+                        popular: true,
+                        features: ['Up to 3 Doctors', '6 Staff seats', '1 Location', '1,000 AI Intakes/mo', '2,500 WhatsApp/mo', 'Unlimited document storage'],
+                      },
+                      {
+                        id: 'multispecialty',
+                        name: 'Multi-Specialty',
+                        desc: 'Polyclinics and busy specialty centres.',
+                        priceMonthly: '₹11,999',
+                        priceAnnual: '₹1,19,990',
+                        features: ['Up to 8 Doctors', '20 Staff seats', '1 Location', '2,000 AI Intakes/mo', '5,000 WhatsApp/mo', 'Unlimited document storage'],
+                      }
+                    ].map((tier) => {
+                      const isSelected = upgradeTier === tier.id;
+                      const isCurrent = currentPlanCode === tier.id.toLowerCase() && currentBillingCycle === upgradeCycle.toLowerCase();
+                      const tierRank = TIER_ORDER[tier.id.toLowerCase()] || 1;
+                      const tierIsDowngrade = tierRank < currentRank;
+                      const tierIsUpgrade = tierRank > currentRank;
+                      const tierPriceStr = upgradeCycle === 'annual' ? tier.priceAnnual : tier.priceMonthly;
+
+                      return (
+                        <div 
+                          key={tier.id}
+                          onClick={() => setUpgradeTier(tier.id as any)}
+                          className={`bg-white border rounded-xl p-4 cursor-pointer transition-all relative flex flex-col justify-between ${
+                            isCurrent
+                              ? 'border-emerald-500 ring-2 ring-emerald-500/20 bg-emerald-50/10'
+                              : isSelected 
+                                ? (tierIsDowngrade ? 'border-amber-500 ring-2 ring-amber-500/20 shadow-md' : 'border-primary ring-2 ring-primary/20 shadow-md')
+                                : 'border-black/10 hover:border-black/30'
+                          }`}
+                        >
+                          <div className="absolute top-2 right-2 flex items-center gap-1">
+                            {isCurrent && (
+                              <span className="text-[10px] font-extrabold bg-emerald-600 text-white px-2 py-0.5 rounded-full uppercase tracking-wider flex items-center gap-1 shadow-sm">
+                                <span className="h-1.5 w-1.5 rounded-full bg-white animate-pulse" />
+                                Active Plan
+                              </span>
+                            )}
+                            {!isCurrent && tier.popular && (
+                              <span className="text-[9px] font-bold bg-amber-400 text-amber-950 px-2 py-0.5 rounded-full uppercase">
+                                Popular
+                              </span>
+                            )}
+                          </div>
+                          <div>
+                            <h4 className="font-bold text-sm text-ink flex items-center gap-1.5">
+                              <Crown size={15} className={tier.popular ? "text-accent" : (tierIsDowngrade ? "text-amber-500" : "text-primary")} />
+                              {tier.name}
+                            </h4>
+                            <p className="text-[11px] text-ink-subtle mt-0.5 mb-3">{tier.desc}</p>
+                            
+                            <div className="mb-3 pb-3 border-b border-black/5">
+                              <span className="text-xl font-bold text-ink">
+                                {tierPriceStr}
+                              </span>
+                              <span className="text-[10px] text-ink-subtle">
+                                /{upgradeCycle === 'annual' ? 'year' : 'month'}
+                              </span>
+                            </div>
+
+                            <ul className="space-y-1.5 mb-4 text-[11px]">
+                              {tier.features.map((f, i) => (
+                                <li key={i} className="flex items-center gap-1.5 text-ink">
+                                  <CheckCircle2 size={12} className="text-primary shrink-0" />
+                                  <span>{f}</span>
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+
+                          <div className="pt-2">
+                            {isCurrent ? (
+                              <button
+                                type="button"
+                                disabled
+                                className="w-full py-2.5 px-3 text-xs font-bold rounded-xl bg-emerald-50 text-emerald-700 border border-emerald-200 cursor-not-allowed flex items-center justify-center gap-1.5"
+                              >
+                                <CheckCircle2 size={14} className="text-emerald-600" />
+                                Current Active Plan
+                              </button>
+                            ) : tierIsDowngrade ? (
+                              <button
+                                type="button"
+                                disabled={changingPlan}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setUpgradeTier(tier.id as any);
+                                  handleExecutePlanAction(tier.id, upgradeCycle);
+                                }}
+                                className="w-full py-2.5 px-3 text-xs font-bold rounded-xl transition-all shadow-sm flex items-center justify-center gap-1.5 bg-amber-600 hover:bg-amber-700 text-white"
+                              >
+                                <ArrowDownRight size={14} />
+                                {changingPlan && upgradeTier === tier.id ? 'Processing...' : `Downgrade to ${tier.name} (${tierPriceStr})`}
+                              </button>
+                            ) : (
+                              <button
+                                type="button"
+                                disabled={changingPlan}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setUpgradeTier(tier.id as any);
+                                  handleExecutePlanAction(tier.id, upgradeCycle);
+                                }}
+                                className={`w-full py-2.5 px-3 text-xs font-bold rounded-xl transition-all shadow-sm flex items-center justify-center gap-1.5 ${
+                                  isSelected
+                                    ? 'bg-primary text-white hover:bg-primary-dark ring-2 ring-primary/30'
+                                    : 'btn-primary'
+                                }`}
+                              >
+                                <ArrowUpRight size={14} />
+                                {changingPlan && upgradeTier === tier.id
+                                  ? 'Processing...'
+                                  : tierIsUpgrade
+                                    ? `Upgrade to ${tier.name} (${tierPriceStr})`
+                                    : `Switch to ${tier.name} (${tierPriceStr})`}
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {/* Upgrade vs Downgrade contextual notices */}
+                  {targetRank < currentRank && (
+                    <div className="bg-amber-50 border border-amber-200 rounded-xl p-3.5 flex items-start gap-2.5 text-xs text-amber-900 animate-fade-in">
+                      <AlertTriangle size={16} className="shrink-0 text-amber-600 mt-0.5" />
+                      <div className="leading-relaxed">
+                        <strong className="text-amber-950 font-bold">Downgrading from {currentPlanCode.toUpperCase()} to {upgradeTier.toUpperCase()}:</strong>
+                        <p className="mt-0.5 text-amber-800">
+                          Your plan entitlements will adjust to the {upgradeTier.toUpperCase()} allowances in real time. All existing patient records, prescriptions, and clinical data remain safely stored.
+                        </p>
+                      </div>
+                    </div>
+                  )}
+
+                  {targetRank > currentRank && (
+                    <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3.5 flex items-start gap-2.5 text-xs text-emerald-900 animate-fade-in">
+                      <Sparkles size={16} className="shrink-0 text-emerald-600 mt-0.5" />
+                      <div className="leading-relaxed">
+                        <strong className="text-emerald-950 font-bold">Upgrading from {currentPlanCode.toUpperCase()} to {upgradeTier.toUpperCase()}:</strong>
+                        <p className="mt-0.5 text-emerald-800">
+                          Instantly unlock more doctor seats, expanded staff accounts, and higher monthly AI triage capacity.
+                        </p>
+                      </div>
+                    </div>
+                  )}
+
+                  {activeClinic?.subscription_status === 'cancelled' && (
+                    <div className="bg-amber-50 border border-amber-200 rounded-xl p-3.5 flex items-start gap-2.5 text-xs text-amber-900 animate-fade-in">
+                      <AlertTriangle size={16} className="shrink-0 text-amber-600 mt-0.5" />
+                      <div className="leading-relaxed">
+                        <strong className="text-amber-950 font-bold">Reactivating Subscription:</strong>
+                        <p className="mt-0.5 text-amber-800">
+                          The 30-day free trial has already been utilized for this clinic account. Subscribing to your chosen plan will activate it directly upon payment confirmation.
+                        </p>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Bottom Action Footer */}
+                  <div className="bg-surface-subtle border border-black/5 rounded-xl p-4 flex flex-col sm:flex-row items-center justify-between gap-4">
+                    <div>
+                      <p className="text-xs text-ink-subtle">
+                        Selected Plan: <strong className="text-ink uppercase">{upgradeTier}</strong> ({upgradeCycle})
+                      </p>
+                      <p className="text-[11px] text-ink-muted mt-0.5">
+                        Activates on <strong className="text-primary">{periodInfo.formatted}</strong> after your current cycle ends. Full current plan access remains active until then.
+                      </p>
+                    </div>
+
+                    <div className="flex items-center gap-2 w-full sm:w-auto">
+                      <button
+                        type="button"
+                        onClick={() => setChangePlanModalOpen(false)}
+                        className="btn-ghost text-xs px-3 py-2 flex-1 sm:flex-none"
+                      >
+                        Close
+                      </button>
+                      
+                      {isSamePlan ? (
+                        <button
+                          type="button"
+                          disabled
+                          className="btn-ghost text-xs py-2 px-4 flex-1 sm:flex-none bg-emerald-50 text-emerald-700 font-semibold border border-emerald-200 cursor-not-allowed opacity-80"
+                        >
+                          ✓ Current Active Plan
+                        </button>
+                      ) : isDowngrade ? (
+                        <button
+                          type="button"
+                          disabled={changingPlan}
+                          onClick={() => handleExecutePlanAction(upgradeTier, upgradeCycle)}
+                          className="bg-amber-600 hover:bg-amber-700 text-white text-xs py-2.5 px-4 flex-1 sm:flex-none justify-center shadow-sm text-center font-bold rounded-xl inline-flex items-center gap-1.5 transition-all"
+                        >
+                          {changingPlan ? (
+                            <>
+                              <div className="w-3.5 h-3.5 rounded-full border-2 border-white border-t-transparent animate-spin" />
+                              <span>Scheduling Downgrade...</span>
+                            </>
+                          ) : (
+                            <>
+                              <ArrowDownRight size={15} />
+                              <span>Schedule Downgrade to {upgradeTier.toUpperCase()} ({currentSelectedPriceStr})</span>
+                            </>
+                          )}
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          disabled={changingPlan}
+                          onClick={() => handleExecutePlanAction(upgradeTier, upgradeCycle)}
+                          className="btn-primary text-xs py-2.5 px-4 flex-1 sm:flex-none justify-center shadow-sm text-center font-bold rounded-xl inline-flex items-center gap-1.5"
+                        >
+                          {changingPlan ? (
+                            <>
+                              <div className="w-3.5 h-3.5 rounded-full border-2 border-white border-t-transparent animate-spin" />
+                              <span>Processing...</span>
+                            </>
+                          ) : (
+                            <>
+                              <ArrowUpRight size={15} />
+                              <span>Upgrade to {upgradeTier.toUpperCase()} ({currentSelectedPriceStr})</span>
+                            </>
+                          )}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </Modal>
+            );
+          })()}
+
+
+          {/* Cancel Subscription Modal */}
+          {cancelModalOpen && (
+            <Modal
+              open={cancelModalOpen}
+              onClose={() => {
+                if (!cancelling) setCancelModalOpen(false);
+              }}
+              title={cancelSuccess ? "Cancellation Scheduled" : "Cancel Clinic Subscription"}
+              size="lg"
+            >
+              {cancelSuccess ? (
+                <div className="py-6 px-2 text-center space-y-4 animate-fade-in">
+                  <div className="w-16 h-16 bg-emerald-50 text-emerald-600 rounded-full flex items-center justify-center mx-auto border border-emerald-200 shadow-sm">
+                    <CheckCircle2 size={32} />
+                  </div>
+                  
+                  <div>
+                    <h3 className="text-xl font-bold text-slate-900">Subscription Cancellation Scheduled</h3>
+                    <p className="text-sm text-slate-600 mt-1 max-w-md mx-auto">
+                      Your current plan and doctor seats remain <strong>100% active until {scheduledCancelDate || periodInfo.formatted}</strong>.
+                    </p>
+                    <p className="text-xs text-slate-500 mt-1.5 max-w-md mx-auto">
+                      An official confirmation statement with PDF details has been sent to{' '}
+                      <strong className="text-slate-800">{user?.email || activeClinic.email || 'your registered email'}</strong>.
+                    </p>
+                  </div>
+
+                  <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 text-left max-w-md mx-auto text-xs space-y-2 text-slate-600">
+                    <div className="flex items-center gap-2 text-emerald-700 font-semibold">
+                      <ShieldCheck size={16} /> Full Access & Data Preservation Guarantee
+                    </div>
+                    <p>
+                      Your clinic doctor accounts, patient records, appointments, and files remain completely safe and active until <strong>{scheduledCancelDate || periodInfo.formatted}</strong>.
+                    </p>
+                    <p>
+                      Automatic renewal is turned off. You will not be charged again. You can also resume your subscription at any time from this dashboard before the end date.
+                    </p>
+                  </div>
+
+                  <div className="pt-2">
+                    <button
+                      type="button"
+                      onClick={() => setCancelModalOpen(false)}
+                      className="btn-primary w-full max-w-xs py-2.5 text-sm mx-auto"
+                    >
+                      Done & Close
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-5 pt-1">
+                  {/* Warning alert */}
+                  <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex items-start gap-3">
+                    <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+                    <div>
+                      <h4 className="text-xs font-bold text-amber-900 uppercase tracking-wide">
+                        Active Period Lifecycle Guarantee
+                      </h4>
+                      <p className="text-xs text-amber-800 mt-1 leading-relaxed">
+                        Cancelling your <strong>{((activeClinic.subscription_plan as string) || 'Clinic').toUpperCase()} Plan</strong> turns off auto-renewal. Your subscription and all doctor seats <strong>remain 100% active and unrestricted until {periodInfo.formatted}</strong>. No further recurring charges will occur.
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Survey question */}
+                  <div>
+                    <label className="block text-xs font-bold text-ink uppercase tracking-wider mb-2">
+                      Please let us know why you are cancelling <span className="text-rose-500">*</span>
+                    </label>
+                    <p className="text-xs text-ink-subtle mb-3">
+                      Your feedback helps our product and clinical support team improve the platform.
+                    </p>
+
+                    <div className="space-y-2">
+                      {CANCELLATION_REASONS.map((reason) => {
+                        const Icon = reason.icon;
+                        const isSelected = cancelReason === reason.id;
+                        return (
+                          <label
+                            key={reason.id}
+                            className={`flex items-start gap-3 p-3 rounded-xl border transition-all cursor-pointer ${
+                              isSelected
+                                ? 'border-rose-500 bg-rose-50/50 ring-1 ring-rose-500/30'
+                                : 'border-black/10 hover:border-black/20 bg-white'
+                            }`}
+                          >
+                            <input
+                              type="radio"
+                              name="cancelReason"
+                              value={reason.id}
+                              checked={isSelected}
+                              onChange={() => setCancelReason(reason.id)}
+                              className="mt-1 text-rose-600 focus:ring-rose-500 h-4 w-4"
+                            />
+                            <div className="flex-1">
+                              <div className="flex items-center gap-1.5 font-semibold text-xs text-ink">
+                                <Icon size={14} className={isSelected ? 'text-rose-600' : 'text-ink-subtle'} />
+                                <span>{reason.title}</span>
+                              </div>
+                              <p className="text-[11px] text-ink-muted mt-0.5">{reason.desc}</p>
+                            </div>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Other Reason Text Area */}
+                  {cancelReason === 'other' && (
+                    <div className="animate-fade-in">
+                      <label className="block text-xs font-bold text-ink mb-1.5">
+                        Please specify your reason <span className="text-rose-500">*</span>
+                      </label>
+                      <textarea
+                        value={cancelCustomReason}
+                        onChange={(e) => setCancelCustomReason(e.target.value)}
+                        placeholder="Tell us what prompted your decision to cancel..."
+                        rows={3}
+                        className="w-full text-xs p-3 rounded-xl border border-black/10 focus:outline-none focus:border-rose-500 focus:ring-1 focus:ring-rose-500 transition-all resize-none"
+                      />
+                    </div>
+                  )}
+
+                  {/* Optional Additional Feedback */}
+                  <div>
+                    <label className="block text-xs font-semibold text-ink-subtle mb-1">
+                      Anything else we could have done better? (Optional)
+                    </label>
+                    <textarea
+                      value={cancelFeedback}
+                      onChange={(e) => setCancelFeedback(e.target.value)}
+                      placeholder="Share any additional thoughts, suggested features, or feedback..."
+                      rows={2}
+                      className="w-full text-xs p-3 rounded-xl border border-black/10 focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-all resize-none"
+                    />
+                  </div>
+
+                  {/* Footer Action Buttons */}
+                  <div className="border-t border-black/5 pt-4 flex flex-col-reverse sm:flex-row items-center justify-between gap-3">
+                    <button
+                      type="button"
+                      disabled={cancelling}
+                      onClick={() => setCancelModalOpen(false)}
+                      className="btn-ghost text-xs py-2 px-4 w-full sm:w-auto"
+                    >
+                      Keep My Subscription
+                    </button>
+
+                    <button
+                      type="button"
+                      disabled={
+                        cancelling || 
+                        !cancelReason || 
+                        (cancelReason === 'other' && !cancelCustomReason.trim())
+                      }
+                      onClick={handleCancelSubscription}
+                      className="btn-danger text-xs py-2.5 px-4 w-full sm:w-auto justify-center inline-flex items-center gap-2 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-xl shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {cancelling ? (
+                        <>
+                          <div className="w-3.5 h-3.5 rounded-full border-2 border-white border-t-transparent animate-spin" />
+                          <span>Scheduling Cancellation & Sending Email...</span>
+                        </>
+                      ) : (
+                        <>
+                          <XCircle size={15} />
+                          <span>Schedule Cancellation (Active Until {periodInfo.formatted})</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </Modal>
+          )}
         </div>
       )}
 
@@ -815,7 +1971,7 @@ function drawCanvasRoundRect(ctx: CanvasRenderingContext2D, x: number, y: number
 
 function PatientAccessTab({ clinicId, clinicName, clinicPhone }: { clinicId: string; clinicName: string; clinicPhone: string }) {
   const { toast } = useToast();
-  const patientLink = `${window.location.origin}/patient?clinic=${clinicId}`;
+  const patientLink = `https://viitsa.com/patient?clinic=${clinicId}`;
   // High-res 600x600 QR image source
   const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=600x600&format=png&data=${encodeURIComponent(patientLink)}`;
   const imgRef = useRef<HTMLImageElement>(null);

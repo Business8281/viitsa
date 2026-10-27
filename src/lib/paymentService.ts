@@ -52,10 +52,15 @@ export async function processPayment(input: ProcessPaymentInput): Promise<Proces
     const timestamp = serverTimestamp();
 
     batch.set(billRef, {
+      bill_id: billRef.id,
+      invoice_id: invoiceRef.id,
+      invoice_number: invoiceNumber,
       clinic_id: input.clinicId,
       patient_id: input.patientId,
       appointment_id: input.apptId,
+      doctor_id: input.doctorId,
       amount: total,
+      consultation_fee: input.consultationFee,
       payment_method: input.paymentMethod,
       payment_status: status,
       upi_ref: input.upiRef ?? null,
@@ -63,6 +68,8 @@ export async function processPayment(input: ProcessPaymentInput): Promise<Proces
     });
 
     batch.set(invoiceRef, {
+      invoice_id: invoiceRef.id,
+      bill_id: billRef.id,
       clinic_id: input.clinicId,
       patient_id: input.patientId,
       appointment_id: input.apptId,
@@ -74,6 +81,9 @@ export async function processPayment(input: ProcessPaymentInput): Promise<Proces
       discount_amount: input.discountAmount,
       discount_percent: input.discountPercent,
       line_items: allLineItems,
+      payment_method: input.paymentMethod,
+      payment_status: status,
+      upi_ref: input.upiRef ?? null,
       notes: input.notes ?? null,
       created_at: timestamp
     });

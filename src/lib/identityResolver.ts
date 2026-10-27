@@ -8,7 +8,9 @@ import {
   query, 
   where, 
   limit,
-  addDoc 
+  addDoc,
+  deleteDoc,
+  deleteField
 } from 'firebase/firestore';
 import type { User as FirebaseUser } from 'firebase/auth';
 import { db } from './firebase';
@@ -26,7 +28,7 @@ export interface IdentityResult {
  * This guarantees real Firestore IDs and documents without any mock data or fake names.
  */
 export async function getOrInitializeClinic(preferredClinicId?: string | null): Promise<Clinic | null> {
-  // 1. If preferredClinicId is provided, try fetching it directly from Firestore
+  // If preferredClinicId is provided, fetch it directly from Firestore
   if (preferredClinicId) {
     try {
       const snap = await getDoc(doc(db, 'clinics', preferredClinicId));
@@ -45,26 +47,7 @@ export async function getOrInitializeClinic(preferredClinicId?: string | null): 
     }
   }
 
-  // 2. Query any existing real clinic from Firestore
-  try {
-    const qClinics = query(collection(db, 'clinics'), limit(1));
-    const cSnap = await getDocs(qClinics);
-    if (!cSnap.empty) {
-      const firstDoc = cSnap.docs[0];
-      const d = firstDoc.data();
-      return {
-        ...d,
-        clinic_id: firstDoc.id,
-        clinic_code: d.clinic_code || d.id_number || generateReadableId('CLN', firstDoc.id),
-        id_number: d.id_number || d.clinic_code || generateReadableId('CLN', firstDoc.id),
-        display_id: d.display_id || d.clinic_code || generateReadableId('CLN', firstDoc.id),
-      } as Clinic;
-    }
-  } catch (e) {
-    console.warn('getOrInitializeClinic query existing clinics:', e);
-  }
-
-  // If no clinic has registered in Firestore, return null. NO MOCK CLINICS OR DOCTORS!
+  // Never auto-assign a random clinic. Patients and users connect to clinics only by explicit choice.
   return null;
 }
 
@@ -162,6 +145,37 @@ export async function resolveCanonicalIdentity(
   firebaseUser: FirebaseUser,
   onboardingData?: OnboardingData
 ): Promise<IdentityResult> {
+  // STRICT PORTAL ISOLATION: URL pathname is the definitive source of truth
+  let portalIntent: 'clinic' | 'patient' | 'admin' | null = null;
+  if (typeof window !== 'undefined') {
+    if (window.location.pathname.startsWith('/clinic')) {
+      portalIntent = 'clinic';
+    } else if (window.location.pathname.startsWith('/admin')) {
+      portalIntent = 'admin';
+    } else if (window.location.pathname.startsWith('/patient') || window.location.pathname === '/login') {
+      portalIntent = 'patient';
+    } else {
+      const stored = sessionStorage.getItem('viitsa_portal_intent');
+      if (stored === 'clinic' || stored === 'patient' || stored === 'admin') {
+        portalIntent = stored;
+      }
+    }
+  }
+
+  if (!portalIntent && onboardingData?.role) {
+    if (['clinic_admin', 'clinic_doctor', 'clinic_staff', 'doctor', 'staff'].includes(onboardingData.role)) {
+      portalIntent = 'clinic';
+    } else if (['company_admin', 'company_manager', 'company_staff'].includes(onboardingData.role)) {
+      portalIntent = 'admin';
+    } else if (['patient', 'patient_attendant'].includes(onboardingData.role)) {
+      portalIntent = 'patient';
+    }
+  }
+
+  const isClinicPortal = portalIntent === 'clinic';
+  const isAdminPortal = portalIntent === 'admin';
+  const isPatientPortal = portalIntent === 'patient' || (onboardingData?.role === 'patient' && !isAdminPortal && !isClinicPortal);
+
   const email = (firebaseUser.email || onboardingData?.email || '').trim().toLowerCase();
   const rawPhone = firebaseUser.phoneNumber || onboardingData?.phone || '';
   const phone = normalizePhone(rawPhone);
@@ -175,7 +189,7 @@ export async function resolveCanonicalIdentity(
   try {
     const userDocSnap = await getDoc(doc(db, 'users', uid));
     if (userDocSnap.exists()) {
-      const res = await handleExistingUser(userDocSnap.data() as User, userDocSnap.id, firebaseUser, isGoogleProvider, providerId);
+      const res = await handleExistingUser(userDocSnap.data() as User, userDocSnap.id, firebaseUser, isGoogleProvider, providerId, isClinicPortal, isPatientPortal, isAdminPortal, onboardingData);
       saveCachedIdentity(res);
       return res;
     }
@@ -189,7 +203,7 @@ export async function resolveCanonicalIdentity(
     const linkedSnap = await getDocs(qLinked);
     if (!linkedSnap.empty) {
       const d = linkedSnap.docs[0];
-      const res = await handleExistingUser(d.data() as User, d.id, firebaseUser, isGoogleProvider, providerId);
+      const res = await handleExistingUser(d.data() as User, d.id, firebaseUser, isGoogleProvider, providerId, isClinicPortal, isPatientPortal, isAdminPortal, onboardingData);
       saveCachedIdentity(res);
       return res;
     }
@@ -204,7 +218,7 @@ export async function resolveCanonicalIdentity(
       const emailSnap = await getDocs(qEmail);
       if (!emailSnap.empty) {
         const d = emailSnap.docs[0];
-        const res = await handleExistingUser(d.data() as User, d.id, firebaseUser, isGoogleProvider, providerId);
+        const res = await handleExistingUser(d.data() as User, d.id, firebaseUser, isGoogleProvider, providerId, isClinicPortal, isPatientPortal, isAdminPortal, onboardingData);
         saveCachedIdentity(res);
         return res;
       }
@@ -220,7 +234,7 @@ export async function resolveCanonicalIdentity(
       const phoneSnap = await getDocs(qPhone);
       if (!phoneSnap.empty) {
         const d = phoneSnap.docs[0];
-        const res = await handleExistingUser(d.data() as User, d.id, firebaseUser, isGoogleProvider, providerId);
+        const res = await handleExistingUser(d.data() as User, d.id, firebaseUser, isGoogleProvider, providerId, isClinicPortal, isPatientPortal, isAdminPortal, onboardingData);
         saveCachedIdentity(res);
         return res;
       }
@@ -229,26 +243,28 @@ export async function resolveCanonicalIdentity(
     }
   }
 
-  // 5. Search existing patient_accounts collection
-  const patientAccountsRef = collection(db, 'patient_accounts');
+  // 5. Search existing patient_accounts collection ONLY for patient portal (STRICT ISOLATION)
   let existingPatientDoc: any = null;
+  if (!isClinicPortal && !isAdminPortal) {
+    const patientAccountsRef = collection(db, 'patient_accounts');
 
-  if (phone && phone.length >= 10) {
-    try {
-      const qPatPhone = query(patientAccountsRef, where('phone', '==', phone));
-      const patSnap = await getDocs(qPatPhone);
-      if (!patSnap.empty) existingPatientDoc = patSnap.docs[0];
-    } catch (e) {
-      console.warn('Query patient_accounts by phone fallback:', e);
+    if (phone && phone.length >= 10) {
+      try {
+        const qPatPhone = query(patientAccountsRef, where('phone', '==', phone));
+        const patSnap = await getDocs(qPatPhone);
+        if (!patSnap.empty) existingPatientDoc = patSnap.docs[0];
+      } catch (e) {
+        console.warn('Query patient_accounts by phone fallback:', e);
+      }
     }
-  }
-  if (!existingPatientDoc && email) {
-    try {
-      const qPatEmail = query(patientAccountsRef, where('email', '==', email));
-      const patSnap = await getDocs(qPatEmail);
-      if (!patSnap.empty) existingPatientDoc = patSnap.docs[0];
-    } catch (e) {
-      console.warn('Query patient_accounts by email fallback:', e);
+    if (!existingPatientDoc && email) {
+      try {
+        const qPatEmail = query(patientAccountsRef, where('email', '==', email));
+        const patSnap = await getDocs(qPatEmail);
+        if (!patSnap.empty) existingPatientDoc = patSnap.docs[0];
+      } catch (e) {
+        console.warn('Query patient_accounts by email fallback:', e);
+      }
     }
   }
 
@@ -329,7 +345,7 @@ export async function resolveCanonicalIdentity(
   }
 
   // 7. Completely new user registration
-  const newRes = await createNewCanonicalUser(firebaseUser, isGoogleProvider, providerId, email, phone, onboardingData);
+  const newRes = await createNewCanonicalUser(firebaseUser, isGoogleProvider, providerId, email, phone, onboardingData, isClinicPortal, isAdminPortal);
   saveCachedIdentity(newRes);
   return newRes;
 }
@@ -342,11 +358,15 @@ async function handleExistingUser(
   canonicalDocId: string,
   firebaseUser: FirebaseUser,
   isGoogleProvider: boolean,
-  providerId: string
+  providerId: string,
+  isClinicPortal: boolean = false,
+  isPatientPortal: boolean = false,
+  isAdminPortal: boolean = false,
+  onboardingData?: OnboardingData
 ): Promise<IdentityResult> {
-  // CRITICAL REQUIREMENT: Company Admin must NOT authenticate with Google Sign-In
-  if (existingUser.role === 'company_admin' && isGoogleProvider) {
-    throw new Error('Google Sign-In is not permitted for Company Admin accounts. Please sign in using your registered Email or Phone OTP.');
+  // CRITICAL REQUIREMENT: Google Sign-In is EXCLUSIVELY for Patient accounts
+  if (isGoogleProvider && existingUser.role !== 'patient') {
+    throw new Error('Google Sign-In is only enabled for Patient accounts. Clinic Staff and Administrators must sign in via Email and Password.');
   }
 
   const updates: Record<string, any> = {};
@@ -369,6 +389,34 @@ async function handleExistingUser(
     updates.email = firebaseUser.email.trim().toLowerCase();
   }
 
+  // STRICT PORTAL ISOLATION & CANONICAL ROLE PRESERVATION:
+  // Recover patients ONLY if they have a real patient account and strictly NO clinic affiliation and NOT an admin role.
+  const isSystemAdminRole = ['company_admin', 'company_manager', 'company_staff', 'super_admin'].includes(existingUser.role);
+  if (!isSystemAdminRole && (isPatientPortal || onboardingData?.role === 'patient')) {
+    const hasPatientAccount = Boolean(existingUser.patient_account_id);
+    const hasNoClinicAtAll = !existingUser.clinic_id;
+    
+    // Only recover if strictly a corrupted patient record with zero clinic associations
+    if (existingUser.role !== 'patient' && hasPatientAccount && hasNoClinicAtAll) {
+      existingUser.role = 'patient';
+      updates.role = 'patient';
+      existingUser.user_type = 'patient';
+      updates.user_type = 'patient';
+      const genCode = generateReadableId('PAT', canonicalDocId);
+      existingUser.id_number = genCode;
+      existingUser.display_id = genCode;
+      updates.id_number = genCode;
+      updates.display_id = genCode;
+    }
+  }
+
+  // 2. Unassigned roles get proper default according to portal
+  if (!existingUser.role || (existingUser.role as any) === 'unassigned') {
+    const defaultRole: Role = isAdminPortal ? 'company_admin' : (isClinicPortal ? 'clinic_admin' : 'patient');
+    updates.role = defaultRole;
+    existingUser.role = defaultRole;
+  }
+
   if (!existingUser.id_number) {
     const isClinicRole = ['clinic_admin', 'clinic_doctor', 'clinic_staff'].includes(existingUser.role);
     const isAdminRole = ['company_admin', 'company_manager', 'company_staff'].includes(existingUser.role);
@@ -380,10 +428,6 @@ async function handleExistingUser(
   if (!existingUser.full_name) {
     updates.full_name = existingUser.name;
   }
-  if (!existingUser.role || (existingUser.role as any) === 'unassigned') {
-    updates.role = 'patient';
-    existingUser.role = 'patient';
-  }
   
   if (!existingUser.user_type) {
     const roleToCheck = updates.role || existingUser.role;
@@ -391,6 +435,20 @@ async function handleExistingUser(
     const isAdminRole = ['company_admin', 'company_manager', 'company_staff'].includes(roleToCheck);
     updates.user_type = isAdminRole ? 'company_admin' : (isClinicRole ? 'clinic_admin' : 'patient');
   }
+  const currentEffectiveRole = updates.role || existingUser.role;
+  const isFinalAdminRole = ['company_admin', 'company_manager', 'company_staff', 'super_admin'].includes(currentEffectiveRole);
+  if (isFinalAdminRole) {
+    if (existingUser.patient_account_id) {
+      delete existingUser.patient_account_id;
+      updates.patient_account_id = deleteField();
+    }
+    // Delete any patient_accounts document for this admin in Firestore
+    deleteDoc(doc(db, 'patient_accounts', `pat_${canonicalDocId}`)).catch(() => {});
+    if (firebaseUser.uid && firebaseUser.uid !== canonicalDocId) {
+      deleteDoc(doc(db, 'patient_accounts', `pat_${firebaseUser.uid}`)).catch(() => {});
+    }
+  }
+
   updates.updated_at = new Date().toISOString();
 
   if (Object.keys(updates).length > 0) {
@@ -402,9 +460,9 @@ async function handleExistingUser(
     Object.assign(existingUser, updates);
   }
 
-  // Load associated Clinic
+  // Load associated Clinic (For clinic_admin, doctor, staff)
   let clinic: Clinic | null = null;
-  if (existingUser.clinic_id) {
+  if (existingUser.role !== 'patient' && existingUser.clinic_id) {
     try {
       const cSnap = await getDoc(doc(db, 'clinics', existingUser.clinic_id));
       if (cSnap.exists()) {
@@ -419,7 +477,7 @@ async function handleExistingUser(
     clinic = await getOrInitializeClinic(existingUser.clinic_id);
   }
 
-  if (clinic && existingUser.clinic_id !== clinic.clinic_id) {
+  if (clinic && existingUser.role !== 'patient' && existingUser.clinic_id !== clinic.clinic_id) {
     existingUser.clinic_id = clinic.clinic_id;
     try {
       await updateDoc(doc(db, 'users', canonicalDocId), {
@@ -541,28 +599,58 @@ async function handleExistingUser(
         } catch {}
       }
     }
+
+    // Patients only connect to clinics if their patient account explicitly has a chosen clinic_id
+    if (patientAccount?.clinic_id) {
+      try {
+        const cSnap = await getDoc(doc(db, 'clinics', patientAccount.clinic_id));
+        if (cSnap.exists()) {
+          clinic = { ...cSnap.data(), clinic_id: cSnap.id } as Clinic;
+        }
+      } catch (e) {
+        console.warn('Read patient clinic warning:', e);
+      }
+    } else {
+      clinic = null;
+      if (existingUser.clinic_id) {
+        existingUser.clinic_id = '';
+      }
+    }
   }
 
-  // Already registered user: permanently mark profile_completed as true
-  if (existingUser.profile_completed !== true) {
-    existingUser.profile_completed = true;
-    try {
-      await updateDoc(doc(db, 'users', canonicalDocId), { profile_completed: true, updated_at: new Date().toISOString() });
-    } catch {}
-  }
-  if (patientAccount && patientAccount.profile_completed !== true) {
-    patientAccount.profile_completed = true;
-    try {
-      await updateDoc(doc(db, 'patient_accounts', patientAccount.account_id), { profile_completed: true, updated_at: new Date().toISOString() });
-    } catch {}
+  // For existing patients/clinics, verify whether onboarding was genuinely completed
+  // Avoid forcing returning Google or email users through redundant onboarding
+  const isProfileActuallyComplete = existingUser.role === 'clinic_admin'
+    ? Boolean(existingUser.clinic_setup_complete === true)
+    : existingUser.role !== 'patient' 
+      ? Boolean(existingUser.clinic_id || existingUser.clinic_setup_complete !== false)
+      : Boolean(
+          existingUser.profile_completed === true || 
+          patientAccount?.profile_completed === true || 
+          existingUser.auth_providers?.includes('google.com') ||
+          (patientAccount?.dob || patientAccount?.gender || patientAccount?.blood_group || patientAccount?.address)
+        );
+
+  if (existingUser.role !== 'patient') {
+    if (existingUser.profile_completed !== true) {
+      existingUser.profile_completed = isProfileActuallyComplete;
+      try {
+        await updateDoc(doc(db, 'users', canonicalDocId), { profile_completed: isProfileActuallyComplete, updated_at: new Date().toISOString() });
+      } catch {}
+    }
+  } else {
+    existingUser.profile_completed = isProfileActuallyComplete;
+    if (patientAccount) {
+      patientAccount.profile_completed = isProfileActuallyComplete;
+    }
   }
 
   return {
-    user: { ...existingUser, user_id: canonicalDocId, role_selected: true, profile_completed: true },
+    user: { ...existingUser, user_id: canonicalDocId, role_selected: true, profile_completed: isProfileActuallyComplete },
     clinic,
     patientAccount: patientAccount ? {
       ...patientAccount,
-      profile_completed: true,
+      profile_completed: isProfileActuallyComplete,
     } : null,
     isNewUser: false,
   };
@@ -577,14 +665,48 @@ async function createNewCanonicalUser(
   providerId: string,
   email: string,
   phone: string,
-  onboardingData?: OnboardingData
+  onboardingData?: OnboardingData,
+  isClinicPortal: boolean = false,
+  isAdminPortal: boolean = false
 ): Promise<IdentityResult> {
-  let role: Role = (onboardingData?.role as any) === 'unassigned' ? 'patient' : (onboardingData?.role || 'patient');
+  let role: Role = onboardingData?.role === 'patient'
+    ? 'patient'
+    : (onboardingData?.role as any) === 'unassigned'
+      ? (isAdminPortal ? 'company_admin' : (isClinicPortal ? 'clinic_admin' : 'patient'))
+      : (onboardingData?.role || (isAdminPortal ? 'company_admin' : (isClinicPortal ? 'clinic_admin' : 'patient')));
   const name = onboardingData?.name || firebaseUser.displayName || email.split('@')[0] || (phone ? `User ${phone.slice(-4)}` : 'User');
 
-  // CRITICAL: Prevent Company Admin from registering via Google
-  if (role === 'company_admin' && isGoogleProvider) {
-    throw new Error('Google Sign-In cannot be used for Company Admin registration. Please use Email or Phone OTP.');
+  // CRITICAL: Google Sign-In is EXCLUSIVELY for Patient accounts
+  if (isGoogleProvider && role !== 'patient') {
+    throw new Error('Google Sign-In is only permitted for Patient accounts. Clinic Staff and Administrators must register and sign in using Email and Password.');
+  }
+
+  // PORTAL ROLE CHECKS ON REGISTRATION:
+  if (isClinicPortal && email) {
+    try {
+      const qPatEmail = query(collection(db, 'patient_accounts'), where('email', '==', email));
+      const patSnap = await getDocs(qPatEmail);
+      if (!patSnap.empty) {
+        throw new Error('This Google account is already registered as a Patient. The Clinic Portal requires a Clinic Staff or Clinic Admin account. Please sign in via the Patient Portal (/login), or use a registered Clinic account.');
+      }
+    } catch (e: any) {
+      if (e.message?.includes('already registered as a Patient')) throw e;
+    }
+  }
+
+  if (!isClinicPortal && email) {
+    try {
+      const qClinicEmail = query(collection(db, 'users'), where('email', '==', email));
+      const clinicSnap = await getDocs(qClinicEmail);
+      if (!clinicSnap.empty) {
+        const d = clinicSnap.docs[0].data() as User;
+        if (['clinic_admin', 'clinic_doctor', 'clinic_staff', 'doctor', 'staff', 'company_admin'].includes(d.role)) {
+          throw new Error('This Google account is already registered as a Clinic account. The Patient Portal only accepts Patient accounts. Please sign in via the Clinic Portal (/clinic/login).');
+        }
+      }
+    } catch (e: any) {
+      if (e.message?.includes('already registered as a Clinic')) throw e;
+    }
   }
 
   let clinicId = '';
@@ -652,6 +774,8 @@ async function createNewCanonicalUser(
         address: '',
         logo_url: null,
         clinic_setup_complete: false,
+        documents_uploaded: false,
+        verification_status: 'unverified',
         working_hours: { open: '09:00', close: '19:00', days: ['Mon','Tue','Wed','Thu','Fri','Sat'] },
         created_at: nowIso,
         updated_at: nowIso,
@@ -674,6 +798,8 @@ async function createNewCanonicalUser(
       address: '',
       logo_url: null,
       clinic_setup_complete: false,
+      documents_uploaded: false,
+      verification_status: 'unverified',
       working_hours: { open: '09:00', close: '19:00', days: ['Mon','Tue','Wed','Thu','Fri','Sat'] },
       created_at: nowIso,
       updated_at: nowIso,
@@ -743,7 +869,7 @@ async function createNewCanonicalUser(
     patientAccount = null;
   }
 
-  const hasExplicitRole = Boolean(onboardingData?.role);
+  const hasExplicitRole = Boolean(onboardingData?.role) || isClinicPortal;
   
   const isClinicRole = ['clinic_admin', 'clinic_doctor', 'clinic_staff'].includes(role);
   const isAdminRole = ['company_admin', 'company_manager', 'company_staff'].includes(role);
@@ -783,6 +909,8 @@ async function createNewCanonicalUser(
     profile_completed: false,
     role_selected: hasExplicitRole,
     clinic_setup_complete: role === 'clinic_admin' ? false : undefined,
+    clinic_documents_uploaded: role === 'clinic_admin' ? false : undefined,
+    clinic_verification_status: role === 'clinic_admin' ? 'unverified' : undefined,
   };
 
   try {

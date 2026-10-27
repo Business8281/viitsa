@@ -255,7 +255,7 @@ export function PatientPayments({ patientId, onTab }: Props) {
     try {
       const idStr = inv.invoice_number || inv.id || 'INV';
       const clinicName = (inv.clinic as Clinic | null)?.name || 'Clinic';
-      const loginUrl = `${window.location.origin}/login`;
+      const loginUrl = 'https://viitsa.com/login';
       const text = `*Payment Invoice — ${clinicName}*\n\n` +
         `👤 Patient: ${account?.name ?? 'Patient'}\n` +
         `🧾 Invoice No: ${idStr}\n` +

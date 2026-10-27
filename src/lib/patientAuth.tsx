@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { db } from './firebase';
-import { doc, getDoc, updateDoc, setDoc, onSnapshot } from 'firebase/firestore';
+import { doc, getDoc, updateDoc, setDoc, onSnapshot, collection, query, where, getDocs } from 'firebase/firestore';
 import type { PatientAccount, Clinic } from './types';
 import { useAuth } from './auth';
 import { generateReadableId, sanitizeForFirestore } from './identityResolver';
@@ -44,25 +44,16 @@ export interface RegisterData {
 const Ctx = createContext<PatientAuthState | undefined>(undefined);
 
 export function PatientAuthProvider({ children }: { children: React.ReactNode }) {
-  const { user, clinic: authClinic, patientAccount: authPatientAccount, logout: authLogout, switchClinic: authSwitchClinic, setClinic: authSetClinic } = useAuth();
+  const { user, clinic: authClinic, patientAccount: authPatientAccount, logout: authLogout, switchClinic: authSwitchClinic, setClinic: authSetClinic, refreshSession } = useAuth();
   
-  // Check if a specific clinic was previously chosen in localStorage
-  const savedClinicId = typeof window !== 'undefined' ? localStorage.getItem('viitsa_active_clinic_id') : null;
-  const initialClinicId = savedClinicId || authClinic?.clinic_id || authPatientAccount?.clinic_id || null;
-
   const [account, setAccount] = useState<PatientAccount | null>(authPatientAccount);
-  const [clinic, setClinic] = useState<Clinic | null>(authClinic);
-  const [clinicId, setClinicIdState] = useState<string | null>(initialClinicId);
+  const [clinic, setClinic] = useState<Clinic | null>(null);
+  const [clinicId, setClinicIdState] = useState<string | null>(authPatientAccount?.clinic_id || null);
   const [loading] = useState(false);
 
-  // Load active clinic with robust priority: explicit clinicId > saved in localStorage > account clinic > auth clinic
+  // Load clinic ONLY when explicitly chosen by the patient on their account or via URL parameter (?clinic=...)
   useEffect(() => {
-    let storedId: string | null = null;
-    try {
-      storedId = localStorage.getItem('viitsa_active_clinic_id');
-    } catch {}
-
-    const targetCid = clinicId || storedId || account?.clinic_id || authClinic?.clinic_id || user?.clinic_id;
+    const targetCid = clinicId || account?.clinic_id || authPatientAccount?.clinic_id || null;
     if (targetCid) {
       if (!clinic || clinic.clinic_id !== targetCid) {
         getDoc(doc(db, 'clinics', targetCid)).then((snap) => {
@@ -76,8 +67,13 @@ export function PatientAuthProvider({ children }: { children: React.ReactNode })
           }
         }).catch(console.warn);
       }
+    } else {
+      if (clinic) {
+        setClinic(null);
+        if (authSetClinic) authSetClinic(null);
+      }
     }
-  }, [clinicId, account?.clinic_id, authClinic?.clinic_id, user?.clinic_id, clinic, authSetClinic]);
+  }, [clinicId, account?.clinic_id, authPatientAccount?.clinic_id, clinic, authSetClinic, authClinic?.clinic_id]);
 
   // Real-time onSnapshot for active patient account
   useEffect(() => {
@@ -86,60 +82,78 @@ export function PatientAuthProvider({ children }: { children: React.ReactNode })
     const unsub = onSnapshot(doc(db, 'patient_accounts', activeAccId), (snap) => {
       if (snap.exists()) {
         const data = snap.data() as PatientAccount;
-        setAccount((prev) => ({
-          ...(prev || {}),
-          ...data,
-          account_id: snap.id,
-          // Never downgrade profile_completed from true → false/undefined
-          profile_completed: data.profile_completed || prev?.profile_completed || false,
-        } as PatientAccount));
+        setAccount((prev) => {
+          const merged = {
+            ...(prev || {}),
+            ...data,
+            account_id: snap.id,
+            profile_completed: data.profile_completed || prev?.profile_completed || false,
+          };
+          return merged as PatientAccount;
+        });
       }
     });
     return () => unsub();
   }, [account?.account_id, authPatientAccount?.account_id, user?.patient_account_id, user?.user_id, user?.role]);
 
-  // Synchronize with unified AuthProvider
+  // Synchronize with unified AuthProvider safely without overwriting filled fields with nulls
   useEffect(() => {
     const targetId = authPatientAccount?.account_id || user?.patient_account_id || user?.user_id;
     let cachedProfile: any = null;
     if (targetId) {
       try {
-        const raw = localStorage.getItem(`viitsa_patient_profile_${targetId}`);
+        const raw = localStorage.getItem(`viitsa_patient_profile_${targetId}`) || localStorage.getItem(`viitsa_pat_${targetId}`);
         if (raw) cachedProfile = JSON.parse(raw);
       } catch {}
     }
 
     if (authPatientAccount) {
-      // Live Firestore authPatientAccount takes strict precedence over stale local storage
-      setAccount({
-        ...(cachedProfile || {}),
-        ...authPatientAccount,
-        phone: authPatientAccount.phone || user?.phone || cachedProfile?.phone || '',
-        name: authPatientAccount.name || user?.name || cachedProfile?.name || '',
-        email: authPatientAccount.email || user?.email || cachedProfile?.email || null,
-        profile_completed: authPatientAccount.profile_completed || cachedProfile?.profile_completed || false,
+      setAccount(prev => {
+        const base = prev || cachedProfile || {};
+        const merged: any = { ...base };
+        for (const [k, v] of Object.entries(authPatientAccount)) {
+          if (v !== null && v !== undefined && v !== '') {
+            merged[k] = v;
+          }
+        }
+        if (cachedProfile) {
+          for (const [k, v] of Object.entries(cachedProfile)) {
+            if (merged[k] === null || merged[k] === undefined || merged[k] === '') {
+              merged[k] = v;
+            }
+          }
+        }
+        if (user?.phone && !merged.phone) merged.phone = user.phone;
+        if (user?.name && !merged.name) merged.name = user.name;
+        if (user?.email && !merged.email) merged.email = user.email;
+        merged.profile_completed = authPatientAccount.profile_completed || merged.profile_completed || false;
+        return merged as PatientAccount;
       });
-    } else if (user && user.role === 'patient') {
-      setAccount({
-        account_id: user.patient_account_id || user.user_id,
-        phone: user.phone || cachedProfile?.phone || '',
-        name: user.name || cachedProfile?.name || '',
-        email: user.email || cachedProfile?.email || null,
-        age: cachedProfile?.age ?? null,
-        dob: cachedProfile?.dob ?? null,
-        gender: cachedProfile?.gender ?? null,
-        blood_group: cachedProfile?.blood_group ?? null,
-        address: cachedProfile?.address ?? null,
-        current_medications: cachedProfile?.current_medications ?? null,
-        allergies: cachedProfile?.allergies ?? 'None',
-        chronic_conditions: cachedProfile?.chronic_conditions ?? 'None',
-        emergency_contact_name: cachedProfile?.emergency_contact_name ?? null,
-        emergency_contact_phone: cachedProfile?.emergency_contact_phone ?? null,
-        otp_code: '',
-        otp_verified: true,
-        auth_user_id: user.user_id,
-        created_at: user.created_at,
-        profile_completed: cachedProfile?.profile_completed ?? false,
+    } else if (user && (user.role === 'patient' || user.role === 'patient_attendant')) {
+      setAccount(prev => {
+        const base = prev || cachedProfile || {};
+        return {
+          ...base,
+          account_id: user.patient_account_id || user.user_id,
+          phone: user.phone || base.phone || '',
+          name: user.name || base.name || '',
+          email: user.email || base.email || null,
+          age: base.age ?? (user as any).age ?? null,
+          dob: base.dob || (user as any).dob || null,
+          gender: base.gender || (user as any).gender || null,
+          blood_group: base.blood_group || (user as any).blood_group || null,
+          address: base.address || (user as any).address || null,
+          current_medications: base.current_medications || (user as any).current_medications || null,
+          allergies: base.allergies || (user as any).allergies || 'None',
+          chronic_conditions: base.chronic_conditions || (user as any).chronic_conditions || 'None',
+          emergency_contact_name: base.emergency_contact_name || (user as any).emergency_contact_name || null,
+          emergency_contact_phone: base.emergency_contact_phone || (user as any).emergency_contact_phone || null,
+          otp_code: '',
+          otp_verified: true,
+          auth_user_id: user.user_id,
+          created_at: user.created_at,
+          profile_completed: base.profile_completed || (user as any).profile_completed || false,
+        } as PatientAccount;
       });
     } else if (!user) {
       setAccount(null);
@@ -203,9 +217,11 @@ export function PatientAuthProvider({ children }: { children: React.ReactNode })
     if (d.profile_completed !== undefined) updates.profile_completed = d.profile_completed;
 
     try {
-      localStorage.setItem(`viitsa_patient_profile_${activeAccountId}`, JSON.stringify({ ...(account || {}), ...updates }));
+      const fullSaved = { ...(account || {}), ...updates };
+      localStorage.setItem(`viitsa_patient_profile_${activeAccountId}`, JSON.stringify(fullSaved));
       if (user?.user_id) {
-        localStorage.setItem(`viitsa_patient_profile_${user.user_id}`, JSON.stringify({ ...(account || {}), ...updates }));
+        localStorage.setItem(`viitsa_patient_profile_${user.user_id}`, JSON.stringify(fullSaved));
+        localStorage.setItem(`viitsa_pat_${user.user_id}`, JSON.stringify(fullSaved));
       }
     } catch {}
 
@@ -344,8 +360,11 @@ export function PatientAuthProvider({ children }: { children: React.ReactNode })
       };
       return { ...base, ...updates };
     });
+    if (refreshSession) {
+      refreshSession().catch(console.warn);
+    }
     return { ok: true };
-  }, [account, user, clinicId]);
+  }, [account, user, clinicId, refreshSession]);
 
   const refreshAccount = useCallback(async () => {
     if (!account) return;
@@ -362,10 +381,9 @@ export function PatientAuthProvider({ children }: { children: React.ReactNode })
   const selectClinic = useCallback(async (c: Clinic | null) => {
     setClinic(c);
     setClinicIdState(c ? c.clinic_id : null);
+    const activeAccountId = account?.account_id || user?.patient_account_id || (user?.user_id ? `pat_${user.user_id}` : null);
+
     if (c) {
-      try {
-        localStorage.setItem('viitsa_active_clinic_id', c.clinic_id);
-      } catch {}
       // Update local account immediately so UI reflects the selection instantaneously
       setAccount(prev => prev ? { ...prev, clinic_id: c.clinic_id, clinic_name: c.name } : prev);
       // Synchronize with global auth session
@@ -374,24 +392,45 @@ export function PatientAuthProvider({ children }: { children: React.ReactNode })
       } else if (authSetClinic) {
         authSetClinic(c);
       }
+
+      if (activeAccountId) {
+        await switchPatientClinic({
+          accountId: activeAccountId,
+          targetClinic: c,
+          previousClinicId: clinic?.clinic_id || account?.clinic_id || null,
+          patientName: account?.name || user?.name || 'Patient',
+          userUid: user?.user_id,
+        });
+      }
     } else {
-      try {
-        localStorage.removeItem('viitsa_active_clinic_id');
-      } catch {}
+      // Disconnecting / Exiting clinic
       setAccount(prev => prev ? { ...prev, clinic_id: undefined, clinic_name: undefined } : prev);
       if (authSetClinic) authSetClinic(null);
+
+      // Persist disconnection to Firestore so patient stays disconnected across reloads/sessions
+      if (activeAccountId) {
+        try {
+          await updateDoc(doc(db, 'patient_accounts', activeAccountId), {
+            clinic_id: null,
+            clinic_name: null,
+            updated_at: new Date().toISOString(),
+          });
+        } catch (e) {
+          console.warn('Clear clinic_id in patient_accounts error:', e);
+        }
+      }
+      if (user?.user_id) {
+        try {
+          await updateDoc(doc(db, 'users', user.user_id), {
+            clinic_id: '',
+            clinic_name: null,
+            updated_at: new Date().toISOString(),
+          });
+        } catch (e) {
+          console.warn('Clear clinic_id in users error:', e);
+        }
+      }
     }
-
-    const activeAccountId = account?.account_id || user?.patient_account_id || (user?.user_id ? `pat_${user.user_id}` : null);
-    if (!activeAccountId || !c) return;
-
-    await switchPatientClinic({
-      accountId: activeAccountId,
-      targetClinic: c,
-      previousClinicId: clinic?.clinic_id || account?.clinic_id || null,
-      patientName: account?.name || user?.name || 'Patient',
-      userUid: user?.user_id,
-    });
   }, [account, user, clinic, authSwitchClinic, authSetClinic]);
 
   const logout = useCallback(() => {
@@ -399,6 +438,9 @@ export function PatientAuthProvider({ children }: { children: React.ReactNode })
     setClinicIdState(null);
     setClinic(null);
     localStorage.removeItem(STORAGE_KEY);
+    try {
+      localStorage.removeItem('viitsa_active_clinic_id');
+    } catch {}
     authLogout();
   }, [authLogout]);
 
