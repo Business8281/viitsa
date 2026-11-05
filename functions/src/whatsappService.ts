@@ -1603,7 +1603,8 @@ export async function sendDoctorVerificationRejected(data: {
 }
 
 /**
- * Template: viitsa_admin_plan_activated -> Uses approved viitsa_clinic_sub_activated
+ * Template: viitsa_admin_plan_activated (6 params)
+ * {{1}} Admin Name, {{2}} Clinic Name, {{3}} Activated Plan, {{4}} Valid Through, {{5}} Admin Remarks, {{6}} Support Phone
  */
 export async function sendAdminPlanActivated(data: {
   to: string;
@@ -1615,6 +1616,31 @@ export async function sendAdminPlanActivated(data: {
   supportPhone?: string;
   clinicId?: string;
 }): Promise<WhatsAppSendResult> {
+  try {
+    const res = await sendWhatsAppTemplate({
+      to: data.to,
+      clinicId: data.clinicId,
+      templateName: 'viitsa_admin_plan_activated',
+      components: [
+        {
+          type: 'body',
+          parameters: [
+            { type: 'text', text: data.adminName || 'Doctor' },
+            { type: 'text', text: data.clinicName || 'Clinic' },
+            { type: 'text', text: data.planName || 'Clinic Plan' },
+            { type: 'text', text: data.validThrough || 'Active' },
+            { type: 'text', text: data.adminRemarks || 'Platform administrator approval' },
+            { type: 'text', text: data.supportPhone || '+91 73961 11081' },
+          ],
+        },
+      ],
+    });
+    if (res.success) return res;
+  } catch (err) {
+    console.warn('[sendAdminPlanActivated] direct template error, trying fallback:', err);
+  }
+
+  // Graceful fallback to viitsa_clinic_sub_activated
   return sendClinicSubActivated({
     to: data.to,
     adminName: data.adminName,
@@ -1630,7 +1656,8 @@ export async function sendAdminPlanActivated(data: {
 }
 
 /**
- * Template: viitsa_admin_plan_free_granted -> Uses approved viitsa_clinic_trial_activated
+ * Template: viitsa_admin_plan_free_granted (5 params)
+ * {{1}} Admin Name, {{2}} Clinic Name, {{3}} Granted Tier, {{4}} Active Period, {{5}} Support Phone
  */
 export async function sendAdminPlanFreeGranted(data: {
   to: string;
@@ -1641,6 +1668,30 @@ export async function sendAdminPlanFreeGranted(data: {
   supportPhone?: string;
   clinicId?: string;
 }): Promise<WhatsAppSendResult> {
+  try {
+    const res = await sendWhatsAppTemplate({
+      to: data.to,
+      clinicId: data.clinicId,
+      templateName: 'viitsa_admin_plan_free_granted',
+      components: [
+        {
+          type: 'body',
+          parameters: [
+            { type: 'text', text: data.adminName || 'Doctor' },
+            { type: 'text', text: data.clinicName || 'Clinic' },
+            { type: 'text', text: data.planTier || 'Promotional Tier' },
+            { type: 'text', text: data.activePeriod || '30-Day Sponsorship' },
+            { type: 'text', text: data.supportPhone || '+91 73961 11081' },
+          ],
+        },
+      ],
+    });
+    if (res.success) return res;
+  } catch (err) {
+    console.warn('[sendAdminPlanFreeGranted] direct template error, trying fallback:', err);
+  }
+
+  // Graceful fallback to viitsa_clinic_trial_activated
   return sendClinicTrialActivated({
     to: data.to,
     adminName: data.adminName,
@@ -1653,7 +1704,8 @@ export async function sendAdminPlanFreeGranted(data: {
 }
 
 /**
- * Template: viitsa_admin_plan_deactivated -> Uses approved viitsa_clinic_sub_deactivated
+ * Template: viitsa_admin_plan_deactivated (6 params)
+ * {{1}} Admin Name, {{2}} Clinic Name, {{3}} Plan, {{4}} Deactivation Date, {{5}} Reason, {{6}} Support Phone
  */
 export async function sendAdminPlanDeactivated(data: {
   to: string;
@@ -1665,6 +1717,31 @@ export async function sendAdminPlanDeactivated(data: {
   supportPhone?: string;
   clinicId?: string;
 }): Promise<WhatsAppSendResult> {
+  try {
+    const res = await sendWhatsAppTemplate({
+      to: data.to,
+      clinicId: data.clinicId,
+      templateName: 'viitsa_admin_plan_deactivated',
+      components: [
+        {
+          type: 'body',
+          parameters: [
+            { type: 'text', text: data.adminName || 'Doctor' },
+            { type: 'text', text: data.clinicName || 'Clinic' },
+            { type: 'text', text: data.planName || 'Clinic Plan' },
+            { type: 'text', text: data.deactivationDate || new Date().toLocaleDateString('en-IN') },
+            { type: 'text', text: data.reason || 'Administrative Review' },
+            { type: 'text', text: data.supportPhone || '+91 73961 11081' },
+          ],
+        },
+      ],
+    });
+    if (res.success) return res;
+  } catch (err) {
+    console.warn('[sendAdminPlanDeactivated] direct template error, trying fallback:', err);
+  }
+
+  // Graceful fallback to viitsa_clinic_sub_deactivated
   return sendClinicSubDeactivated({
     to: data.to,
     adminName: data.adminName,
@@ -1678,7 +1755,8 @@ export async function sendAdminPlanDeactivated(data: {
 }
 
 /**
- * Template: viitsa_admin_plan_suspended -> Uses approved viitsa_clinic_sub_deactivated
+ * Template: viitsa_admin_plan_suspended (5 params)
+ * {{1}} Admin Name, {{2}} Clinic Name, {{3}} Reason, {{4}} Suspension Date, {{5}} Compliance Phone
  */
 export async function sendAdminPlanSuspended(data: {
   to: string;
@@ -1689,6 +1767,30 @@ export async function sendAdminPlanSuspended(data: {
   compliancePhone?: string;
   clinicId?: string;
 }): Promise<WhatsAppSendResult> {
+  try {
+    const res = await sendWhatsAppTemplate({
+      to: data.to,
+      clinicId: data.clinicId,
+      templateName: 'viitsa_admin_plan_suspended',
+      components: [
+        {
+          type: 'body',
+          parameters: [
+            { type: 'text', text: data.adminName || 'Doctor' },
+            { type: 'text', text: data.clinicName || 'Clinic' },
+            { type: 'text', text: data.reason || 'Compliance Review' },
+            { type: 'text', text: data.suspensionDate || new Date().toLocaleDateString('en-IN') },
+            { type: 'text', text: data.compliancePhone || '+91 73961 11081' },
+          ],
+        },
+      ],
+    });
+    if (res.success) return res;
+  } catch (err) {
+    console.warn('[sendAdminPlanSuspended] direct template error, trying fallback:', err);
+  }
+
+  // Graceful fallback to viitsa_clinic_sub_deactivated
   return sendClinicSubDeactivated({
     to: data.to,
     adminName: data.adminName,
@@ -1702,7 +1804,8 @@ export async function sendAdminPlanSuspended(data: {
 }
 
 /**
- * Template: viitsa_admin_plan_reactivated -> Uses approved viitsa_clinic_sub_activated
+ * Template: viitsa_admin_plan_reactivated (5 params)
+ * {{1}} Admin Name, {{2}} Clinic Name, {{3}} Restored Plan, {{4}} Reactivation Date, {{5}} Support Phone
  */
 export async function sendAdminPlanReactivated(data: {
   to: string;
@@ -1713,6 +1816,30 @@ export async function sendAdminPlanReactivated(data: {
   supportPhone?: string;
   clinicId?: string;
 }): Promise<WhatsAppSendResult> {
+  try {
+    const res = await sendWhatsAppTemplate({
+      to: data.to,
+      clinicId: data.clinicId,
+      templateName: 'viitsa_admin_plan_reactivated',
+      components: [
+        {
+          type: 'body',
+          parameters: [
+            { type: 'text', text: data.adminName || 'Doctor' },
+            { type: 'text', text: data.clinicName || 'Clinic' },
+            { type: 'text', text: data.planName || 'Clinic Plan' },
+            { type: 'text', text: data.reactivationDate || new Date().toLocaleDateString('en-IN') },
+            { type: 'text', text: data.supportPhone || '+91 73961 11081' },
+          ],
+        },
+      ],
+    });
+    if (res.success) return res;
+  } catch (err) {
+    console.warn('[sendAdminPlanReactivated] direct template error, trying fallback:', err);
+  }
+
+  // Graceful fallback to viitsa_clinic_sub_activated
   return sendClinicSubActivated({
     to: data.to,
     adminName: data.adminName,
@@ -1728,7 +1855,8 @@ export async function sendAdminPlanReactivated(data: {
 }
 
 /**
- * Template: viitsa_admin_payment_request -> Uses approved viitsa_clinic_sub_renewal_reminder
+ * Template: viitsa_admin_payment_request (7 params)
+ * {{1}} Admin Name, {{2}} Clinic Name, {{3}} Plan/Add-on, {{4}} Amount, {{5}} Due Date, {{6}} Invoice Ref, {{7}} Accounts Phone
  */
 export async function sendAdminPaymentRequest(data: {
   to: string;
@@ -1741,6 +1869,33 @@ export async function sendAdminPaymentRequest(data: {
   accountsPhone?: string;
   clinicId?: string;
 }): Promise<WhatsAppSendResult> {
+  try {
+    const cleanAmount = data.amount?.toString().replace(/[^\d.]/g, '') || '5999';
+    const res = await sendWhatsAppTemplate({
+      to: data.to,
+      clinicId: data.clinicId,
+      templateName: 'viitsa_admin_payment_request',
+      components: [
+        {
+          type: 'body',
+          parameters: [
+            { type: 'text', text: data.adminName || 'Doctor' },
+            { type: 'text', text: data.clinicName || 'Clinic' },
+            { type: 'text', text: data.serviceName || 'Clinic Subscription' },
+            { type: 'text', text: cleanAmount },
+            { type: 'text', text: data.dueDate || new Date().toLocaleDateString('en-IN') },
+            { type: 'text', text: data.invoiceRef || 'VIITSA-INV' },
+            { type: 'text', text: data.accountsPhone || '+91 73961 11081' },
+          ],
+        },
+      ],
+    });
+    if (res.success) return res;
+  } catch (err) {
+    console.warn('[sendAdminPaymentRequest] direct template error, trying fallback:', err);
+  }
+
+  // Graceful fallback to viitsa_clinic_sub_renewal_reminder
   return sendClinicSubRenewalReminder({
     to: data.to,
     adminName: data.adminName,
