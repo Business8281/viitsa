@@ -12,6 +12,7 @@ import {
   Loader2,
   AlertCircle,
   LogOut,
+  Lock,
 } from 'lucide-react';
 import { doc, setDoc, updateDoc } from 'firebase/firestore';
 import { db, auth } from '../lib/firebase';
@@ -25,17 +26,19 @@ export function ClinicSetupPage() {
   const navigate = useNavigate();
   const { user, clinic, refreshSession, logout } = useAuth();
 
+  // Dual-verified credentials from OTP registration (non-editable)
+  const verifiedPhone = (user?.phone || clinic?.phone || '').replace(/\D/g, '').slice(-10);
+  const verifiedEmail = (user?.email || clinic?.email || '').trim().toLowerCase();
+
   // Clinic info
   const [clinicName, setClinicName] = useState(clinic?.name || (user as any)?.clinic_name || '');
   const [address, setAddress] = useState(clinic?.address || '');
   const [city, setCity] = useState(clinic?.city || '');
-  const [clinicPhone, setClinicPhone] = useState(clinic?.phone || user?.phone || '');
-  const [clinicEmail, setClinicEmail] = useState(clinic?.email || user?.email || '');
+  const [receptionPhone, setReceptionPhone] = useState((clinic as any)?.reception_phone || '');
   const [speciality, setSpeciality] = useState(clinic?.speciality || '');
 
   // Owner info
-  const [ownerName, setOwnerName] = useState(user?.name || '');
-  const [ownerPhone, setOwnerPhone] = useState(user?.phone || '');
+  const [ownerName, setOwnerName] = useState(user?.name || (clinic as any)?.owner_name || '');
 
   // Working hours
   const [openTime, setOpenTime] = useState('09:00');
@@ -58,8 +61,8 @@ export function ClinicSetupPage() {
     if (!clinicName.trim()) { setError('Clinic name is required.'); return; }
     if (!address.trim()) { setError('Clinic address is required.'); return; }
     if (!city.trim()) { setError('City is required.'); return; }
-    if (!clinicPhone.replace(/\D/g, '') || clinicPhone.replace(/\D/g, '').length < 10) {
-      setError('Please enter a valid 10-digit clinic phone number.'); return;
+    if (!verifiedPhone || verifiedPhone.length < 10) {
+      setError('Verified 10-digit mobile number not found in session. Please sign in again.'); return;
     }
     if (workingDays.length === 0) { setError('Please select at least one working day.'); return; }
 
@@ -75,7 +78,7 @@ export function ClinicSetupPage() {
       return;
     }
 
-    const cleanPhone = clinicPhone.replace(/\D/g, '');
+    const cleanReception = receptionPhone.replace(/\D/g, '');
     const clinicCode = clinic?.clinic_code || clinic?.id_number || generateReadableId('CLN', clinicId);
 
     const clinicData = sanitizeForFirestore({
@@ -86,8 +89,9 @@ export function ClinicSetupPage() {
       name: clinicName.trim(),
       address: address.trim(),
       city: city.trim(),
-      phone: cleanPhone,
-      email: clinicEmail.trim().toLowerCase(),
+      phone: verifiedPhone,
+      email: verifiedEmail,
+      reception_phone: cleanReception || null,
       owner_name: ownerName.trim() || user?.name || '',
       owner_user_id: authUid || uid,
       admin_user_id: uid || authUid,
@@ -130,7 +134,10 @@ export function ClinicSetupPage() {
         clinic_name: clinicName.trim(),
         name: ownerName.trim() || user?.name,
         full_name: ownerName.trim() || user?.name,
-        phone: ownerPhone.replace(/\D/g, '') || user?.phone || null,
+        phone: verifiedPhone || user?.phone || null,
+        email: verifiedEmail || user?.email || null,
+        phone_verified: true,
+        email_verified: true,
         updated_at: nowIso,
       });
 
@@ -307,46 +314,81 @@ export function ClinicSetupPage() {
                 </div>
               </div>
 
-              {/* Clinic Phone */}
+              {/* Clinic Registered Mobile (Locked / Verified) */}
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wide">
+                    Registered Mobile
+                  </label>
+                  <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
+                    <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                    Verified via WhatsApp
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="h-11 px-3 bg-slate-100 border border-slate-300 rounded-xl text-sm font-bold text-slate-700 flex items-center">+91</span>
+                  <div className="relative flex-1">
+                    <input
+                      type="text"
+                      readOnly
+                      disabled
+                      value={verifiedPhone || '—'}
+                      className="w-full h-11 px-4 bg-slate-100/80 border border-slate-300 rounded-xl text-sm font-mono text-slate-700 cursor-not-allowed select-none"
+                    />
+                    <Lock className="w-4 h-4 text-slate-400 absolute right-3.5 top-3.5" />
+                  </div>
+                </div>
+                <p className="text-[11px] text-slate-500 mt-1">Primary phone verified during signup.</p>
+              </div>
+
+              {/* Reception / Desk Phone (Optional) */}
               <div>
                 <label className="block text-xs font-bold text-slate-700 uppercase tracking-wide mb-1.5">
-                  Clinic Phone <span className="text-rose-500">*</span>
+                  Reception / Desk Phone <span className="text-slate-400 font-normal normal-case">(optional)</span>
                 </label>
                 <div className="flex items-center gap-2">
                   <span className="h-11 px-3 bg-slate-100 border border-slate-300 rounded-xl text-sm font-bold text-slate-700 flex items-center">+91</span>
                   <input
                     type="tel"
-                    required
                     inputMode="numeric"
                     maxLength={10}
-                    value={clinicPhone}
+                    value={receptionPhone}
                     onKeyDown={e => {
                       if (['Backspace','Delete','Tab','Escape','Enter','ArrowLeft','ArrowRight'].includes(e.key)) return;
                       if (e.ctrlKey || e.metaKey) return;
                       if (!/^\d$/.test(e.key)) e.preventDefault();
                     }}
-                    onChange={e => setClinicPhone(e.target.value.replace(/\D/g, '').slice(0, 10))}
-                    placeholder="9876543210"
+                    onChange={e => setReceptionPhone(e.target.value.replace(/\D/g, '').slice(0, 10))}
+                    placeholder="Landline / Reception"
                     className="flex-1 h-11 px-4 bg-white border border-slate-300 rounded-xl text-sm font-mono text-slate-900 placeholder:text-slate-400 focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/20 transition-all"
                   />
                 </div>
+                <p className="text-[11px] text-slate-500 mt-1">Alternate number for patient enquiries.</p>
               </div>
 
-              {/* Clinic Email */}
+              {/* Clinic Registered Official Email (Locked / Verified) */}
               <div className="sm:col-span-2">
-                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wide mb-1.5">
-                  Clinic Email
-                </label>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wide">
+                    Registered Official Email
+                  </label>
+                  <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
+                    <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                    Verified via Email OTP
+                  </span>
+                </div>
                 <div className="relative">
                   <Mail className="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5" />
                   <input
                     type="email"
-                    value={clinicEmail}
-                    onChange={e => setClinicEmail(e.target.value)}
-                    placeholder="clinic@example.com"
-                    className="w-full h-11 pl-10 pr-4 bg-white border border-slate-300 rounded-xl text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/20 transition-all"
+                    readOnly
+                    disabled
+                    value={verifiedEmail || '—'}
+                    className="w-full h-11 pl-10 pr-10 bg-slate-100/80 border border-slate-300 rounded-xl text-sm text-slate-700 cursor-not-allowed select-none"
                   />
+                  <Lock className="w-4 h-4 text-slate-400 absolute right-3.5 top-3.5" />
                 </div>
+                <p className="text-[11px] text-slate-500 mt-1">Official clinic email verified during signup.</p>
               </div>
             </div>
           </div>
@@ -363,7 +405,7 @@ export function ClinicSetupPage() {
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
                 <label className="block text-xs font-bold text-slate-700 uppercase tracking-wide mb-1.5">
-                  Your Name <span className="text-rose-500">*</span>
+                  Owner / Administrator Name <span className="text-rose-500">*</span>
                 </label>
                 <div className="relative">
                   <User className="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5" />
@@ -379,25 +421,27 @@ export function ClinicSetupPage() {
               </div>
 
               <div>
-                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wide mb-1.5">
-                  Your Mobile <span className="text-slate-400 font-normal normal-case">(optional)</span>
-                </label>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wide">
+                    Admin Mobile
+                  </label>
+                  <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
+                    <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                    Verified
+                  </span>
+                </div>
                 <div className="flex items-center gap-2">
                   <span className="h-11 px-3 bg-slate-100 border border-slate-300 rounded-xl text-sm font-bold text-slate-700 flex items-center">+91</span>
-                  <input
-                    type="tel"
-                    inputMode="numeric"
-                    maxLength={10}
-                    value={ownerPhone}
-                    onKeyDown={e => {
-                      if (['Backspace','Delete','Tab','Escape','Enter','ArrowLeft','ArrowRight'].includes(e.key)) return;
-                      if (e.ctrlKey || e.metaKey) return;
-                      if (!/^\d$/.test(e.key)) e.preventDefault();
-                    }}
-                    onChange={e => setOwnerPhone(e.target.value.replace(/\D/g, '').slice(0, 10))}
-                    placeholder="9876543210"
-                    className="flex-1 h-11 px-4 bg-white border border-slate-300 rounded-xl text-sm font-mono text-slate-900 placeholder:text-slate-400 focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/20 transition-all"
-                  />
+                  <div className="relative flex-1">
+                    <input
+                      type="text"
+                      readOnly
+                      disabled
+                      value={verifiedPhone || '—'}
+                      className="w-full h-11 px-4 bg-slate-100/80 border border-slate-300 rounded-xl text-sm font-mono text-slate-700 cursor-not-allowed select-none"
+                    />
+                    <Lock className="w-4 h-4 text-slate-400 absolute right-3.5 top-3.5" />
+                  </div>
                 </div>
               </div>
             </div>

@@ -6,7 +6,7 @@ import {
   Shield, UploadCloud, Edit3, Trash2, CheckCircle2, XCircle, PhoneCall, 
   Mail, Award, Briefcase, IndianRupee, MapPin, GraduationCap, Search, 
   FileCheck, Check, Upload, X, ShieldCheck, Copy, Printer, Smartphone,
-  Crown, Sparkles, Zap, MessageSquare, HardDrive, AlertTriangle, HelpCircle,
+  Crown, Sparkles, Zap, Lock, MessageSquare, HardDrive, AlertTriangle, HelpCircle,
   DollarSign, PauseCircle, ArrowLeftRight, ArrowUpRight, ArrowDownRight, TrendingUp, TrendingDown
 } from 'lucide-react';
 import { DEFAULT_PLANS, getUsageCounter, getEffectiveLimits } from '../lib/entitlementsService';
@@ -724,8 +724,34 @@ export function SettingsScreen() {
               <div><label className="label">City</label><input className="input" value={clinicCity} onChange={e => setClinicCity(e.target.value)} placeholder="e.g. Bangalore" /></div>
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div><label className="label">Phone</label><input className="input" value={clinicPhone} onChange={e => setClinicPhone(e.target.value)} /></div>
-              <div><label className="label">Email</label><input className="input" value={clinicEmail} onChange={e => setClinicEmail(e.target.value)} /></div>
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="label mb-0">Registered Mobile</label>
+                  <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200">
+                    <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                    Verified via OTP
+                  </span>
+                </div>
+                <div className="relative">
+                  <input className="input bg-slate-100/90 text-slate-700 cursor-not-allowed pr-8 select-none font-mono" value={clinicPhone} readOnly disabled />
+                  <Lock className="w-3.5 h-3.5 text-slate-400 absolute right-3 top-3" />
+                </div>
+                <p className="text-[11px] text-slate-400 mt-1">Verified clinic mobile number.</p>
+              </div>
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="label mb-0">Registered Email</label>
+                  <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200">
+                    <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                    Verified via OTP
+                  </span>
+                </div>
+                <div className="relative">
+                  <input className="input bg-slate-100/90 text-slate-700 cursor-not-allowed pr-8 select-none" value={clinicEmail} readOnly disabled />
+                  <Lock className="w-3.5 h-3.5 text-slate-400 absolute right-3 top-3" />
+                </div>
+                <p className="text-[11px] text-slate-400 mt-1">Verified official clinic email.</p>
+              </div>
             </div>
             <div>
               <label className="label">Logo</label>
