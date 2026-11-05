@@ -7,7 +7,6 @@ import { buildSubscriptionPlanChangeScheduledHtml, buildSubscriptionCancelledHtm
 import {
   sendWhatsAppClinicPlanUpgraded,
   sendWhatsAppClinicPlanDowngraded,
-  sendWhatsAppClinicSubCancelled,
 } from './whatsappClientService';
 
 export interface SubscriptionPeriodInfo {
@@ -411,26 +410,6 @@ export async function scheduleSubscriptionCancellation(
         });
       } catch (emErr) {
         console.warn('Could not dispatch cancellation schedule email:', emErr);
-      }
-    }
-
-    // 5. Dispatch WhatsApp cancellation template (viitsa_clinic_sub_cancelled)
-    const clinicPhone = (clinic as any)?.phone || (clinic as any)?.contact_phone || user?.phone;
-    if (clinicPhone) {
-      try {
-        await sendWhatsAppClinicSubCancelled({
-          to: clinicPhone,
-          clinicId: clinic.clinic_id,
-          adminName: user?.name || clinic.owner_name || 'Doctor',
-          clinicName: clinic.name,
-          cancelledPlan: `${(clinic.subscription_plan || 'Clinic').toUpperCase()} Plan`,
-          accessDate: periodInfo.formatted,
-          effectiveDate: periodInfo.formatted,
-          endDate: periodInfo.formatted,
-          supportPhone: '+91 73961 11081',
-        });
-      } catch (waErr) {
-        console.warn('Could not dispatch WhatsApp cancellation template:', waErr);
       }
     }
 

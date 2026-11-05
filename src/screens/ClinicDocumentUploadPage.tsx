@@ -2,7 +2,6 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { FileUp, Trash2, CheckCircle2, Loader2, AlertCircle, LogOut } from 'lucide-react';
 import { sendEmail } from '../lib/emailService';
-import { sendWhatsAppClinicPendingApproval } from '../lib/whatsappClientService';
 import { doc, setDoc, updateDoc } from 'firebase/firestore';
 import { ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
 import { db, storage } from '../lib/firebase';
@@ -90,23 +89,6 @@ export function ClinicDocumentUploadPage() {
         }
       } catch (err) {
         console.error('Failed to send pending verification email', err);
-      }
-
-      // 4b. Dispatch WhatsApp notification (viitsa_clinic_pending_approval)
-      const contactPhone = user.phone || clinic?.phone;
-      if (contactPhone) {
-        try {
-          await sendWhatsAppClinicPendingApproval({
-            to: contactPhone,
-            clinicId,
-            adminName: user.name || clinic?.owner_name || 'Doctor',
-            clinicName: user.clinic_name || clinic?.name || 'Clinic',
-            submissionDate: new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }),
-            supportPhone: '+91 73961 11081',
-          });
-        } catch (waErr) {
-          console.warn('Failed to dispatch pending approval WhatsApp message:', waErr);
-        }
       }
 
       // 5. Refresh session

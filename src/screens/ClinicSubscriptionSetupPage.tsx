@@ -9,7 +9,6 @@ import { useAuth } from '../lib/auth';
 import { ViitsaLogo } from '../components/ViitsaLogo';
 import { RazorpaySubscriptionButton } from '../components/RazorpaySubscriptionButton';
 import { buildSubscriptionActivatedHtml } from '../lib/emailService';
-import { sendWhatsAppClinicTrialActivated, sendWhatsAppClinicSubActivated } from '../lib/whatsappClientService';
 
 export function ClinicSubscriptionSetupPage() {
   const { user, clinic } = useAuth();
@@ -139,38 +138,6 @@ export function ClinicSubscriptionSetupPage() {
           });
         } catch (emailErr) {
           console.warn('Could not send setup confirmation email:', emailErr);
-        }
-      }
-
-      // Dispatch instant WhatsApp notification to clinic
-      const clinicPhone = (clinic as any)?.phone || (clinic as any)?.contact_phone || (clinic as any)?.emergency_contact_phone || user?.phone || user?.phone_number;
-      if (clinicPhone) {
-        try {
-          if (isTrial) {
-            await sendWhatsAppClinicTrialActivated({
-              to: clinicPhone,
-              adminName: user?.name || (clinic as any)?.owner_name || 'Doctor',
-              clinicName: clinic?.name || 'Clinic Partner',
-              planTier: `${activeTier.toUpperCase()} Plan`,
-              trialValidUntil: new Date(trialEndsAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }),
-              supportPhone: '+91 73961 11081',
-              clinicId: clinic?.id,
-            });
-          } else {
-            await sendWhatsAppClinicSubActivated({
-              to: clinicPhone,
-              adminName: user?.name || (clinic as any)?.owner_name || 'Doctor',
-              clinicName: clinic?.name || 'Clinic Partner',
-              planName: `${activeTier.toUpperCase()} Plan`,
-              billingCycle: selectedCycle.toUpperCase(),
-              amountPaid: planAmount,
-              nextRenewalDate: new Date(periodEnd).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }),
-              supportPhone: '+91 73961 11081',
-              clinicId: clinic?.id,
-            });
-          }
-        } catch (waErr) {
-          console.warn('Could not send setup WhatsApp notification:', waErr);
         }
       }
 

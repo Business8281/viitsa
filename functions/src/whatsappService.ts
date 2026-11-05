@@ -134,6 +134,9 @@ export function formatAmount(amt: number | string | undefined | null): string {
   return isNaN(n) ? String(amt) : n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
+// In-memory cache for fast deduplication across simultaneous requests
+const recentDispatches = new Map<string, number>();
+
 /**
  * Low-level sender for Meta WhatsApp Cloud API templates
  */
@@ -157,6 +160,37 @@ export async function sendWhatsAppTemplate(options: {
   if (!normalizedPhone || normalizedPhone.length < 10) {
     console.error('[WhatsAppService] Error: Invalid recipient phone number:', options.to);
     return { success: false, error: `Invalid phone number: ${options.to}` };
+  }
+
+  // Deduplication Guard: Prevent duplicate delivery of the same template to the same phone within 45s
+  const isOtp = options.templateName.includes('otp');
+  const dedupKey = `${normalizedPhone}_${options.templateName}`;
+  const nowMs = Date.now();
+  const DEDUP_WINDOW_MS = 45000; // 45 seconds
+
+  // Tier 1: Instant in-memory check (< 1ms)
+  const memLast = recentDispatches.get(dedupKey);
+  if (!isOtp && memLast && nowMs - memLast < DEDUP_WINDOW_MS) {
+    console.warn(`[WhatsAppService] Deduplication Guard: Suppressed in-memory duplicate of '${options.templateName}' to ${normalizedPhone} (${Math.round((nowMs - memLast) / 1000)}s ago)`);
+    return { success: true, messageId: 'dedup_suppressed_memory' };
+  }
+
+  // Tier 2: Distributed Firestore lock check (cross-instance deduplication)
+  try {
+    if (!admin.apps.length) admin.initializeApp();
+    const db = admin.firestore();
+    const lockDoc = await db.collection('whatsapp_dispatch_locks').doc(dedupKey).get();
+    if (!isOtp && lockDoc.exists) {
+      const lockData = lockDoc.data() || {};
+      const fsLast = lockData.dispatched_at_ms || 0;
+      if (nowMs - fsLast < DEDUP_WINDOW_MS) {
+        console.warn(`[WhatsAppService] Deduplication Guard: Suppressed cross-instance duplicate of '${options.templateName}' to ${normalizedPhone} (${Math.round((nowMs - fsLast) / 1000)}s ago)`);
+        recentDispatches.set(dedupKey, fsLast);
+        return { success: true, messageId: lockData.message_id || 'dedup_suppressed_firestore' };
+      }
+    }
+  } catch (lockErr) {
+    console.warn('[WhatsAppService] Deduplication lock check notice:', lockErr);
   }
 
   const endpoint = `${GRAPH_API_BASE}/${apiVersion}/${phoneNumberId}/messages`;
@@ -280,6 +314,22 @@ export async function sendWhatsAppTemplate(options: {
     }
 
     const messageId = data?.messages?.[0]?.id;
+
+    // Record deduplication lock to guarantee single-delivery across all instances
+    recentDispatches.set(dedupKey, nowMs);
+    try {
+      if (!admin.apps.length) admin.initializeApp();
+      const db = admin.firestore();
+      await db.collection('whatsapp_dispatch_locks').doc(dedupKey).set({
+        phone: normalizedPhone,
+        template: options.templateName,
+        dispatched_at_ms: nowMs,
+        message_id: messageId || 'ok',
+        created_at: admin.firestore.FieldValue.serverTimestamp(),
+      }, { merge: true });
+    } catch (lockSaveErr) {
+      // Non-blocking
+    }
 
     // Log success in Firestore
     await logWhatsAppActivity({
