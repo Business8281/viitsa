@@ -100,6 +100,11 @@ export function RazorpaySubscriptionButton({
         },
         theme: {
           color: '#05C994' 
+        },
+        modal: {
+          ondismiss: function () {
+            setLoading(false);
+          }
         }
       };
 

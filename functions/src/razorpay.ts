@@ -165,21 +165,27 @@ export const createClinicSubscription = onCall({ region: "asia-south1" }, async 
   const clinicEmail = (clinicData.email || userData.email || request.auth.token?.email || "").toLowerCase().trim();
 
   // STRICT ONE-TIME 30-DAY TRIAL ENFORCEMENT
-  // If the clinic, user, or email has ever used the free trial, or previously cancelled, trial is NEVER offered again.
-  let trialAlreadyUsed = Boolean(
-    clinicData.trial_used || 
-    clinicData.has_used_trial || 
-    clinicData.trial_started_at ||
-    clinicData.subscription_status === 'cancelled' ||
-    clinicData.subscription_status === 'active' ||
-    userData.trial_used ||
-    userData.has_used_trial
+  // A clinic or user has used a trial ONLY if they actually activated or completed a trial.
+  // Opening the checkout modal without paying NEVER consumes the trial.
+  const isActuallySubscribed = clinicData.subscription_status === 'trial' || clinicData.subscription_status === 'active';
+  const hasCompletedOrActiveTrial = Boolean(
+    clinicData.trial_activated ||
+    clinicData.trial_completed ||
+    isActuallySubscribed ||
+    ((clinicData.subscription_status === 'cancelled' || clinicData.subscription_status === 'deactivated') && (clinicData.trial_activated || clinicData.trial_used)) ||
+    userData.trial_completed ||
+    userData.trial_activated
   );
 
+  let trialAlreadyUsed = hasCompletedOrActiveTrial;
+
   if (!trialAlreadyUsed && clinicEmail) {
-    const trialRecordSnap = await getDb().collection("trial_records").where("email", "==", clinicEmail).limit(1).get();
+    const trialRecordSnap = await getDb().collection("trial_records").where("email", "==", clinicEmail).where("status", "==", "active_trial").limit(1).get();
     if (!trialRecordSnap.empty) {
-      trialAlreadyUsed = true;
+      const trDoc = trialRecordSnap.docs[0].data();
+      if (trDoc.trial_activated === true) {
+        trialAlreadyUsed = true;
+      }
     }
   }
 
@@ -204,38 +210,11 @@ export const createClinicSubscription = onCall({ region: "asia-south1" }, async 
     };
 
     // If eligible for trial: set start_at to 30 days from now (Auto-debit begins after 30 days)
+    // IMPORTANT: DO NOT write trial_used or trial_records here!
+    // Database records are updated ONLY when Razorpay verifies payment authentication.
     if (!effectiveSkipTrial) {
       const trialDurationSeconds = 30 * 24 * 60 * 60;
       payload.start_at = Math.floor(Date.now() / 1000) + trialDurationSeconds;
-
-      const trialEndsAt = new Date(Date.now() + trialDurationSeconds * 1000).toISOString();
-
-      // Store in trial_records to permanently forbid reusing the free trial
-      await getDb().collection("trial_records").doc(clinicEmail || clinicId).set({
-        email: clinicEmail,
-        clinic_id: clinicId,
-        user_id: request.auth.uid,
-        tier,
-        cycle,
-        trial_started_at: new Date().toISOString(),
-        trial_ends_at: trialEndsAt,
-        status: "active_trial",
-        created_at: new Date().toISOString()
-      }, { merge: true });
-
-      await getDb().collection("clinics").doc(clinicId).update({
-        trial_used: true,
-        has_used_trial: true,
-        trial_started_at: new Date().toISOString(),
-        trial_ends_at: trialEndsAt
-      });
-
-      if (request.auth.uid) {
-        await getDb().collection("users").doc(request.auth.uid).update({
-          trial_used: true,
-          has_used_trial: true
-        }).catch(() => {});
-      }
     }
     
     const subscription = await razorpay.subscriptions.create(payload);
@@ -474,8 +453,26 @@ export const razorpayWebhook = onRequest(async (req, res) => {
         if (isTrial) {
           clinicUpdates.trial_used = true;
           clinicUpdates.has_used_trial = true;
+          clinicUpdates.trial_activated = true;
           clinicUpdates.trial_started_at = new Date().toISOString();
           clinicUpdates.trial_ends_at = trialEndsAt;
+
+          // Record in trial_records upon confirmed authenticated payment
+          const clinicDoc = await getDb().collection("clinics").doc(clinicId).get();
+          const clinicData = clinicDoc.data() || {};
+          const clinicEmail = (clinicData.email || "").toLowerCase().trim();
+
+          await getDb().collection("trial_records").doc(clinicEmail || clinicId).set({
+            email: clinicEmail,
+            clinic_id: clinicId,
+            tier,
+            cycle,
+            trial_started_at: new Date().toISOString(),
+            trial_ends_at: trialEndsAt,
+            trial_activated: true,
+            status: "active_trial",
+            created_at: new Date().toISOString()
+          }, { merge: true });
         }
 
         await getDb().collection("clinics").doc(clinicId).update(clinicUpdates);

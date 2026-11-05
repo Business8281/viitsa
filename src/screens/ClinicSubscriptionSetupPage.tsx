@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Building2, CheckCircle2, Crown, CalendarClock, LogOut, Sparkles, AlertTriangle, ArrowLeft, CreditCard } from 'lucide-react';
 import { doc, updateDoc } from 'firebase/firestore';
@@ -23,17 +23,38 @@ export function ClinicSubscriptionSetupPage() {
   const [selectedTier, setSelectedTier] = useState<'solo' | 'clinic' | 'multispecialty'>('clinic');
   const [selectedCycle, setSelectedCycle] = useState<'monthly' | 'annual'>('monthly');
 
+  // Self-healing: If an aborted checkout previously left premature trial flags before payment was ever made,
+  // restore clean trial eligibility immediately.
+  useEffect(() => {
+    if (!clinic?.clinic_id) return;
+    const isActuallySubscribed = clinic.subscription_status === 'trial' || clinic.subscription_status === 'active';
+    if (!isActuallySubscribed && !clinic.trial_activated && !clinic.trial_completed) {
+      if (clinic.trial_used || clinic.has_used_trial || clinic.trial_started_at) {
+        updateDoc(doc(db, 'clinics', clinic.clinic_id), {
+          trial_used: false,
+          has_used_trial: false,
+          trial_started_at: null,
+          trial_ends_at: null
+        }).catch(() => {});
+      }
+      if (user?.user_id && ((user as any).trial_used || (user as any).has_used_trial)) {
+        updateDoc(doc(db, 'users', user.user_id), {
+          trial_used: false,
+          has_used_trial: false,
+          trial_ends_at: null
+        }).catch(() => {});
+      }
+    }
+  }, [clinic?.clinic_id, clinic?.subscription_status, clinic?.trial_activated, clinic?.trial_completed, clinic?.trial_used, user?.user_id]);
+
   // STRICT ONE-TIME TRIAL ELIGIBILITY:
-  // Eligible ONLY if clinic, user, or account has NEVER used trial, and never cancelled previously
+  // A clinic has used a trial ONLY if they actually activated or completed a trial.
+  // Merely opening or closing the checkout without paying NEVER consumes the free trial.
+  const isActuallySubscribed = clinic?.subscription_status === 'trial' || clinic?.subscription_status === 'active';
   const hasUsedTrial = Boolean(
-    clinic?.trial_used ||
-    clinic?.has_used_trial ||
-    user?.trial_used ||
-    user?.has_used_trial ||
-    clinic?.trial_started_at ||
-    clinic?.subscription_status === 'cancelled' ||
-    clinic?.subscription_status === 'deactivated' ||
-    clinic?.subscription_status === 'active'
+    isActuallySubscribed ||
+    clinic?.trial_completed === true ||
+    ((clinic?.subscription_status === 'cancelled' || clinic?.subscription_status === 'deactivated') && (clinic?.trial_activated || clinic?.trial_used))
   );
   const isTrialEligible = !hasUsedTrial && !invoiceId;
 
@@ -68,10 +89,12 @@ export function ClinicSubscriptionSetupPage() {
       if (isTrial) {
         userUpdates.trial_used = true;
         userUpdates.has_used_trial = true;
+        userUpdates.trial_activated = true;
         userUpdates.trial_ends_at = trialEndsAt;
 
         clinicUpdates.trial_used = true;
         clinicUpdates.has_used_trial = true;
+        clinicUpdates.trial_activated = true;
         clinicUpdates.trial_started_at = new Date().toISOString();
         clinicUpdates.trial_ends_at = trialEndsAt;
       }
@@ -235,7 +258,18 @@ export function ClinicSubscriptionSetupPage() {
                 {clinic?.subscription_plan || 'Clinic'} Plan ({clinic?.subscription_billing_cycle || 'monthly'})
               </h3>
               <p className="text-xs text-ink-muted mt-0.5">
-                Status: <strong className="text-primary capitalize">{clinic?.subscription_status || 'Active'}</strong> • You can switch plans or re-authorize your payment method below.
+                {clinic?.subscription_status === 'trial' ? (
+                  <>
+                    Status: <strong className="text-emerald-700 font-bold uppercase">30-Day Free Trial Active</strong>
+                    {clinic?.trial_ends_at && (
+                      <span> • Valid until <strong>{new Date(clinic.trial_ends_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })}</strong> • Auto-debits on Day 31</span>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    Status: <strong className="text-primary capitalize">{clinic?.subscription_status || 'Active'}</strong> • You can switch plans or re-authorize your payment method below.
+                  </>
+                )}
               </p>
             </div>
             <div className="flex items-center gap-2">
