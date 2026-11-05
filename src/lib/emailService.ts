@@ -715,7 +715,8 @@ export async function sendInstantAppointmentEmail(
     }
 
     const dateStr = formatDate(appt.date);
-    const tokenDisplay = appt.display_token || (appt.token_number ? `ON-${String(appt.token_number).padStart(3, '0')}` : '—');
+    const rawToken = appt.display_token || (appt.token_number ? `ON-${String(appt.token_number).padStart(3, '0')}` : '—');
+    const tokenDisplay = rawToken.replace(/^EM-/, 'QR-');
 
     await sendEmail({
       to: patientEmail,
@@ -850,5 +851,87 @@ export async function sendPasswordResetNotificationEmail(
     error: 'Failed to send password reset email. Please try again.'
   };
 }
+
+/**
+ * Send 6-digit OTP code to email address via Titan SMTP
+ */
+export async function sendEmailAuthOtpCode(
+  email: string,
+  name?: string
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const fn = httpsCallable(functions, 'sendEmailAuthOtp');
+    const res: any = await fn({ email: email.trim().toLowerCase(), name });
+    if (res?.data?.success) {
+      return { success: true };
+    }
+    return { success: false, error: res?.data?.message || 'Failed to send email verification code.' };
+  } catch (err: any) {
+    console.error('sendEmailAuthOtp error:', err);
+    return { success: false, error: err.message || 'Failed to dispatch email verification code.' };
+  }
+}
+
+/**
+ * Verify 6-digit OTP code sent to email
+ */
+export async function verifyEmailAuthOtpCode(
+  email: string,
+  otp: string
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const fn = httpsCallable(functions, 'verifyEmailAuthOtp');
+    const res: any = await fn({ email: email.trim().toLowerCase(), otp: otp.trim() });
+    if (res?.data?.success) {
+      return { success: true };
+    }
+    return { success: false, error: res?.data?.message || 'Invalid email verification code.' };
+  } catch (err: any) {
+    console.error('verifyEmailAuthOtp error:', err);
+    return { success: false, error: err.message || 'Failed to verify email code.' };
+  }
+}
+
+/**
+ * Check if a mobile phone number or email address is already registered as a different role,
+ * or verify upfront whether it is permitted to login to a specific portal.
+ */
+export async function checkRegistrationConflict(
+  phone?: string,
+  email?: string,
+  targetRole?: string,
+  action: 'login' | 'register' = 'register',
+  portal: 'clinic' | 'patient' | 'admin' = 'clinic'
+): Promise<{
+  allowed: boolean;
+  hasConflict: boolean;
+  conflictMessage?: string;
+  phoneConflict?: { exists: boolean; role?: string; roleLabel?: string };
+  emailConflict?: { exists: boolean; role?: string; roleLabel?: string };
+}> {
+  try {
+    const fn = httpsCallable(functions, 'checkRegistrationConflict');
+    const res: any = await fn({
+      phone: phone ? phone.replace(/\D/g, '').slice(-10) : undefined,
+      email: email ? email.trim().toLowerCase() : undefined,
+      targetRole: targetRole || 'clinic_admin',
+      action,
+      portal,
+    });
+    const d = res?.data || {};
+    return {
+      allowed: d.allowed !== false,
+      hasConflict: Boolean(d.hasConflict),
+      conflictMessage: d.conflictMessage,
+      phoneConflict: d.phoneConflict,
+      emailConflict: d.emailConflict,
+    };
+  } catch (err: any) {
+    console.warn('checkRegistrationConflict note:', err);
+    return { allowed: true, hasConflict: false };
+  }
+}
+
+
 
 

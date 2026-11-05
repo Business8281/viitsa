@@ -6,6 +6,7 @@ import { useAuth } from './auth';
 import { generateReadableId, sanitizeForFirestore } from './identityResolver';
 import { switchPatientClinic } from './patientClinicService';
 import { calculateAge } from './format';
+import { claimPastAppointmentsForPhone } from './accountLinking';
 
 const STORAGE_KEY = 'viitsa_patient_v1';
 
@@ -38,6 +39,8 @@ export interface RegisterData {
   current_medications?: string;
   emergency_contact_name: string;
   emergency_contact_phone: string;
+  attender_name?: string;
+  attender_phone?: string;
   profile_completed?: boolean;
 }
 
@@ -212,8 +215,17 @@ export function PatientAuthProvider({ children }: { children: React.ReactNode })
     if (d.chronic_conditions !== undefined) updates.chronic_conditions = d.chronic_conditions;
     if (d.allergies !== undefined) updates.allergies = d.allergies;
     if (d.current_medications !== undefined) updates.current_medications = medications;
-    if (d.emergency_contact_name !== undefined) updates.emergency_contact_name = d.emergency_contact_name;
-    if (d.emergency_contact_phone !== undefined) updates.emergency_contact_phone = d.emergency_contact_phone;
+    const attName = d.attender_name || d.emergency_contact_name || account?.attender_name || account?.emergency_contact_name;
+    const attPhone = d.attender_phone || d.emergency_contact_phone || account?.attender_phone || account?.emergency_contact_phone;
+
+    if (d.emergency_contact_name !== undefined || d.attender_name !== undefined) {
+      updates.emergency_contact_name = attName || null;
+      updates.attender_name = attName || null;
+    }
+    if (d.emergency_contact_phone !== undefined || d.attender_phone !== undefined) {
+      updates.emergency_contact_phone = attPhone || null;
+      updates.attender_phone = attPhone || null;
+    }
     if (d.profile_completed !== undefined) updates.profile_completed = d.profile_completed;
 
     try {
@@ -234,6 +246,12 @@ export function PatientAuthProvider({ children }: { children: React.ReactNode })
         otp_verified: true,
         profile_completed: true,
       }), { merge: true });
+
+      // Claim any prior walk-in appointments for this phone number
+      const phoneToClaim = updates.phone || account?.phone || user?.phone;
+      if (phoneToClaim) {
+        claimPastAppointmentsForPhone(phoneToClaim, activeAccountId).catch(() => {});
+      }
     } catch (e: any) {
       console.warn('Could not update patient_accounts doc:', e);
       return { ok: false, error: 'Failed to update patient profile. Permission denied or network issue.' };
@@ -242,11 +260,17 @@ export function PatientAuthProvider({ children }: { children: React.ReactNode })
     // 2. Also ensure the 'users' document knows about this profile completion and linking
     if (user?.user_id) {
       try {
-        await updateDoc(doc(db, 'users', user.user_id), {
+        await updateDoc(doc(db, 'users', user.user_id), sanitizeForFirestore({
           patient_account_id: activeAccountId,
+          phone: updates.phone || user.phone || null,
+          email: updates.email || user.email || null,
+          attender_name: attName || null,
+          attender_phone: attPhone || null,
+          emergency_contact_name: attName || null,
+          emergency_contact_phone: attPhone || null,
           profile_completed: true,
           updated_at: new Date().toISOString()
-        });
+        }));
       } catch (e) {
         console.warn('Could not update users doc profile_completed flag:', e);
       }
@@ -257,6 +281,12 @@ export function PatientAuthProvider({ children }: { children: React.ReactNode })
       try {
         await setDoc(doc(db, 'users', user.user_id), sanitizeForFirestore({
           ...updates,
+          phone: updates.phone || user.phone || null,
+          email: updates.email || user.email || null,
+          attender_name: attName || null,
+          attender_phone: attPhone || null,
+          emergency_contact_name: attName || null,
+          emergency_contact_phone: attPhone || null,
           role: 'patient',
           user_type: 'patient',
           id_number: patientCode,

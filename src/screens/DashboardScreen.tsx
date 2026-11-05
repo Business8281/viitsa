@@ -390,7 +390,7 @@ export function DashboardScreen() {
                   <div className="min-w-0 flex-1">
                     <p className="text-sm font-semibold text-ink truncate">
                       {a.patient?.name || (a as any).patient_name || 'Unknown'} 
-                      {a.display_token && <span className="ml-2 text-xs font-bold text-primary">{a.display_token}</span>}
+                      {a.display_token && <span className="ml-2 text-xs font-bold text-primary">{a.display_token.replace(/^EM-/, 'QR-')}</span>}
                     </p>
                     <p className="text-xs text-ink-muted truncate">{a.reason ?? a.type}</p>
                   </div>

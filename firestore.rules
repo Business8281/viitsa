@@ -63,14 +63,16 @@ service cloud.firestore {
       allow delete: if request.auth != null;
     }
 
-    // Bills: authenticated users can read/write
+    // Bills: authenticated users can write, public/patients can read
     match /bills/{billId} {
-      allow read, write: if request.auth != null;
+      allow read: if true;
+      allow write: if request.auth != null;
     }
 
-    // Inventory: authenticated users can read/write
+    // Inventory: authenticated users can write, public/patients can read
     match /inventory/{itemId} {
-      allow read, write: if request.auth != null;
+      allow read: if true;
+      allow write: if request.auth != null;
     }
 
     // AI sessions: patient or clinic staff access
@@ -95,19 +97,22 @@ service cloud.firestore {
       allow update, delete: if false;
     }
 
-    // Consultations
+    // Consultations: patients and doctors can view consultations
     match /consultations/{consultationId} {
-      allow read, write: if request.auth != null;
+      allow read: if true;
+      allow write: if request.auth != null;
     }
 
-    // Invoices
+    // Invoices: clinic and patients can view invoices
     match /invoices/{invoiceId} {
-      allow read, write: if request.auth != null;
+      allow read: if true;
+      allow write: if request.auth != null;
     }
 
     // Billing
     match /billing/{billingId} {
-      allow read, write: if request.auth != null;
+      allow read: if true;
+      allow write: if request.auth != null;
     }
 
     // Support Tickets
@@ -122,17 +127,20 @@ service cloud.firestore {
 
     // Reports
     match /reports/{reportId} {
-      allow read, write: if request.auth != null;
+      allow read: if true;
+      allow write: if request.auth != null;
     }
 
     // Health Reports
     match /health_reports/{reportId} {
-      allow read, write: if request.auth != null;
+      allow read: if true;
+      allow write: if request.auth != null;
     }
 
     // Vitals
     match /vitals/{vitalId} {
-      allow read, write: if request.auth != null;
+      allow read: if true;
+      allow write: if request.auth != null;
     }
 
     // Admin Settings: Company admin can read and write
@@ -143,6 +151,32 @@ service cloud.firestore {
 
     // Password uniqueness registry: allows verifying and claiming unique password hashes
     match /password_registry/{hashId} {
+      allow read, write: if true;
+    }
+
+    // Usage counters: clinic AI intake, WhatsApp messages, and quota tracking
+    match /usage_counters/{counterId} {
+      allow read, write: if true;
+    }
+
+    // Subscription plans (public catalog read, admin management)
+    match /subscription_plans/{planId} {
+      allow read: if true;
+      allow write: if isCompanyAdmin();
+    }
+
+    // Subscription cancellations
+    match /subscription_cancellations/{cancelId} {
+      allow read, write: if request.auth != null;
+    }
+
+    // AI Conversations
+    match /ai_conversations/{convId} {
+      allow read, write: if true;
+    }
+
+    // Patient reward points
+    match /patient_reward_points/{pointId} {
       allow read, write: if true;
     }
 

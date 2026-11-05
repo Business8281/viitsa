@@ -204,8 +204,8 @@ export function PatientProfile({ onTab }: Props) {
       gender: pickStr(account?.gender, authPatientAccount?.gender, user?.gender, cached?.gender),
       blood_group: pickStr(account?.blood_group, authPatientAccount?.blood_group, user?.blood_group, cached?.blood_group),
       address: pickStr(account?.address, authPatientAccount?.address, user?.address, cached?.address),
-      emergency_contact_name: pickStr(account?.emergency_contact_name, authPatientAccount?.emergency_contact_name, user?.emergency_contact_name, cached?.emergency_contact_name),
-      emergency_contact_phone: pickStr(account?.emergency_contact_phone, authPatientAccount?.emergency_contact_phone, user?.emergency_contact_phone, cached?.emergency_contact_phone),
+      emergency_contact_name: pickStr(account?.emergency_contact_name, (account as any)?.attender_name, authPatientAccount?.emergency_contact_name, user?.emergency_contact_name, (user as any)?.attender_name, cached?.emergency_contact_name),
+      emergency_contact_phone: pickStr(account?.emergency_contact_phone, (account as any)?.attender_phone, authPatientAccount?.emergency_contact_phone, user?.emergency_contact_phone, (user as any)?.attender_phone, cached?.emergency_contact_phone),
       chronic_conditions: rawConditions || 'None',
       allergies: rawAllergies || 'None',
       current_medications: rawMeds || 'None',
@@ -323,6 +323,8 @@ export function PatientProfile({ onTab }: Props) {
       address: address.trim() || undefined,
       emergency_contact_name: emergName.trim() || undefined,
       emergency_contact_phone: sanitizedEmergPhone,
+      attender_name: emergName.trim() || undefined,
+      attender_phone: sanitizedEmergPhone,
       chronic_conditions: conditions.includes('None') || conditions.length === 0 ? 'None' : conditions.join(', '),
       allergies: allergies.trim() || 'None',
       current_medications: medications.trim() || 'None',
@@ -571,17 +573,18 @@ export function PatientProfile({ onTab }: Props) {
           />
 
           <div className="border-t border-gray-100 pt-3">
-            <p className="text-xs font-bold text-gray-500 mb-2">Emergency Contact</p>
+            <p className="text-xs font-bold text-gray-600 mb-0.5">Patient Attendant & Emergency Contact</p>
+            <p className="text-[11px] text-gray-400 mb-2">Can log in via mobile OTP using their phone number to access your appointments and records.</p>
             <Row
               icon={<Shield size={16} />}
-              label="Contact Name"
+              label="Attendant / Contact Name"
               value={effectiveAccount.emergency_contact_name || emergName}
-              editEl={isEditing ? field(emergName, setEmergName, 'Emergency contact person name') : undefined}
+              editEl={isEditing ? field(emergName, setEmergName, 'Attendant or Emergency contact name') : undefined}
             />
             <div className="mt-2">
               <Row
                 icon={<Phone size={16} />}
-                label="Contact Phone"
+                label="Attendant Mobile Number"
                 value={effectiveAccount.emergency_contact_phone || emergPhone}
                 editEl={isEditing ? field(emergPhone, v => setEmergPhone(v.replace(/\D/g, '').slice(0, 10)), '10-digit mobile number', 'tel', 10) : undefined}
               />
@@ -680,7 +683,7 @@ export function PatientProfile({ onTab }: Props) {
                     setConfirmPassword('');
                     setShowPasswordModal(true);
                   }}
-                  className="px-3.5 py-2 rounded-xl text-xs font-bold bg-teal-50 hover:bg-teal-100 text-teal-800 border border-teal-200 transition shrink-0 flex items-center gap-1.5 shadow-xs"
+                  className="px-3.5 py-2 rounded-xl text-xs font-bold bg-[#106EBE]/10 hover:bg-[#106EBE]/20 text-[#106EBE] border border-[#106EBE]/30 transition shrink-0 flex items-center gap-1.5 shadow-xs"
                 >
                   <Key size={14} />
                   {hasPasswordProvider ? 'Change Password' : 'Set Password'}
@@ -795,7 +798,7 @@ export function PatientProfile({ onTab }: Props) {
                   <button
                     type="submit"
                     disabled={pwdLoading}
-                    className="flex-1 py-2.5 rounded-xl bg-teal-600 hover:bg-teal-700 text-white font-bold text-xs flex items-center justify-center gap-1.5 transition disabled:opacity-70 shadow-sm"
+                    className="flex-1 py-2.5 rounded-xl bg-[#106EBE] hover:bg-[#0D5A9C] text-white font-bold text-xs flex items-center justify-center gap-1.5 transition disabled:opacity-70 shadow-sm"
                   >
                     {pwdLoading ? <Loader2 size={14} className="animate-spin" /> : <Lock size={14} />}
                     {pwdLoading ? 'Saving...' : hasPasswordProvider ? 'Update Password' : 'Save Password'}
@@ -818,7 +821,7 @@ export function PatientProfile({ onTab }: Props) {
             <button
               onClick={saveProfile}
               disabled={saving}
-              className="flex-1 py-4 rounded-2xl bg-primary text-white font-bold text-sm flex items-center justify-center gap-2 hover:bg-primary/90 transition disabled:opacity-70"
+              className="flex-1 py-4 rounded-2xl bg-[#106EBE] hover:bg-[#0D5A9C] text-white font-bold text-sm flex items-center justify-center gap-2 transition disabled:opacity-70 shadow-md"
             >
               {saving ? 'Saving...' : 'Save Profile'}
             </button>

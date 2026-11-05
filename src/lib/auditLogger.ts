@@ -3,6 +3,30 @@ import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
 import type { AuditEvent } from './types';
 
 /**
+ * Recursively strips undefined fields to ensure compatibility with Firestore addDoc.
+ */
+function cleanUndefinedForFirestore<T>(data: T): T {
+  if (data === null || data === undefined) {
+    return null as any;
+  }
+  if (Array.isArray(data)) {
+    return data
+      .filter((v) => v !== undefined)
+      .map((v) => cleanUndefinedForFirestore(v)) as any;
+  }
+  if (typeof data === 'object' && !(data instanceof Date)) {
+    const res: Record<string, any> = {};
+    for (const [k, v] of Object.entries(data)) {
+      if (v !== undefined) {
+        res[k] = cleanUndefinedForFirestore(v);
+      }
+    }
+    return res as any;
+  }
+  return data;
+}
+
+/**
  * Log a structured, auditable security or healthcare operational event to Firestore.
  * Always fails gracefully without crashing client or server execution.
  */
@@ -10,8 +34,9 @@ export async function logAuditEvent(
   event: Omit<AuditEvent, 'log_id' | 'timestamp'> & { timestamp?: string }
 ): Promise<void> {
   try {
+    const cleanEvent = cleanUndefinedForFirestore(event);
     const payload = {
-      ...event,
+      ...cleanEvent,
       timestamp: event.timestamp || new Date().toISOString(),
       created_at: new Date().toISOString(),
       server_timestamp: serverTimestamp(),
@@ -101,15 +126,18 @@ export async function logUserLogin(
   clinicId?: string | null,
   metadata?: Record<string, any>
 ): Promise<void> {
-  return logAuditEvent({
+  const event: any = {
     event_type: 'USER_LOGIN',
     actor_id: userId,
     actor_role: role,
-    clinic_id: clinicId || undefined,
     status: 'success',
     metadata: {
       logged_in_at: new Date().toISOString(),
       ...metadata
     }
-  });
+  };
+  if (clinicId) {
+    event.clinic_id = clinicId;
+  }
+  return logAuditEvent(event);
 }

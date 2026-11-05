@@ -4,6 +4,7 @@ import { db } from '../lib/firebase';
 import { collection, query, where, getDocs, addDoc, doc, getDoc, updateDoc, orderBy, limit } from 'firebase/firestore';
 import { usePatientAuth } from '../lib/patientAuth';
 import { sendInstantAppointmentEmail } from '../lib/emailService';
+import { fetchClinicDoctors } from '../lib/doctorService';
 
 import { formatTime, formatDate, whatsappAppointmentConfirmation, localDateISO, formatDobForInput } from '../lib/format';
 import type { User, Clinic } from '../lib/types';
@@ -167,15 +168,12 @@ export function PatientBooking({ onTab, clinic: initialClinic, patientId, aiSumm
     );
   };
 
-  // Load doctors when clinic is selected
+  // Load all doctors for selected clinic
   useEffect(() => {
     if (!clinic) return;
-    const q = query(collection(db, 'users'), where('clinic_id', '==', clinic.clinic_id), where('active', '==', true));
-    getDocs(q).then((snap) => {
-      const allUsers = snap.docs.map(d => ({ ...d.data(), user_id: d.id, id: d.id } as User));
-      const docList = allUsers.filter(u => u.role === 'clinic_doctor' || u.role === 'clinic_admin' || u.user_type === 'clinic_admin');
-      setDoctors(docList);
-    });
+    fetchClinicDoctors(clinic.clinic_id, clinic).then((docList) => {
+      setDoctors(docList as any);
+    }).catch(console.warn);
 
     getDoc(doc(db, 'clinic_settings', clinic.clinic_id)).then((snap) => {
       if (snap.exists()) {
@@ -236,6 +234,8 @@ export function PatientBooking({ onTab, clinic: initialClinic, patientId, aiSumm
       const apptRef = await addDoc(collection(db, 'appointments'), {
         clinic_id: clinic.clinic_id,
         patient_id: effectivePatientId,
+        patient_phone: account?.phone || null,
+        patient_name: account?.name || null,
         doctor_id: selectedDoctor.user_id,
         date: iso,
         time_slot: selectedSlot,

@@ -26,12 +26,12 @@ export function ClinicSetupPage() {
   const { user, clinic, refreshSession, logout } = useAuth();
 
   // Clinic info
-  const [clinicName, setClinicName] = useState(clinic?.name || '');
+  const [clinicName, setClinicName] = useState(clinic?.name || (user as any)?.clinic_name || '');
   const [address, setAddress] = useState(clinic?.address || '');
   const [city, setCity] = useState(clinic?.city || '');
-  const [clinicPhone, setClinicPhone] = useState(clinic?.phone || '');
+  const [clinicPhone, setClinicPhone] = useState(clinic?.phone || user?.phone || '');
   const [clinicEmail, setClinicEmail] = useState(clinic?.email || user?.email || '');
-  const [speciality, setSpeciality] = useState('');
+  const [speciality, setSpeciality] = useState(clinic?.speciality || '');
 
   // Owner info
   const [ownerName, setOwnerName] = useState(user?.name || '');

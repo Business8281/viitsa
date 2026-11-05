@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { 
   User, Mail, Phone, Calendar, Droplets, MapPin, 
-  Heart, AlertTriangle, Check, ArrowRight, Loader2, Sparkles, ShieldCheck, LogOut 
+  Heart, AlertTriangle, Check, CheckCircle2, BadgeCheck, Lock, ArrowRight, Loader2, Users, ShieldCheck, LogOut 
 } from 'lucide-react';
 import { usePatientAuth } from '../lib/patientAuth';
 import { useAuth } from '../lib/auth';
@@ -9,6 +9,7 @@ import { ViitsaLogo } from '../components/ViitsaLogo';
 import { DobCalendarPicker } from '../components/DobCalendarPicker';
 import { isValidGmail, isValid10DigitPhone } from '../screens/AuthLoginPage';
 import { calculateAge, formatDobForInput, parseDateArg, localDateISO } from '../lib/format';
+import { claimPastAppointmentsForPhone } from '../lib/accountLinking';
 
 const BLOOD_GROUPS = ['A+', 'A-', 'B+', 'B-', 'O+', 'O-', 'AB+', 'AB-'] as const;
 const GENDERS = ['Male', 'Female', 'Other'] as const;
@@ -22,6 +23,17 @@ export function PatientOnboardingProfile({ onComplete }: Props) {
   const { account, updateProfile, clinic, logout, refreshAccount } = usePatientAuth();
   const { user, refreshSession } = useAuth();
 
+  const isGenericUser = (n?: string | null) => {
+    if (!n) return true;
+    const clean = n.trim().toLowerCase();
+    return clean === 'user' || clean.startsWith('user ') || clean === 'patient';
+  };
+
+  const getCleanInitialName = (val?: string | null) => {
+    if (!val || isGenericUser(val)) return '';
+    return val.trim();
+  };
+
   const getCleanPhone = (val?: string | null) => {
     if (!val) return '';
     const digits = val.replace(/\D/g, '');
@@ -30,7 +42,7 @@ export function PatientOnboardingProfile({ onComplete }: Props) {
   };
 
   // Auto-fill from login details
-  const [name, setName] = useState(account?.name || user?.name || '');
+  const [name, setName] = useState(getCleanInitialName(account?.name || user?.name));
   const [email, setEmail] = useState(account?.email || user?.email || '');
   const [phone, setPhone] = useState(getCleanPhone(account?.phone || user?.phone));
   
@@ -43,16 +55,12 @@ export function PatientOnboardingProfile({ onComplete }: Props) {
 
   const handleDobChange = (newDob: string) => {
     setDob(newDob);
-    if (newDob && !age) {
-      const computed = calculateAge(newDob);
-      if (computed !== null) {
-        setAge(String(computed));
-      }
+    const computed = calculateAge(newDob);
+    if (computed !== null && !isNaN(computed)) {
+      setAge(String(computed));
+    } else {
+      setAge('');
     }
-  };
-
-  const handleAgeChange = (newAge: string) => {
-    setAge(newAge);
   };
   const [bloodGroup, setBloodGroup] = useState<string>(account?.blood_group || '');
   const [address, setAddress] = useState(account?.address || '');
@@ -76,19 +84,43 @@ export function PatientOnboardingProfile({ onComplete }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
-  // Sync login details if they arrive after mount
+  // Sync login details once on mount without overwriting user edits
+  const hasInitializedName = React.useRef(false);
+  const hasInitializedEmail = React.useRef(false);
+  const hasInitializedPhone = React.useRef(false);
+
   React.useEffect(() => {
-    if (!name && (account?.name || user?.name)) {
-      setName(account?.name || user?.name || '');
+    if (!hasInitializedName.current) {
+      const cleanN = getCleanInitialName(account?.name || user?.name);
+      if (cleanN) {
+        setName(cleanN);
+        hasInitializedName.current = true;
+      }
     }
-    if (!email && (account?.email || user?.email)) {
-      setEmail(account?.email || user?.email || '');
+    if (!hasInitializedEmail.current) {
+      const cleanE = account?.email || user?.email;
+      if (cleanE) {
+        setEmail(cleanE);
+        hasInitializedEmail.current = true;
+      }
     }
-    const cleanP = getCleanPhone(account?.phone || user?.phone);
-    if (!phone && cleanP) {
-      setPhone(cleanP);
+    if (!hasInitializedPhone.current) {
+      const cleanP = getCleanPhone(account?.phone || user?.phone);
+      if (cleanP) {
+        setPhone(cleanP);
+        hasInitializedPhone.current = true;
+      }
     }
-  }, [account, user, name, email, phone]);
+  }, [account, user]);
+
+  // Determine initial sign-in method to highlight verified vs missing fields
+  const isGoogleAuth = Boolean(
+    user?.auth_providers?.includes('google.com') ||
+    (user?.email && !user?.phone)
+  );
+  const isWhatsAppAuth = Boolean(
+    user?.phone && !user?.auth_providers?.includes('google.com')
+  );
 
   // Compute age from DOB
   const computedAge = calculateAge(dob);
@@ -110,22 +142,18 @@ export function PatientOnboardingProfile({ onComplete }: Props) {
     setError(null);
 
     // 1. Mandatory Name
-    if (!name.trim()) {
+    const cleanName = name.trim();
+    if (!cleanName || isGenericUser(cleanName)) {
       setError('Please enter your Full Name.');
       return;
     }
 
-    // 2. Mandatory Email (any valid email)
+    // 2. Google Email (Optional)
     const cleanEmail = email.trim().toLowerCase();
-    if (!cleanEmail) {
-      setError('Email address is required.');
+    if (cleanEmail && !isValidGmail(cleanEmail)) {
+      setError('Please enter a valid email address, or leave it blank.');
       return;
     }
-    if (!isValidGmail(cleanEmail)) {
-      setError('Please enter a valid email address.');
-      return;
-    }
-
 
     // 3. Mandatory 10-digit Phone
     const cleanPhone = phone.replace(/\D/g, '');
@@ -134,7 +162,7 @@ export function PatientOnboardingProfile({ onComplete }: Props) {
       return;
     }
 
-    // 4. Mandatory DOB & Age
+    // 4. Mandatory DOB (Age is automatically computed from DOB)
     if (!dob) {
       setError('Please select your Date of Birth.');
       return;
@@ -146,9 +174,9 @@ export function PatientOnboardingProfile({ onComplete }: Props) {
     }
 
     const calculated = calculateAge(dob);
-    const finalAge = age ? parseInt(age, 10) : calculated;
+    const finalAge = calculated !== null ? calculated : (age ? parseInt(age, 10) : null);
     if (finalAge === null || isNaN(finalAge) || finalAge < 0 || finalAge > 125) {
-      setError('Please provide a valid Age between 0 and 125.');
+      setError('Please select a valid Date of Birth.');
       return;
     }
 
@@ -190,8 +218,8 @@ export function PatientOnboardingProfile({ onComplete }: Props) {
       : selectedConditions.join(', ');
 
     const res = await updateProfile({
-      name: name.trim(),
-      email: cleanEmail,
+      name: cleanName,
+      email: cleanEmail || undefined,
       phone: cleanPhone,
       dob,
       age: finalAge,
@@ -200,6 +228,8 @@ export function PatientOnboardingProfile({ onComplete }: Props) {
       address: address.trim(),
       emergency_contact_name: emergencyName.trim(),
       emergency_contact_phone: cleanEmergPhone,
+      attender_name: emergencyName.trim(),
+      attender_phone: cleanEmergPhone,
       chronic_conditions: conditionsString,
       allergies: allergies.trim() || 'None',
       current_medications: medications.trim() || 'None',
@@ -209,10 +239,15 @@ export function PatientOnboardingProfile({ onComplete }: Props) {
     setSubmitting(false);
 
     if (res.ok) {
+      // Retroactively link any past appointments booked with this mobile number
+      if (cleanPhone) {
+        claimPastAppointmentsForPhone(cleanPhone, account?.account_id || user?.user_id || 'active').catch(() => {});
+      }
+
       // Save completed flag in localStorage
       const profileObj = {
-        name: name.trim(),
-        email: cleanEmail,
+        name: cleanName,
+        email: cleanEmail || '',
         phone: cleanPhone,
         dob,
         age: finalAge,
@@ -221,6 +256,8 @@ export function PatientOnboardingProfile({ onComplete }: Props) {
         address: address.trim(),
         emergency_contact_name: emergencyName.trim(),
         emergency_contact_phone: cleanEmergPhone,
+        attender_name: emergencyName.trim(),
+        attender_phone: cleanEmergPhone,
         chronic_conditions: conditionsString,
         allergies: allergies.trim() || 'None',
         current_medications: medications.trim() || 'None',
@@ -252,48 +289,41 @@ export function PatientOnboardingProfile({ onComplete }: Props) {
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 py-8 px-4 sm:px-6 lg:px-8">
+    <div className="min-h-screen bg-slate-50 py-6 sm:py-10 px-3.5 sm:px-6 lg:px-8">
       <div className="max-w-2xl mx-auto">
         {/* Header */}
-        <div className="text-center mb-8 relative">
-          <div className="absolute right-0 top-0 hidden sm:block">
+        <div className="mb-6 relative">
+          <div className="flex items-center justify-between mb-4">
+            <ViitsaLogo size="md" light={false} />
             <button
               type="button"
               onClick={logout}
-              className="text-slate-500 hover:text-slate-800 transition flex items-center gap-1.5 text-sm font-medium px-3 py-1.5 rounded-lg hover:bg-slate-200/50"
+              className="text-slate-600 hover:text-black transition flex items-center gap-1.5 text-xs sm:text-sm font-semibold px-3 py-1.5 rounded-xl border border-slate-200 hover:bg-slate-100 shadow-xs"
             >
-              <LogOut size={16} /> Logout
+              <LogOut size={15} /> Logout
             </button>
           </div>
-          <div className="flex justify-center mb-3">
-            <ViitsaLogo size="md" light={false} />
+
+          <div className="text-center sm:text-left">
+            <p className="text-xs font-bold uppercase tracking-wider text-[#106EBE] mb-2">
+              Mandatory First-Time Setup
+            </p>
+            <h1 className="text-2xl sm:text-3xl font-extrabold text-black tracking-tight">
+              Complete Your Patient Profile
+            </h1>
+            <p className="mt-1.5 text-xs sm:text-sm text-slate-600 max-w-xl">
+              Welcome to {clinic?.name || 'Viitsa Healthcare'}! Please complete your medical and emergency details to access your patient dashboard and book consultations.
+            </p>
           </div>
-          <div className="sm:hidden flex justify-center mb-4">
-             <button
-              type="button"
-              onClick={logout}
-              className="text-slate-500 hover:text-slate-800 transition flex items-center gap-1.5 text-sm font-medium px-3 py-1.5 rounded-lg hover:bg-slate-200/50"
-            >
-              <LogOut size={16} /> Logout
-            </button>
-          </div>
-          <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-teal-100 text-teal-800 text-xs font-bold uppercase tracking-wider mb-2">
-            <ShieldCheck className="w-3.5 h-3.5 text-teal-600" />
-            <span>Mandatory First-Time Setup</span>
-          </div>
-          <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-900 tracking-tight">
-            Complete Your Patient Profile
-          </h1>
-          <p className="mt-2 text-sm text-slate-600 max-w-lg mx-auto">
-            Welcome to {clinic?.name || 'Viitsa Healthcare'}! Please complete your medical and emergency details to access your patient dashboard and book consultations.
-          </p>
         </div>
 
-        {/* Auto-fill banner */}
-        <div className="mb-6 p-4 rounded-2xl bg-teal-50/80 border border-teal-200 flex items-start gap-3">
-          <Sparkles className="w-5 h-5 text-teal-600 shrink-0 mt-0.5" />
-          <div className="text-xs text-teal-900 leading-relaxed">
-            <span className="font-bold">Auto-filled from your login:</span> Your name, email, and mobile number have been automatically imported. Please review them and fill the remaining mandatory information below.
+        {/* Unified Identity banner */}
+        <div className="mb-6 p-4 rounded-2xl bg-white border border-[#106EBE]/30 shadow-xs flex items-start gap-3.5">
+          <div className="p-2.5 rounded-xl bg-[#106EBE]/10 text-[#106EBE] shrink-0 mt-0.5">
+            <Users className="w-5 h-5 text-[#106EBE]" />
+          </div>
+          <div className="text-xs sm:text-sm text-slate-700 leading-relaxed">
+            <span className="font-bold text-black">Unified Account Access:</span> This profile is linked to your mobile number, Google email, and attendant's contact. Both you and your attendant can sign in seamlessly using any of these credentials.
           </div>
         </div>
 
@@ -309,16 +339,16 @@ export function PatientOnboardingProfile({ onComplete }: Props) {
         <form onSubmit={handleSubmit} className="space-y-6">
           
           {/* SECTION 1: Personal Details */}
-          <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm space-y-4">
-            <h2 className="text-base font-bold text-slate-900 flex items-center gap-2 border-b border-slate-100 pb-3">
-              <User className="w-5 h-5 text-teal-600" />
+          <div className="bg-white rounded-2xl p-4 sm:p-6 border border-slate-200 shadow-sm space-y-4">
+            <h2 className="text-sm sm:text-base font-bold text-black flex items-center gap-2 border-b border-slate-100 pb-3">
+              <User className="w-4 h-4 sm:w-5 sm:h-5 text-[#106EBE]" />
               <span>1. Personal & Contact Information</span>
             </h2>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 sm:gap-4">
               {/* Full Name */}
               <div className="sm:col-span-2">
-                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wide mb-1.5">
+                <label className="block text-xs font-bold text-slate-800 uppercase tracking-wide mb-1.5">
                   Full Name <span className="text-rose-500">*</span>
                 </label>
                 <div className="relative">
@@ -328,38 +358,65 @@ export function PatientOnboardingProfile({ onComplete }: Props) {
                     required
                     value={name}
                     onChange={(e) => setName(e.target.value)}
-                    placeholder="e.g. Ananya Sharma"
-                    className="w-full h-11 pl-10 pr-4 bg-white border border-slate-300 rounded-xl text-sm font-medium text-slate-900 focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/20"
+                    placeholder="e.g. Harshit Sharma"
+                    className="w-full h-11 pl-10 pr-4 bg-white border border-slate-300 rounded-xl text-sm font-medium text-black focus:outline-none focus:border-[#106EBE] focus:ring-2 focus:ring-[#106EBE]/20 transition-all"
                   />
                 </div>
               </div>
 
-              {/* Gmail Address */}
+              {/* Email Address */}
               <div>
-                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wide mb-1.5">
-                  Gmail Address <span className="text-slate-400 font-normal normal-case">(@gmail.com only)</span> <span className="text-rose-500">*</span>
-                </label>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="block text-xs font-bold text-slate-800 uppercase tracking-wide">
+                    Email
+                  </label>
+                  {isGoogleAuth && email ? (
+                    <span className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-700">
+                      <BadgeCheck className="w-4 h-4 text-emerald-600 shrink-0" />
+                      <span>Verified</span>
+                    </span>
+                  ) : null}
+                </div>
                 <div className="relative">
                   <Mail className="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5" />
                   <input
                     type="email"
-                    required
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
-                    pattern="^[a-zA-Z0-9._%+-]+@gmail\.com$"
                     placeholder="name@gmail.com"
-                    className="w-full h-11 pl-10 pr-4 bg-white border border-slate-300 rounded-xl text-sm font-medium text-slate-900 focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/20"
+                    className="w-full h-11 pl-10 pr-4 bg-white border border-slate-300 rounded-xl text-sm font-medium text-black focus:outline-none focus:border-[#106EBE] focus:ring-2 focus:ring-[#106EBE]/20 transition-all"
                   />
                 </div>
+                <p className="mt-1.5 text-xs font-semibold text-slate-800">
+                  {isGoogleAuth
+                    ? 'Google account email used for sign-in.'
+                    : 'Used for appointment confirmations, prescriptions, and digital invoices.'}
+                </p>
               </div>
 
               {/* Mobile Phone */}
               <div>
-                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wide mb-1.5">
-                  Mobile Number <span className="text-slate-400 font-normal normal-case">(10 digits)</span> <span className="text-rose-500">*</span>
-                </label>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="block text-xs font-bold text-slate-800 uppercase tracking-wide">
+                    Mobile Number <span className="text-rose-500">*</span>
+                  </label>
+                  {isWhatsAppAuth && phone ? (
+                    <span className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-700">
+                      <BadgeCheck className="w-4 h-4 text-emerald-600 shrink-0" />
+                      <span>Verified</span>
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-[#106EBE] bg-[#106EBE]/10 px-2 py-0.5 rounded-md border border-[#106EBE]/25">
+                      Required for Mobile OTP
+                    </span>
+                  )}
+                </div>
                 <div className="flex items-center gap-2">
-                  <span className="h-11 px-3 bg-slate-100 border border-slate-300 rounded-xl text-xs font-bold text-slate-700 flex items-center">
+                  <span className={`h-11 px-3 border rounded-xl text-xs font-bold flex items-center shrink-0 ${
+                    isWhatsAppAuth && phone
+                      ? 'bg-slate-100 text-slate-500 border-slate-200'
+                      : 'bg-slate-100 border-slate-300 text-black'
+                  }`}>
                     +91
                   </span>
                   <input
@@ -368,55 +425,67 @@ export function PatientOnboardingProfile({ onComplete }: Props) {
                     maxLength={10}
                     pattern="[0-9]{10}"
                     required
+                    disabled={Boolean(isWhatsAppAuth && phone)}
+                    readOnly={Boolean(isWhatsAppAuth && phone)}
                     value={phone}
                     onKeyDown={(e) => {
+                      if (isWhatsAppAuth && phone) return;
                       if (['Backspace', 'Delete', 'Tab', 'Escape', 'Enter', 'ArrowLeft', 'ArrowRight'].includes(e.key)) return;
                       if (e.ctrlKey || e.metaKey) return;
                       if (!/^\d$/.test(e.key)) e.preventDefault();
                     }}
-                    onChange={(e) => setPhone(e.target.value.replace(/\D/g, '').slice(0, 10))}
+                    onChange={(e) => {
+                      if (isWhatsAppAuth && phone) return;
+                      setPhone(e.target.value.replace(/\D/g, '').slice(0, 10));
+                    }}
                     placeholder="9876543210"
-                    className="flex-1 h-11 px-3.5 bg-white border border-slate-300 rounded-xl text-sm font-medium text-slate-900 font-mono focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/20"
+                    className={`flex-1 min-w-0 h-11 px-3.5 border rounded-xl text-sm font-mono transition-all ${
+                      isWhatsAppAuth && phone
+                        ? 'bg-slate-100 text-slate-600 border-slate-200 cursor-not-allowed select-none font-semibold'
+                        : 'bg-white border-slate-300 text-black font-medium focus:outline-none focus:border-[#106EBE] focus:ring-2 focus:ring-[#106EBE]/20'
+                    }`}
                   />
+                </div>
+                <p className="mt-1.5 text-xs font-semibold text-slate-800">
+                  {isWhatsAppAuth && phone
+                    ? 'Verified login mobile number (locked).'
+                    : '10-digit mobile number for WhatsApp updates and OTP login.'}
+                </p>
+              </div>
+
+              {/* Date of Birth & Age (Column 1) */}
+              <div>
+                <div className="flex items-end gap-2.5">
+                  <div className="flex-1 min-w-0">
+                    <label className="block text-xs font-bold text-slate-800 uppercase tracking-wide mb-1.5">
+                      Date of Birth (DOB) <span className="text-rose-500">*</span>
+                    </label>
+                    <DobCalendarPicker
+                      value={dob}
+                      onChange={handleDobChange}
+                      placeholder="DD / MM / YYYY"
+                    />
+                  </div>
+
+                  <div className="w-20 sm:w-24 shrink-0">
+                    <label className="block text-xs font-bold text-slate-800 uppercase tracking-wide mb-1.5 text-center whitespace-nowrap">
+                      Age <span className="text-rose-500">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      readOnly
+                      tabIndex={-1}
+                      value={computedAge !== null ? String(computedAge) : (age ? String(age) : '')}
+                      placeholder="—"
+                      className="w-full h-11 text-center bg-slate-50 border border-slate-300 rounded-xl text-base font-bold text-black select-none cursor-default font-mono"
+                    />
+                  </div>
                 </div>
               </div>
 
-              {/* Date of Birth & Age */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                 <div>
-                   <label className="block text-xs font-bold text-slate-700 uppercase tracking-wide mb-1.5">
-                     Date of Birth (DOB) <span className="text-rose-500">*</span>
-                   </label>
-                   <DobCalendarPicker
-                     value={dob}
-                     onChange={handleDobChange}
-                     placeholder="Select Date of Birth"
-                   />
-                 </div>
-
-                 <div>
-                   <label className="block text-xs font-bold text-slate-700 uppercase tracking-wide mb-1.5">
-                     Age (Years) <span className="text-rose-500">*</span>
-                   </label>
-                   <div className="relative">
-                     <User className="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5" />
-                     <input
-                       type="number"
-                       required
-                       min={0}
-                       max={125}
-                       value={age}
-                       onChange={(e) => handleAgeChange(e.target.value)}
-                       placeholder="e.g. 28"
-                       className="w-full h-11 pl-10 pr-4 bg-white border border-slate-300 rounded-xl text-sm font-medium text-slate-900 focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/20 font-mono"
-                     />
-                   </div>
-                 </div>
-               </div>
-
-              {/* Gender */}
+              {/* Gender (Column 2) */}
               <div>
-                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wide mb-1.5">
+                <label className="block text-xs font-bold text-slate-800 uppercase tracking-wide mb-1.5">
                   Gender <span className="text-rose-500">*</span>
                 </label>
                 <div className="grid grid-cols-3 gap-2">
@@ -425,9 +494,9 @@ export function PatientOnboardingProfile({ onComplete }: Props) {
                       key={g}
                       type="button"
                       onClick={() => setGender(g)}
-                      className={`h-11 rounded-xl text-xs font-bold border transition-all ${
+                      className={`h-11 rounded-xl text-xs sm:text-sm font-bold border transition-all ${
                         gender === g
-                          ? 'bg-teal-600 border-teal-600 text-white shadow-sm'
+                          ? 'bg-[#106EBE] border-[#106EBE] text-white shadow-sm'
                           : 'bg-white border-slate-200 text-slate-700 hover:border-slate-300'
                       }`}
                     >
@@ -440,20 +509,20 @@ export function PatientOnboardingProfile({ onComplete }: Props) {
 
             {/* Blood Group */}
             <div>
-              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wide mb-1.5 flex items-center gap-1.5">
-                <Droplets className="w-3.5 h-3.5 text-rose-500" />
+              <label className="block text-xs font-bold text-slate-800 uppercase tracking-wide mb-1.5 flex items-center gap-1.5">
+                <Droplets className="w-3.5 h-3.5 text-[#106EBE]" />
                 <span>Blood Group <span className="text-rose-500">*</span></span>
               </label>
-              <div className="grid grid-cols-4 sm:grid-cols-8 gap-2">
+              <div className="grid grid-cols-4 sm:grid-cols-8 gap-1.5 sm:gap-2">
                 {BLOOD_GROUPS.map((bg) => (
                   <button
                     key={bg}
                     type="button"
                     onClick={() => setBloodGroup(bg)}
-                    className={`h-10 rounded-xl text-xs font-bold border transition-all ${
+                    className={`h-10 rounded-xl text-xs sm:text-sm font-bold border transition-all ${
                       bloodGroup === bg
-                        ? 'bg-rose-600 border-rose-600 text-white shadow-sm'
-                        : 'bg-white border-slate-200 text-slate-700 hover:border-slate-300'
+                        ? 'bg-[#106EBE] border-[#106EBE] text-white shadow-sm'
+                        : 'bg-white border-slate-200 text-slate-700 hover:border-[#106EBE]/40'
                     }`}
                   >
                     {bg}
@@ -464,8 +533,8 @@ export function PatientOnboardingProfile({ onComplete }: Props) {
 
             {/* Residential Address */}
             <div>
-              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wide mb-1.5 flex items-center gap-1.5">
-                <MapPin className="w-3.5 h-3.5 text-teal-600" />
+              <label className="block text-xs font-bold text-slate-800 uppercase tracking-wide mb-1.5 flex items-center gap-1.5">
+                <MapPin className="w-3.5 h-3.5 text-[#106EBE]" />
                 <span>Residential Address <span className="text-rose-500">*</span></span>
               </label>
               <textarea
@@ -474,39 +543,44 @@ export function PatientOnboardingProfile({ onComplete }: Props) {
                 value={address}
                 onChange={(e) => setAddress(e.target.value)}
                 placeholder="House/Flat No., Street, Area, City, Pin Code"
-                className="w-full p-3 bg-white border border-slate-300 rounded-xl text-sm font-medium text-slate-900 focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/20 resize-none"
+                className="w-full p-3 bg-white border border-slate-300 rounded-xl text-sm font-medium text-black focus:outline-none focus:border-[#106EBE] focus:ring-2 focus:ring-[#106EBE]/20 resize-none transition-all"
               />
             </div>
           </div>
 
-          {/* SECTION 2: Emergency Contact */}
-          <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm space-y-4">
-            <h2 className="text-base font-bold text-slate-900 flex items-center gap-2 border-b border-slate-100 pb-3">
-              <Phone className="w-5 h-5 text-rose-600" />
-              <span>2. Emergency Contact Details</span>
-            </h2>
+          {/* SECTION 2: Patient Attendant & Emergency Contact */}
+          <div className="bg-white rounded-2xl p-4 sm:p-6 border border-slate-200 shadow-sm space-y-4">
+            <div className="border-b border-slate-100 pb-3">
+              <h2 className="text-sm sm:text-base font-bold text-black flex items-center gap-2">
+                <Phone className="w-4 h-4 sm:w-5 sm:h-5 text-[#106EBE]" />
+                <span>2. Patient Attendant & Emergency Contact</span>
+              </h2>
+              <p className="mt-1 text-xs text-slate-500">
+                Your attendant or family member can use their own mobile number to log in via OTP and access your appointments, records, and prescriptions.
+              </p>
+            </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 sm:gap-4">
               <div>
-                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wide mb-1.5">
-                  Emergency Contact Name <span className="text-rose-500">*</span>
+                <label className="block text-xs font-bold text-slate-800 uppercase tracking-wide mb-1.5">
+                  Attendant / Contact Full Name <span className="text-rose-500">*</span>
                 </label>
                 <input
                   type="text"
                   required
                   value={emergencyName}
                   onChange={(e) => setEmergencyName(e.target.value)}
-                  placeholder="e.g. Ramesh Sharma (Father / Spouse)"
-                  className="w-full h-11 px-3.5 bg-white border border-slate-300 rounded-xl text-sm font-medium text-slate-900 focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/20"
+                  placeholder="e.g. Ramesh Sharma (Brother / Spouse / Friend)"
+                  className="w-full h-11 px-3.5 bg-white border border-slate-300 rounded-xl text-sm font-medium text-black focus:outline-none focus:border-[#106EBE] focus:ring-2 focus:ring-[#106EBE]/20 transition-all"
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wide mb-1.5">
-                  Emergency Contact Phone <span className="text-slate-400 font-normal normal-case">(10 digits)</span> <span className="text-rose-500">*</span>
+                <label className="block text-xs font-bold text-slate-800 uppercase tracking-wide mb-1.5">
+                  Attendant Mobile Number <span className="text-slate-400 font-normal normal-case">(10 digits)</span> <span className="text-rose-500">*</span>
                 </label>
                 <div className="flex items-center gap-2">
-                  <span className="h-11 px-3 bg-slate-100 border border-slate-300 rounded-xl text-xs font-bold text-slate-700 flex items-center">
+                  <span className="h-11 px-3 bg-slate-100 border border-slate-300 rounded-xl text-xs font-bold text-black flex items-center shrink-0">
                     +91
                   </span>
                   <input
@@ -523,32 +597,35 @@ export function PatientOnboardingProfile({ onComplete }: Props) {
                     }}
                     onChange={(e) => setEmergencyPhone(e.target.value.replace(/\D/g, '').slice(0, 10))}
                     placeholder="9876543210"
-                    className="flex-1 h-11 px-3.5 bg-white border border-slate-300 rounded-xl text-sm font-medium text-slate-900 font-mono focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/20"
+                    className="flex-1 min-w-0 h-11 px-3.5 bg-white border border-slate-300 rounded-xl text-sm font-medium text-black font-mono focus:outline-none focus:border-[#106EBE] focus:ring-2 focus:ring-[#106EBE]/20 transition-all"
                   />
                 </div>
+                <p className="mt-1.5 text-xs font-semibold text-slate-800">
+                  Your attendant can log in using this mobile number to view and manage your care.
+                </p>
               </div>
             </div>
           </div>
 
           {/* SECTION 3: Medical Background */}
-          <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm space-y-4">
-            <h2 className="text-base font-bold text-slate-900 flex items-center gap-2 border-b border-slate-100 pb-3">
-              <Heart className="w-5 h-5 text-teal-600" />
+          <div className="bg-white rounded-2xl p-4 sm:p-6 border border-slate-200 shadow-sm space-y-4">
+            <h2 className="text-sm sm:text-base font-bold text-black flex items-center gap-2 border-b border-slate-100 pb-3">
+              <Heart className="w-4 h-4 sm:w-5 sm:h-5 text-[#106EBE]" />
               <span>3. Medical History & Allergies</span>
             </h2>
 
             {/* Chronic Conditions */}
             <div>
-              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wide mb-2">
+              <label className="block text-xs font-bold text-slate-800 uppercase tracking-wide mb-2">
                 Chronic Health Conditions <span className="text-rose-500">*</span>
               </label>
-              <div className="flex flex-wrap gap-2 mb-2">
+              <div className="flex flex-wrap gap-1.5 sm:gap-2 mb-2">
                 <button
                   type="button"
                   onClick={handleNoneConditions}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition-colors ${
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-all ${
                     hasNoConditions
-                      ? 'bg-teal-600 border-teal-600 text-white'
+                      ? 'bg-[#106EBE] border-[#106EBE] text-white shadow-xs'
                       : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
                   }`}
                 >
@@ -561,9 +638,9 @@ export function PatientOnboardingProfile({ onComplete }: Props) {
                       key={cond}
                       type="button"
                       onClick={() => toggleCondition(cond)}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition-colors ${
+                      className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-all ${
                         isSelected
-                          ? 'bg-teal-600 border-teal-600 text-white'
+                          ? 'bg-[#106EBE] border-[#106EBE] text-white shadow-xs'
                           : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
                       }`}
                     >
@@ -576,7 +653,7 @@ export function PatientOnboardingProfile({ onComplete }: Props) {
 
             {/* Known Allergies */}
             <div>
-              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wide mb-1.5">
+              <label className="block text-xs font-bold text-slate-800 uppercase tracking-wide mb-1.5">
                 Known Drug / Food Allergies <span className="text-rose-500">*</span>
               </label>
               <input
@@ -585,13 +662,13 @@ export function PatientOnboardingProfile({ onComplete }: Props) {
                 value={allergies}
                 onChange={(e) => setAllergies(e.target.value)}
                 placeholder="e.g. Penicillin, Peanuts, Sulfa (or type 'None')"
-                className="w-full h-11 px-3.5 bg-white border border-slate-300 rounded-xl text-sm font-medium text-slate-900 focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/20"
+                className="w-full h-11 px-3.5 bg-white border border-slate-300 rounded-xl text-sm font-medium text-black focus:outline-none focus:border-[#106EBE] focus:ring-2 focus:ring-[#106EBE]/20 transition-all"
               />
             </div>
 
             {/* Current Medications */}
             <div>
-              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wide mb-1.5">
+              <label className="block text-xs font-bold text-slate-800 uppercase tracking-wide mb-1.5">
                 Current Medications
               </label>
               <input
@@ -599,7 +676,7 @@ export function PatientOnboardingProfile({ onComplete }: Props) {
                 value={medications}
                 onChange={(e) => setMedications(e.target.value)}
                 placeholder="e.g. Metformin 500mg, Thyronorm (or 'None')"
-                className="w-full h-11 px-3.5 bg-white border border-slate-300 rounded-xl text-sm font-medium text-slate-900 focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/20"
+                className="w-full h-11 px-3.5 bg-white border border-slate-300 rounded-xl text-sm font-medium text-black focus:outline-none focus:border-[#106EBE] focus:ring-2 focus:ring-[#106EBE]/20 transition-all"
               />
             </div>
           </div>
@@ -608,7 +685,7 @@ export function PatientOnboardingProfile({ onComplete }: Props) {
           <button
             type="submit"
             disabled={submitting}
-            className="w-full h-12 flex items-center justify-center gap-2 px-6 rounded-xl text-sm font-bold text-white bg-teal-600 hover:bg-teal-700 transition-all shadow-md hover:shadow-lg disabled:opacity-50 active:scale-[0.99]"
+            className="w-full h-12 sm:h-13 flex items-center justify-center gap-2 px-6 rounded-xl text-sm sm:text-base font-bold text-white bg-[#106EBE] hover:bg-[#0D5A9C] transition-all shadow-md hover:shadow-lg disabled:opacity-50 active:scale-[0.99]"
           >
             {submitting ? (
               <>
@@ -617,9 +694,9 @@ export function PatientOnboardingProfile({ onComplete }: Props) {
               </>
             ) : (
               <>
-                <Check className="w-4 h-4 text-white" />
+                <Check className="w-4 h-4 text-[#0FFCBE]" />
                 <span>Save Profile & Open Dashboard</span>
-                <ArrowRight className="w-4 h-4 text-white" />
+                <ArrowRight className="w-4 h-4 text-[#0FFCBE]" />
               </>
             )}
           </button>

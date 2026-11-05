@@ -41,6 +41,8 @@ try {
     localCache: persistentLocalCache({
       tabManager: persistentMultipleTabManager(),
     }),
+    ignoreUndefinedProperties: true,
+    experimentalForceLongPolling: true,
   });
 } catch {
   // Graceful fallback for environments with locked IndexedDB or existing instances

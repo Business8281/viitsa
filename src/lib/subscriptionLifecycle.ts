@@ -4,6 +4,11 @@ import { db, functions } from './firebase';
 import type { Clinic } from './types';
 import { parseDateArg } from './format';
 import { buildSubscriptionPlanChangeScheduledHtml, buildSubscriptionCancelledHtml } from './emailService';
+import {
+  sendWhatsAppClinicPlanUpgraded,
+  sendWhatsAppClinicPlanDowngraded,
+  sendWhatsAppClinicSubCancelled,
+} from './whatsappClientService';
 
 export interface SubscriptionPeriodInfo {
   date: Date;
@@ -252,6 +257,47 @@ export async function scheduleSubscriptionPlanChange(
       }
     }
 
+    // 4. Dispatch WhatsApp notification (viitsa_clinic_plan_upgraded or viitsa_clinic_plan_downgraded)
+    const clinicPhone = (clinic as any)?.phone || (clinic as any)?.contact_phone || user?.phone;
+    if (clinicPhone) {
+      try {
+        const planPricing: Record<string, Record<string, number>> = {
+          solo: { monthly: 2999, annual: 29990 },
+          clinic: { monthly: 5999, annual: 59990 },
+          multispecialty: { monthly: 11999, annual: 119990 },
+        };
+        const planAmount = planPricing[targetTier.toLowerCase()]?.[targetCycle.toLowerCase()] || 5999;
+        if (type === 'upgrade') {
+          await sendWhatsAppClinicPlanUpgraded({
+            to: clinicPhone,
+            clinicId: clinic.clinic_id,
+            adminName: user?.name || clinic.owner_name || 'Doctor',
+            clinicName: clinic.name,
+            newPlan: `${targetTier.toUpperCase()} Plan`,
+            previousPlan: `${currentTier.toUpperCase()} Plan`,
+            effectiveDate: periodInfo.formatted,
+            newAmount: planAmount,
+            supportPhone: '+91 73961 11081',
+          });
+        } else {
+          await sendWhatsAppClinicPlanDowngraded({
+            to: clinicPhone,
+            clinicId: clinic.clinic_id,
+            adminName: user?.name || clinic.owner_name || 'Doctor',
+            clinicName: clinic.name,
+            currentPlan: `${currentTier.toUpperCase()} Plan`,
+            downgradedPlan: `${targetTier.toUpperCase()} Plan`,
+            effectiveDate: periodInfo.formatted,
+            cycleEndDate: periodInfo.formatted,
+            newAmount: planAmount,
+            supportPhone: '+91 73961 11081',
+          });
+        }
+      } catch (waErr) {
+        console.warn('Could not dispatch WhatsApp plan change template:', waErr);
+      }
+    }
+
     return { ok: true, effectiveDate: periodInfo.formatted };
   } catch (err: any) {
     console.error('Error scheduling plan change:', err);
@@ -365,6 +411,26 @@ export async function scheduleSubscriptionCancellation(
         });
       } catch (emErr) {
         console.warn('Could not dispatch cancellation schedule email:', emErr);
+      }
+    }
+
+    // 5. Dispatch WhatsApp cancellation template (viitsa_clinic_sub_cancelled)
+    const clinicPhone = (clinic as any)?.phone || (clinic as any)?.contact_phone || user?.phone;
+    if (clinicPhone) {
+      try {
+        await sendWhatsAppClinicSubCancelled({
+          to: clinicPhone,
+          clinicId: clinic.clinic_id,
+          adminName: user?.name || clinic.owner_name || 'Doctor',
+          clinicName: clinic.name,
+          cancelledPlan: `${(clinic.subscription_plan || 'Clinic').toUpperCase()} Plan`,
+          accessDate: periodInfo.formatted,
+          effectiveDate: periodInfo.formatted,
+          endDate: periodInfo.formatted,
+          supportPhone: '+91 73961 11081',
+        });
+      } catch (waErr) {
+        console.warn('Could not dispatch WhatsApp cancellation template:', waErr);
       }
     }
 

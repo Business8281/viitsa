@@ -83,6 +83,7 @@ export interface User {
   display_id?: string;
   clinic_name?: string;
   phone: string | null;
+  phone_verified?: boolean;
   specialisation: string | null;
   designation?: string | null;
   experience_years?: number | null;
@@ -122,6 +123,7 @@ export interface Patient {
   dob?: string | null;
   gender: 'Male' | 'Female' | 'Other' | null;
   phone: string | null;
+  phone_verified?: boolean;
   email: string | null;
   blood_group: string | null;
   address: string | null;

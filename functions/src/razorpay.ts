@@ -5,6 +5,15 @@ import * as crypto from "crypto";
 import * as nodemailer from "nodemailer";
 import PDFDocument from "pdfkit";
 import { generateSubscriptionInvoicePdf } from "./invoicePdf";
+import {
+  sendClinicTrialActivated,
+  sendClinicSubActivated,
+  sendClinicPaymentSuccess,
+  sendClinicPaymentFailed,
+  sendClinicSubCancelled,
+  sendClinicSubDeactivated,
+  sendClinicSubInvoice,
+} from "./whatsappService";
 
 const getTransporter = () => {
   const user = process.env.TITAN_EMAIL || "support@viitsa.com";
@@ -380,6 +389,24 @@ export const cancelClinicSubscription = onCall({ region: "asia-south1" }, async 
       }
     }
 
+    // Dispatch WhatsApp template viitsa_clinic_sub_cancelled
+    const clinicPhone = clinicData.phone || clinicData.contact_phone;
+    if (clinicPhone) {
+      try {
+        await sendClinicSubCancelled({
+          to: clinicPhone,
+          adminName: clinicData.owner_name || 'Doctor',
+          clinicName: clinicData.name || 'Clinic',
+          cancelledPlan: `${(clinicData.subscription_plan || 'Clinic').toUpperCase()} Plan`,
+          effectiveDate: formattedPeriodEnd,
+          supportPhone: '+91 73961 11081',
+          clinicId,
+        });
+      } catch (waErr) {
+        console.warn("Could not dispatch WhatsApp cancellation template:", waErr);
+      }
+    }
+
     return { success: true, cancelled_at: nowIso };
   } catch (err: any) {
     console.error("Error cancelling clinic subscription:", err);
@@ -545,6 +572,46 @@ export const razorpayWebhook = onRequest(async (req, res) => {
             console.warn("Could not send subscription activation email:", e);
           }
         }
+
+        // Dispatch WhatsApp notification to clinic
+        try {
+          const clinicDoc = await getDb().collection("clinics").doc(clinicId).get();
+          const clinicData = clinicDoc.data() || {};
+          const cPhone = clinicData.phone || clinicData.contact_phone || sub.customer_details?.contact;
+          if (cPhone) {
+            if (isTrial) {
+              await sendClinicTrialActivated({
+                to: cPhone,
+                adminName: clinicData.owner_name || 'Doctor',
+                clinicName: clinicData.name || 'Clinic',
+                planTier: `${tier.toUpperCase()} Plan`,
+                trialValidUntil: new Date(trialEndsAt!).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }),
+                supportPhone: '+91 73961 11081',
+                clinicId,
+              });
+            } else {
+              const planPricing: Record<string, Record<string, number>> = {
+                solo: { monthly: 2999, annual: 29990 },
+                clinic: { monthly: 5999, annual: 59990 },
+                multispecialty: { monthly: 11999, annual: 119990 },
+              };
+              const planAmount = planPricing[tier]?.[cycle] || 5999;
+              await sendClinicSubActivated({
+                to: cPhone,
+                adminName: clinicData.owner_name || 'Doctor',
+                clinicName: clinicData.name || 'Clinic',
+                planName: `${tier.toUpperCase()} Plan`,
+                billingCycle: cycle.toUpperCase(),
+                amountPaid: planAmount,
+                nextRenewalDate: new Date(Date.now() + (cycle === 'annual' ? 365 : 30) * 86400000).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }),
+                supportPhone: '+91 73961 11081',
+                clinicId,
+              });
+            }
+          }
+        } catch (waErr) {
+          console.warn("Could not dispatch WhatsApp subscription activation:", waErr);
+        }
       }
     } else if (event.event === "subscription.charged") {
       const sub = event.payload.subscription.entity;
@@ -656,23 +723,111 @@ export const razorpayWebhook = onRequest(async (req, res) => {
             console.warn("Could not send renewal email:", e);
           }
         }
+
+        // Dispatch WhatsApp renewal success
+        try {
+          const clinicDoc = await getDb().collection("clinics").doc(clinicId).get();
+          const clinicData = clinicDoc.data() || {};
+          const cPhone = clinicData.phone || clinicData.contact_phone || sub.customer_details?.contact;
+          if (cPhone) {
+            const planPricing: Record<string, Record<string, number>> = {
+              solo: { monthly: 2999, annual: 29990 },
+              clinic: { monthly: 5999, annual: 59990 },
+              multispecialty: { monthly: 11999, annual: 119990 },
+            };
+            const chargedAmount = payment?.amount ? (payment.amount / 100) : (planPricing[tier]?.[cycle] || 5999);
+            await sendClinicPaymentSuccess({
+              to: cPhone,
+              adminName: clinicData.owner_name || 'Doctor',
+              clinicName: clinicData.name || 'Clinic',
+              planName: `${tier.toUpperCase()} Plan Renewal`,
+              amount: chargedAmount,
+              transactionId: payment?.id || sub.id,
+              activeUntilDate: new Date(Date.now() + (cycle === 'annual' ? 365 : 30) * 86400000).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }),
+              supportPhone: '+91 73961 11081',
+              clinicId,
+            });
+          }
+        } catch (waErr) {
+          console.warn("Could not dispatch WhatsApp renewal success:", waErr);
+        }
       }
     } else if (event.event === "subscription.cancelled" || event.event === "subscription.halted") {
       const sub = event.payload.subscription.entity;
       const clinicId = sub.notes?.clinic_id;
       
       if (clinicId) {
+        const isHalted = event.event === "subscription.halted";
         const query = await getDb().collection("subscriptions").where("razorpay_subscription_id", "==", sub.id).get();
         const batch = getDb().batch();
         query.docs.forEach(doc => {
-          batch.update(doc.ref, { status: "cancelled" });
+          batch.update(doc.ref, { status: isHalted ? "deactivated" : "cancelled" });
         });
         await batch.commit();
 
         await getDb().collection("clinics").doc(clinicId).update({
-          subscription_status: "cancelled",
-          subscription_cancelled_at: new Date().toISOString()
+          subscription_status: isHalted ? "deactivated" : "cancelled",
+          subscription_cancelled_at: isHalted ? null : new Date().toISOString(),
+          subscription_deactivated_at: isHalted ? new Date().toISOString() : null,
         });
+
+        // Dispatch WhatsApp template
+        try {
+          const clinicDoc = await getDb().collection("clinics").doc(clinicId).get();
+          const clinicData = clinicDoc.data() || {};
+          const cPhone = clinicData.phone || clinicData.contact_phone || sub.customer_details?.contact;
+          if (cPhone) {
+            if (isHalted) {
+              await sendClinicSubDeactivated({
+                to: cPhone,
+                adminName: clinicData.owner_name || 'Doctor',
+                clinicName: clinicData.name || 'Clinic',
+                planName: `${(clinicData.subscription_plan || 'Clinic').toUpperCase()} Plan`,
+                deactivationDate: new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }),
+                status: 'Deactivated - Overdue',
+                supportPhone: '+91 73961 11081',
+                clinicId,
+              });
+            } else {
+              await sendClinicSubCancelled({
+                to: cPhone,
+                adminName: clinicData.owner_name || 'Doctor',
+                clinicName: clinicData.name || 'Clinic',
+                cancelledPlan: `${(clinicData.subscription_plan || 'Clinic').toUpperCase()} Plan`,
+                effectiveDate: new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }),
+                supportPhone: '+91 73961 11081',
+                clinicId,
+              });
+            }
+          }
+        } catch (waErr) {
+          console.warn("Could not dispatch WhatsApp cancellation/deactivation template:", waErr);
+        }
+      }
+    } else if (event.event === "payment.failed") {
+      const payment = event.payload.payment?.entity;
+      const clinicId = payment?.notes?.clinic_id;
+      if (clinicId) {
+        try {
+          const clinicDoc = await getDb().collection("clinics").doc(clinicId).get();
+          const clinicData = clinicDoc.data() || {};
+          const cPhone = clinicData.phone || clinicData.contact_phone || payment?.contact;
+          if (cPhone) {
+            await sendClinicPaymentFailed({
+              to: cPhone,
+              adminName: clinicData.owner_name || 'Doctor',
+              clinicName: clinicData.name || 'Clinic',
+              planName: `${(clinicData.subscription_plan || 'Clinic').toUpperCase()} Plan`,
+              dueAmount: payment?.amount ? (payment.amount / 100) : 5999,
+              reason: payment?.error_description || 'Card expired or mandate declined',
+              gracePeriodEnd: new Date(Date.now() + 7 * 86400000).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }),
+              supportPhone: '+91 73961 11081',
+              clinicId,
+            });
+          }
+        } catch (waErr) {
+          console.warn("Could not dispatch WhatsApp payment failed template:", waErr);
+        }
       }
     } else if (event.event === "payment_link.paid") {
       const plink = event.payload.payment_link?.entity;
@@ -926,6 +1081,26 @@ export const razorpayWebhook = onRequest(async (req, res) => {
               }
             ]
           });
+
+          // Dispatch WhatsApp template viitsa_clinic_sub_invoice
+          const contact = invoice.customer_details?.contact;
+          if (contact) {
+            try {
+              await sendClinicSubInvoice({
+                to: contact,
+                adminName: invoice.customer_details?.name || 'Doctor',
+                clinicName: invoice.customer_details?.name || 'Clinic',
+                invoiceNo: invoiceId,
+                planName: 'Clinic Pro Subscription',
+                totalAmount: amountStr,
+                invoiceDate: new Date(invoice.issued_at * 1000 || Date.now()).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }),
+                supportPhone: '+91 73961 11081',
+                clinicId,
+              });
+            } catch (waErr) {
+              console.warn("Could not dispatch WhatsApp invoice template:", waErr);
+            }
+          }
         } catch (e) {
           console.error("Error sending invoice email", e);
         }

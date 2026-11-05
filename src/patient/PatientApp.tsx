@@ -20,6 +20,7 @@ import { auth, db } from '../lib/firebase';
 import { collection, query, where, onSnapshot, doc, updateDoc } from 'firebase/firestore';
 import type { TriageSummary } from '../lib/aiService';
 import { PATIENT_ROLES, CLINIC_ROLES, ADMIN_ROLES } from '../lib/types';
+import { QRWalkinPage } from '../screens/QRWalkinPage';
 
 type PatientScreen = 'landing' | 'auth' | 'app';
 
@@ -67,11 +68,16 @@ function PatientInner() {
     }
   }, [account, screen]);
 
-  // Check whether patient has genuinely completed onboarding profile
+  // Check whether patient has genuinely completed onboarding profile (phone linked + profile details completed; email is optional)
   const isProfileComplete = Boolean(
-    user?.profile_completed === true || 
-    account?.profile_completed === true ||
-    (account?.dob || account?.gender || account?.blood_group || account?.address)
+    (user?.profile_completed === true || account?.profile_completed === true) &&
+    (user?.phone || account?.phone)
+  ) || Boolean(
+    (account?.dob || (account as any)?.age) &&
+    account?.gender &&
+    account?.blood_group &&
+    account?.address &&
+    (user?.phone || account?.phone)
   );
 
   const handleBookWithSummary = (summary: TriageSummary) => {
@@ -130,21 +136,17 @@ function PatientInner() {
     }
   }
 
-  // If signed out or not logged in, redirect to unified login page
-  if (!guestMode && !user && (!account || !account.otp_verified || screen === 'auth')) {
-    return <Navigate to="/login" replace />;
-  }
+  // Check if patient scanned a clinic QR code (?clinic=...)
+  const currentParams = new URLSearchParams(window.location.search);
+  const scanClinicId = currentParams.get('clinic') || clinicId;
 
-  // If email user is unverified, restrict access until verification
-  if (!guestMode && user) {
-    const isUnverified = Boolean(
-      auth.currentUser &&
-      !auth.currentUser.emailVerified &&
-      auth.currentUser.providerData.some(p => p.providerId === 'password')
-    );
-    if (isUnverified) {
-      return <Navigate to="/login?unverified=true" replace />;
+  // If signed out or not logged in:
+  if (!guestMode && !user && (!account || !account.otp_verified || screen === 'auth')) {
+    // When visiting via a clinic QR scan link, present the emergency walkin booking form directly
+    if (scanClinicId) {
+      return <QRWalkinPage clinicIdOverride={scanClinicId} />;
     }
+    return <Navigate to="/login" replace />;
   }
 
   // While user is logged in as patient but account state is finalizing

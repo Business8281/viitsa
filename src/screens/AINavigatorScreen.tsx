@@ -113,10 +113,29 @@ export function AINavigatorScreen() {
   useEffect(() => {
     if (!selectedPatient) return;
     const fetchVitals = async () => {
-      const q = query(collection(db, 'vitals'), where('patient_id', '==', selectedPatient.patient_id), orderBy('recorded_at', 'desc'), limit(1));
-      const snap = await getDocs(q);
-      if (!snap.empty) setVitals(snap.docs[0].data() as Vital);
-      else setVitals(null);
+      try {
+        const q = query(collection(db, 'vitals'), where('patient_id', '==', selectedPatient.patient_id), orderBy('recorded_at', 'desc'), limit(1));
+        const snap = await getDocs(q);
+        if (!snap.empty) setVitals(snap.docs[0].data() as Vital);
+        else setVitals(null);
+      } catch (err: any) {
+        // Fallback: in case composite index is still building or pending deployment,
+        // query by patient_id and sort in-memory so the AI Navigator does not crash.
+        try {
+          const fallbackQ = query(collection(db, 'vitals'), where('patient_id', '==', selectedPatient.patient_id));
+          const snap = await getDocs(fallbackQ);
+          if (!snap.empty) {
+            const sorted = snap.docs
+              .map((d) => d.data() as Vital)
+              .sort((a, b) => (b.recorded_at || '').localeCompare(a.recorded_at || ''));
+            setVitals(sorted[0]);
+          } else {
+            setVitals(null);
+          }
+        } catch {
+          setVitals(null);
+        }
+      }
     };
     fetchVitals();
     const latestAppt = appointments.filter((a) => a.patient_id === selectedPatient.patient_id)

@@ -271,13 +271,13 @@ function PatientFormModal({
                 Age {form.dob && <span className="text-[10px] text-teal-700 font-normal">(Auto-calculated)</span>}
               </label>
               <input
-                type="number"
-                min="0"
-                max="125"
-                className="input"
-                placeholder="Age in years"
-                value={form.age}
-                onChange={(e) => handleAgeChange(e.target.value)}
+                type="text"
+                disabled
+                readOnly
+                tabIndex={-1}
+                className="input font-mono bg-slate-100 text-slate-700 font-semibold cursor-not-allowed select-none border-slate-200"
+                placeholder="Computed from DOB"
+                value={form.age ? `${form.age} yrs` : '—'}
               />
             </div>
             <div>

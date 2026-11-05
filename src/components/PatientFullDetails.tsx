@@ -8,7 +8,7 @@ import {
   MapPin, Phone, Mail, Droplet, Sparkles, Printer, 
   User, Check, ChevronRight, AlertCircle, FileCheck, Stethoscope,
   UploadCloud, Upload, Plus, Trash2, Edit3, X, Loader2,
-  Building2, ShieldCheck, ShieldAlert
+  Building2, ShieldCheck, ShieldAlert, MessageCircle
 } from 'lucide-react';
 import { formatDate, formatTime, calculateAge, formatDobForInput, localDateISO } from '../lib/format';
 import { EmptyState } from './ui';
@@ -20,6 +20,7 @@ import { PrescriptionView } from './PrescriptionView';
 import { WritePrescriptionModal } from './WritePrescriptionModal';
 import { InvoiceView } from './InvoiceView';
 import { logClinicalRecordCreated } from '../lib/auditLogger';
+import { sendWhatsAppFollowupDueViaAPI } from '../lib/whatsappClientService';
 
 interface PatientFullDetailsProps {
   patientId: string;
@@ -171,10 +172,13 @@ export function PatientFullDetails({ patientId, patientName, patient }: PatientF
     return raw.toLowerCase().trim() || null;
   }, [patient?.email, liveProfile?.email]);
 
+  const patientDisplayName = useMemo(() => {
+    return (patient?.name || patient?.full_name || liveProfile?.name || patientName || '').trim();
+  }, [patient?.name, patient?.full_name, liveProfile?.name, patientName]);
+
   const targetName = useMemo(() => {
-    const raw = patient?.name || patient?.full_name || patientName || liveProfile?.name || '';
-    return raw.toLowerCase().trim() || null;
-  }, [patient?.name, patient?.full_name, patientName, liveProfile?.name]);
+    return patientDisplayName.toLowerCase() || null;
+  }, [patientDisplayName]);
 
   const matchesPatient = useCallback((item: any) => {
     if (!item) return false;
@@ -426,6 +430,37 @@ export function PatientFullDetails({ patientId, patientName, patient }: PatientF
   const currentProfile = liveProfile || patient || {};
   const isReadOnly = currentProfile?.status === 'left';
   const viewingClinicId = clinic?.clinic_id;
+
+  const [sendingFollowupId, setSendingFollowupId] = useState<string | null>(null);
+
+  const handleSendFollowupDueWhatsApp = async (cons: any) => {
+    const recipientPhone = liveProfile?.phone || currentProfile?.phone || patient?.phone || cons.patient_phone;
+    if (!recipientPhone) {
+      toast('No valid patient phone number found to send WhatsApp reminder.', 'error');
+      return;
+    }
+    setSendingFollowupId(cons.id);
+    try {
+      const res = await sendWhatsAppFollowupDueViaAPI({
+        to: recipientPhone,
+        clinicId: clinic?.clinic_id || cons.clinic_id || '',
+        patientName: liveProfile?.name || currentProfile?.name || patientName || 'Patient',
+        doctorName: cons.doctor_name || clinic?.doctor_name || 'Doctor',
+        clinicName: clinic?.name || 'Clinic',
+        dueDate: formatDate(cons.follow_up_date),
+        clinicPhone: clinic?.phone || '+91 73961 11081',
+      });
+      if (res.success) {
+        toast(`Follow-up WhatsApp reminder sent successfully to ${recipientPhone}!`, 'success');
+      } else {
+        toast(res.error || 'Failed to dispatch WhatsApp follow-up reminder.', 'error');
+      }
+    } catch (err: any) {
+      toast(err?.message || 'Failed to send WhatsApp follow-up reminder.', 'error');
+    } finally {
+      setSendingFollowupId(null);
+    }
+  };
 
   // Active clinic link resolution
   const activeLink = useMemo(() => {
@@ -902,7 +937,7 @@ export function PatientFullDetails({ patientId, patientName, patient }: PatientF
                   <div key={apt.id} className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-3 hover:border-primary/40 transition">
                     <div className="flex items-start gap-3">
                       <div className="h-10 w-10 rounded-xl bg-primary/10 text-primary font-bold text-xs flex items-center justify-center shrink-0">
-                        {apt.display_token || (apt.token_number ? `#${apt.token_number}` : 'APT')}
+                        {(apt.display_token ? apt.display_token.replace(/^EM-/, 'QR-') : null) || (apt.token_number ? `#${apt.token_number}` : 'APT')}
                       </div>
                       <div>
                         <div className="flex items-center gap-2 flex-wrap">
@@ -1031,11 +1066,23 @@ export function PatientFullDetails({ patientId, patientName, patient }: PatientF
                         )}
                       </div>
 
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2 flex-wrap">
                         {cons.follow_up_date && (
-                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-teal-50 border border-teal-200 text-teal-800 text-xs font-semibold">
-                            <Clock size={12} /> Follow-up: {formatDate(cons.follow_up_date)}
-                          </span>
+                          <>
+                            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-teal-50 border border-teal-200 text-teal-800 text-xs font-semibold">
+                              <Clock size={12} /> Follow-up: {formatDate(cons.follow_up_date)}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => handleSendFollowupDueWhatsApp(cons)}
+                              disabled={sendingFollowupId === cons.id}
+                              className="px-2.5 py-1 rounded-md bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer disabled:opacity-50"
+                              title="Send WhatsApp Follow-up Due Reminder to Patient"
+                            >
+                              <MessageCircle size={13} className="text-emerald-600" />
+                              {sendingFollowupId === cons.id ? 'Sending...' : 'Remind Follow-up'}
+                            </button>
+                          </>
                         )}
                         <button
                           onClick={() => setSelectedPrescriptionConsultation(cons)}
@@ -1400,7 +1447,7 @@ export function PatientFullDetails({ patientId, patientName, patient }: PatientF
       <UploadPatientReportsModal
         open={uploadReportsModalOpen}
         patientId={patientId}
-        patientName={targetName || patientName}
+        patientName={patientDisplayName}
         patient={patient}
         clinic={clinic}
         onClose={() => setUploadReportsModalOpen(false)}
@@ -1511,13 +1558,13 @@ export function PatientFullDetails({ patientId, patientName, patient }: PatientF
                   Age (Years) {editDemoForm.dob && <span className="text-[10px] text-teal-700 font-normal">(Auto-calculated)</span>}
                 </label>
                 <input
-                  type="number"
-                  min="0"
-                  max="125"
-                  className="input font-mono"
-                  placeholder="Age in years"
-                  value={editDemoForm.age}
-                  onChange={e => setEditDemoForm({ ...editDemoForm, age: e.target.value })}
+                  type="text"
+                  disabled
+                  readOnly
+                  tabIndex={-1}
+                  className="input font-mono bg-slate-100 text-slate-700 font-semibold cursor-not-allowed select-none border-slate-200"
+                  placeholder="Computed from DOB"
+                  value={editDemoForm.age ? `${editDemoForm.age} yrs` : '—'}
                 />
               </div>
               <div>
@@ -1615,8 +1662,12 @@ function UploadPatientReportsModal({
   clinic?: any;
   onClose: () => void;
 }) {
+  const { user } = useAuth();
   const { toast } = useToast();
   const [queuedFiles, setQueuedFiles] = useState<QueuedPatientReport[]>([]);
+  const [prescribedDoctor, setPrescribedDoctor] = useState(
+    patient?.doctor_name || (user?.name && !['admin', 'staff', 'user'].includes(user.name.toLowerCase()) ? user.name : '') || clinic?.doctor_name || ''
+  );
   const [uploading, setUploading] = useState(false);
   const [currentUploadIndex, setCurrentUploadIndex] = useState(0);
   const [progress, setProgress] = useState(0);
@@ -1628,8 +1679,14 @@ function UploadPatientReportsModal({
       setUploading(false);
       setProgress(0);
       setCurrentUploadIndex(0);
+    } else {
+      if (!prescribedDoctor) {
+        setPrescribedDoctor(
+          patient?.doctor_name || (user?.name && !['admin', 'staff', 'user'].includes(user.name.toLowerCase()) ? user.name : '') || clinic?.doctor_name || ''
+        );
+      }
     }
-  }, [open]);
+  }, [open, patient, user, clinic]);
 
   const handleFilesAdded = (files: FileList | null) => {
     if (!files || files.length === 0) return;
@@ -1694,16 +1751,28 @@ function UploadPatientReportsModal({
               try {
                 const downloadUrl = await getDownloadURL(uploadTask.snapshot.ref);
 
+                const finalDoctorName = (prescribedDoctor || patient?.doctor_name || user?.name || clinic?.doctor_name || '').trim();
+                const reportTitle = item.name.trim() || 'Medical Diagnostic Report';
+
                 const docRef = await addDoc(collection(db, 'health_reports'), {
                   patient_id: patientId || patient?.patient_id || patient?.id,
                   account_id: patient?.account_id || null,
                   clinic_id: clinic?.clinic_id || null,
-                  doctor_id: patient?.doctor_id || null,
-                  report_type: item.name.trim() || 'Medical Diagnostic Report',
+                  doctor_id: patient?.doctor_id || user?.uid || null,
+                  doctor_name: finalDoctorName,
+                  prescribed_by: finalDoctorName,
+                  report_type: reportTitle,
+                  test_name: reportTitle,
+                  title: reportTitle,
+                  name: reportTitle,
+                  patient_name: patientName || patient?.name || 'Patient',
+                  patient_phone: patient?.phone || patient?.mobile || '',
                   category: item.category,
                   report_date: new Date().toISOString().split('T')[0],
-                  hospital_or_doctor: clinic?.name || null,
+                  hospital_or_doctor: finalDoctorName || clinic?.name || null,
                   original_file_url: downloadUrl,
+                  file_url: downloadUrl,
+                  download_url: downloadUrl,
                   original_file_type: item.file.type || 'application/pdf',
                   ai_processed: false,
                   created_at: new Date().toISOString(),
@@ -1742,6 +1811,25 @@ function UploadPatientReportsModal({
   return (
     <Modal open={open} onClose={onClose} size="lg" title={`Upload Reports & Documents: ${patientName || patient?.name || 'Patient'}`} subtitle="Select and upload multiple lab results, radiology scans, blood tests, or diagnostic PDFs at once">
       <form onSubmit={handleUpload} className="space-y-4 pt-2">
+        {/* Prescribing Doctor Field */}
+        <div className="p-3.5 bg-blue-50/50 border border-[#106EBE]/20 rounded-xl space-y-1.5">
+          <label className="text-xs font-bold text-slate-800 uppercase tracking-wide block">
+            Prescribed By (Doctor Name) <span className="text-rose-500">*</span>
+          </label>
+          <input
+            type="text"
+            required
+            disabled={uploading}
+            value={prescribedDoctor}
+            onChange={(e) => setPrescribedDoctor(e.target.value)}
+            placeholder="e.g. Dr. Pavan"
+            className="w-full h-10 px-3.5 bg-white border border-slate-300 rounded-xl text-xs font-bold text-black focus:outline-none focus:border-[#106EBE] focus:ring-2 focus:ring-[#106EBE]/20"
+          />
+          <p className="text-[11px] text-slate-600">
+            This doctor's name will appear on the patient's clinical records and WhatsApp notification.
+          </p>
+        </div>
+
         <input 
           ref={fileInputRef}
           type="file" 

@@ -2,14 +2,14 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { Stethoscope, Siren, Clock, User, ArrowRight, FileText, Printer, Save, Sparkles, AlertTriangle, Activity, Receipt, CheckCircle, Search, History, FolderHeart, Pill, Eye } from 'lucide-react';
 import { db } from '../lib/firebase';
-import { collection, query, where, orderBy, limit, getDocs, onSnapshot, addDoc, updateDoc, doc, serverTimestamp } from 'firebase/firestore';
+import { collection, query, where, getDocs, onSnapshot, addDoc, updateDoc, doc, serverTimestamp } from 'firebase/firestore';
 import { useAuth } from '../lib/auth';
 import { useClinicData } from '../lib/useClinicData';
 import { useToast } from '../lib/toast';
 import { Modal } from '../components/Modal';
 import { AISummaryPanel } from '../components/AISummaryPanel';
-import { EmptyState, Loading, SectionHeader, Avatar } from '../components/ui';
-import { formatTime, formatDate, formatRs, isSameDay, statusBadgeClass, todayISO, matchesDateRange, type DateRangePreset, calculateAge, formatDobForInput } from '../lib/format';
+import { EmptyState, SectionHeader, Avatar } from '../components/ui';
+import { formatTime, formatDate, formatRs, statusBadgeClass, todayISO, matchesDateRange, type DateRangePreset, calculateAge, formatDobForInput } from '../lib/format';
 import { DateRangeFilter } from '../components/DateRangeFilter';
 import { PatientDetailModal } from '../components/PatientDetailModal';
 import type { Appointment, Consultation, Patient, AISession, Vital } from '../lib/types';
@@ -23,7 +23,7 @@ export function DoctorDashboard() {
   const location = useLocation();
   const isDoctorRoute = location.pathname.startsWith('/doctor');
   const billingPath = isDoctorRoute ? '/doctor/billing' : '/clinic/billing';
-  const { appointments, bills, loading, refresh } = useClinicData();
+  const { appointments, bills, refresh } = useClinicData();
   const { toast } = useToast();
   const [openAppt, setOpenAppt] = useState<Appointment | null>(null);
   const [viewingPatientRecords, setViewingPatientRecords] = useState<Patient | any | null>(null);
@@ -286,10 +286,10 @@ export function DoctorDashboard() {
         <div className="card">
           <SectionHeader title="AI pre-consultation" subtitle="Insights for next patient" />
           {nextPatient ? (
-            <NextPatientPanel 
-              appt={nextPatient} 
-              patient={nextPatient.patient || patients.find((p) => p.patient_id === nextPatient.patient_id) || (nextPatient.patient_id ? { patient_id: nextPatient.patient_id, name: (nextPatient as any).patient_name, phone: (nextPatient as any).patient_phone } as any : undefined)} 
-              onViewDossier={(p) => setViewingPatientRecords(p || nextPatient.patient || { patient_id: nextPatient.patient_id, name: (nextPatient as any).patient_name, phone: (nextPatient as any).patient_phone })} 
+            <NextPatientPanel
+              appt={nextPatient}
+              patient={nextPatient.patient || patients.find((p) => p.patient_id === nextPatient.patient_id) || (nextPatient.patient_id ? { patient_id: nextPatient.patient_id, name: (nextPatient as any).patient_name, phone: (nextPatient as any).patient_phone } as any : undefined)}
+              onViewDossier={(p) => setViewingPatientRecords(p || nextPatient.patient || { patient_id: nextPatient.patient_id, name: (nextPatient as any).patient_name, phone: (nextPatient as any).patient_phone })}
             />
           ) : (
             <EmptyState icon={<Sparkles size={18} />} title="No next patient" description="All caught up — patients will appear here." />
@@ -439,7 +439,7 @@ function DoctorQueueRow({
     >
       <div className="flex items-center gap-3 min-w-0 flex-1">
         <div className="inline-flex h-10 w-10 items-center justify-center rounded-lg bg-ink/5 text-ink font-bold text-xs shrink-0">
-          {appt.display_token || (appt.token_number ? `#${appt.token_number}` : '—')}
+          {(appt.display_token ? appt.display_token.replace(/^EM-/, 'QR-') : null) || (appt.token_number ? `#${appt.token_number}` : '—')}
         </div>
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 flex-wrap">
@@ -525,7 +525,7 @@ function NextPatientPanel({ appt, patient, onViewDossier }: { appt: Appointment;
       setVitals(null);
       return;
     }
-    
+
     let unsubAi: (() => void) | undefined;
     let unsubVitals: (() => void) | undefined;
 
@@ -661,14 +661,14 @@ function Info({ label, value, tone = 'normal' }: { label: string; value: string;
   );
 }
 
-function ConsultationModal({ 
-  appt, 
-  onClose, 
+function ConsultationModal({
+  appt,
+  onClose,
   onSaved,
   onViewDossier,
-}: { 
-  appt: Appointment; 
-  onClose: () => void; 
+}: {
+  appt: Appointment;
+  onClose: () => void;
   onSaved: () => void;
   onViewDossier?: (p: Patient) => void;
 }) {
@@ -707,7 +707,7 @@ function ConsultationModal({
         const snap2 = await getDocs(q2);
         let cList = snap2.docs.map(d => ({ ...d.data(), consult_id: d.id } as Consultation));
         cList.sort((a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime());
-        
+
         // Clinic data isolation: If viewing from a previous clinic, only view records from that clinic
         const doctorClinicId = clinic?.clinic_id || user?.clinic_id;
         const activeClinicId = (patient as any)?.current_clinic_id || patient?.clinic_id;
@@ -776,7 +776,7 @@ function ConsultationModal({
       }
       toast(markDone ? 'Consultation saved & marked done.' : 'Consultation saved.', 'success');
       onSaved();
-    } catch(error) {
+    } catch {
       toast('Unable to save consultation. Please try again.', 'error');
     } finally {
       setSaving(false);
@@ -797,9 +797,9 @@ function ConsultationModal({
         size="xl"
         footer={
           <>
-            <button 
-              type="button" 
-              onClick={() => setShowA4Rx(true)} 
+            <button
+              type="button"
+              onClick={() => setShowA4Rx(true)}
               className="btn-outline flex items-center gap-1.5 text-[#0F6E56] border-teal-300 hover:bg-teal-50"
               title="Preview production-ready A4 Doctor Prescription"
             >
@@ -822,183 +822,183 @@ function ConsultationModal({
           </>
         }
       >
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        <div className="lg:col-span-2 space-y-4">
-          {/* Previous visits */}
-          <div className="rounded-lg border border-black/5 p-3">
-            <SectionHeader title="Previous visits" subtitle="Last 3 consultations for this patient" />
-            {prevConsults.length === 0 ? (
-              <p className="text-xs text-ink-subtle">No previous consultations on record.</p>
-            ) : (
-              <div className="space-y-2">
-                {prevConsults.map((c, i) => (
-                  <div key={i} className="rounded-lg bg-primary-50/40 p-3">
-                    <div className="flex items-center justify-between mb-1">
-                      <p className="text-xs font-semibold text-ink">{formatDate(c.created_at)}</p>
-                      {c.follow_up_date && (
-                        <span className="text-[10px] text-ink-muted flex items-center gap-1"><Clock size={10} /> Follow-up: {formatDate(c.follow_up_date)}</span>
-                      )}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+          <div className="lg:col-span-2 space-y-4">
+            {/* Previous visits */}
+            <div className="rounded-lg border border-black/5 p-3">
+              <SectionHeader title="Previous visits" subtitle="Last 3 consultations for this patient" />
+              {prevConsults.length === 0 ? (
+                <p className="text-xs text-ink-subtle">No previous consultations on record.</p>
+              ) : (
+                <div className="space-y-2">
+                  {prevConsults.map((c, i) => (
+                    <div key={i} className="rounded-lg bg-primary-50/40 p-3">
+                      <div className="flex items-center justify-between mb-1">
+                        <p className="text-xs font-semibold text-ink">{formatDate(c.created_at)}</p>
+                        {c.follow_up_date && (
+                          <span className="text-[10px] text-ink-muted flex items-center gap-1"><Clock size={10} /> Follow-up: {formatDate(c.follow_up_date)}</span>
+                        )}
+                      </div>
+                      <p className="text-xs text-ink-muted"><span className="font-medium">Dx:</span> {c.diagnosis || '—'}</p>
+                      <p className="text-xs text-ink-muted"><span className="font-medium">Rx:</span> {c.prescription || '—'}</p>
                     </div>
-                    <p className="text-xs text-ink-muted"><span className="font-medium">Dx:</span> {c.diagnosis || '—'}</p>
-                    <p className="text-xs text-ink-muted"><span className="font-medium">Rx:</span> {c.prescription || '—'}</p>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
+                  ))}
+                </div>
+              )}
+            </div>
 
-          {/* Consultation form */}
-          <div className="rounded-lg border border-black/5 p-3 space-y-3">
-            <SectionHeader title="Consultation notes" />
-            <div>
-              <label className="label">Symptoms</label>
-              <textarea className="input min-h-[70px]" rows={3} value={symptoms} onChange={(e) => setSymptoms(e.target.value)} placeholder="Patient-reported and observed symptoms" />
-            </div>
-            <div>
-              <label className="label">Diagnosis *</label>
-              <textarea className="input min-h-[70px]" rows={3} value={diagnosis} onChange={(e) => setDiagnosis(e.target.value)} placeholder="Working diagnosis" />
-            </div>
-            <div>
-              <div className="flex items-center justify-between mb-1">
-                <label className="label mb-0">Prescription (Rx)</label>
-                <button
-                  type="button"
-                  onClick={() => setShowA4Rx(true)}
-                  className="text-xs font-bold text-[#0F6E56] hover:underline flex items-center gap-1"
-                >
-                  <Eye size={12} /> Preview A4 Layout
-                </button>
-              </div>
-              <textarea 
-                className="input min-h-[90px]" 
-                rows={4} 
-                value={prescription} 
-                onChange={(e) => setPrescription(e.target.value)} 
-                placeholder="Medication, dosage, frequency, duration (e.g. Paracetamol 500 mg | 1 Tab | 3 times/day | 3 Days | After Food)" 
-              />
-            </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {/* Consultation form */}
+            <div className="rounded-lg border border-black/5 p-3 space-y-3">
+              <SectionHeader title="Consultation notes" />
               <div>
-                <label className="label">Follow-up date</label>
-                <input type="date" min={todayISO()} className="input" value={formatDobForInput(followUp)} onChange={(e) => setFollowUp(e.target.value)} />
+                <label className="label">Symptoms</label>
+                <textarea className="input min-h-[70px]" rows={3} value={symptoms} onChange={(e) => setSymptoms(e.target.value)} placeholder="Patient-reported and observed symptoms" />
               </div>
               <div>
-                <label className="label">Notes</label>
-                <input className="input" value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Additional clinical notes" />
+                <label className="label">Diagnosis *</label>
+                <textarea className="input min-h-[70px]" rows={3} value={diagnosis} onChange={(e) => setDiagnosis(e.target.value)} placeholder="Working diagnosis" />
               </div>
-            </div>
-          </div>
-        </div>
-
-        {/* RHS: patient summary + AI */}
-        <div className="space-y-4">
-          <button
-            type="button"
-            onClick={() => onViewDossier?.(patient)}
-            className="w-full px-3 py-2.5 rounded-xl bg-primary hover:bg-primary-dark text-white text-xs font-semibold flex items-center justify-center gap-2 shadow-sm transition"
-          >
-            <FolderHeart size={16} /> Open Complete Medical Records
-          </button>
-
-          <div className="rounded-lg bg-primary-50/40 p-3">
-            <SectionHeader title="Patient summary" />
-            <div className="flex items-center gap-3 mb-3">
-              <Avatar name={patient.name} size={44} />
               <div>
-                <p className="text-sm font-semibold text-ink">{patient.name}</p>
-                <p className="text-xs text-ink-muted">{patient.age ?? calculateAge(patient.dob) ?? '—'} yrs · {patient.gender} · {patient.blood_group ?? 'Unknown'}</p>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="label mb-0">Prescription (Rx)</label>
+                  <button
+                    type="button"
+                    onClick={() => setShowA4Rx(true)}
+                    className="text-xs font-bold text-[#0F6E56] hover:underline flex items-center gap-1"
+                  >
+                    <Eye size={12} /> Preview A4 Layout
+                  </button>
+                </div>
+                <textarea
+                  className="input min-h-[90px]"
+                  rows={4}
+                  value={prescription}
+                  onChange={(e) => setPrescription(e.target.value)}
+                  placeholder="Medication, dosage, frequency, duration (e.g. Paracetamol 500 mg | 1 Tab | 3 times/day | 3 Days | After Food)"
+                />
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="label">Follow-up date</label>
+                  <input type="date" min={todayISO()} className="input" value={formatDobForInput(followUp)} onChange={(e) => setFollowUp(e.target.value)} />
+                </div>
+                <div>
+                  <label className="label">Notes</label>
+                  <input className="input" value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Additional clinical notes" />
+                </div>
               </div>
             </div>
-            <div className="space-y-2 text-xs">
-              <p><span className="text-ink-muted">Allergies:</span> <span className="font-medium text-danger">{patient.allergies || 'None'}</span></p>
-              <p><span className="text-ink-muted">Chronic:</span> <span className="font-medium text-warning">{patient.chronic_conditions || 'None'}</span></p>
-              <p><span className="text-ink-muted">Emergency:</span> {patient.emergency_contact_name ?? '—'} · {patient.emergency_contact_phone ?? '—'}</p>
-            </div>
-            {vitals && (
-              <div className="grid grid-cols-2 gap-2 mt-3 text-xs">
-                <Info label="BP" value={vitals.systolic_bp && vitals.diastolic_bp ? `${vitals.systolic_bp}/${vitals.diastolic_bp}` : '—'} />
-                <Info label="Pulse" value={vitals.pulse ? `${vitals.pulse} bpm` : '—'} />
-                <Info label="Temp" value={vitals.temperature ? `${vitals.temperature}°F` : '—'} />
-                <Info label="SpO2" value={vitals.spo2 ? `${vitals.spo2}%` : '—'} />
-              </div>
-            )}
           </div>
 
-          {appt.ai_summary ? (
-            <AISummaryPanel summary={appt.ai_summary as TriageSummary | null} />
-          ) : aiSession ? (
-            <div className="rounded-lg bg-accent-50 border border-accent-600/20 p-3">
-              <div className="flex items-center gap-1.5 mb-2">
-                <Sparkles size={12} className="text-accent-600" />
-                <p className="text-[10px] font-semibold text-accent-600 uppercase">AI Navigator output</p>
+          {/* RHS: patient summary + AI */}
+          <div className="space-y-4">
+            <button
+              type="button"
+              onClick={() => onViewDossier?.(patient)}
+              className="w-full px-3 py-2.5 rounded-xl bg-primary hover:bg-primary-dark text-white text-xs font-semibold flex items-center justify-center gap-2 shadow-sm transition"
+            >
+              <FolderHeart size={16} /> Open Complete Medical Records
+            </button>
+
+            <div className="rounded-lg bg-primary-50/40 p-3">
+              <SectionHeader title="Patient summary" />
+              <div className="flex items-center gap-3 mb-3">
+                <Avatar name={patient.name} size={44} />
+                <div>
+                  <p className="text-sm font-semibold text-ink">{patient.name}</p>
+                  <p className="text-xs text-ink-muted">{patient.age ?? calculateAge(patient.dob) ?? '—'} yrs · {patient.gender} · {patient.blood_group ?? 'Unknown'}</p>
+                </div>
               </div>
               <div className="space-y-2 text-xs">
-                <p><span className="font-medium text-ink-muted">Patient symptoms:</span> {aiSession.symptoms_entered ?? '—'}</p>
-                <p className="flex items-center gap-1.5">
-                  <span className="font-medium text-ink-muted">Triage:</span>
-                  <span className={`badge ${aiSession.triage_level === 'urgent' ? 'badge-urgent' : aiSession.triage_level === 'moderate' ? 'badge-waiting' : 'badge-done'} text-[10px] uppercase`}>{aiSession.triage_level}</span>
-                </p>
-                {aiSession.ai_response && (
-                  <p className="rounded bg-white/60 p-2 text-ink-muted">{aiSession.ai_response}</p>
-                )}
-                {aiSession.recommendations && aiSession.recommendations.length > 0 && (
-                  <ul className="space-y-1 pt-1">
-                    {aiSession.recommendations.map((r, i) => (
-                      <li key={i} className="flex items-start gap-1.5 text-ink-muted">
-                        <span className={`mt-1 h-1.5 w-1.5 rounded-full shrink-0 ${r.level === 'urgent' ? 'bg-danger' : r.level === 'caution' ? 'bg-warning' : 'bg-accent-600'}`} />
-                        {r.text}
-                      </li>
-                    ))}
-                  </ul>
-                )}
+                <p><span className="text-ink-muted">Allergies:</span> <span className="font-medium text-danger">{patient.allergies || 'None'}</span></p>
+                <p><span className="text-ink-muted">Chronic:</span> <span className="font-medium text-warning">{patient.chronic_conditions || 'None'}</span></p>
+                <p><span className="text-ink-muted">Emergency:</span> {patient.emergency_contact_name ?? '—'} · {patient.emergency_contact_phone ?? '—'}</p>
               </div>
+              {vitals && (
+                <div className="grid grid-cols-2 gap-2 mt-3 text-xs">
+                  <Info label="BP" value={vitals.systolic_bp && vitals.diastolic_bp ? `${vitals.systolic_bp}/${vitals.diastolic_bp}` : '—'} />
+                  <Info label="Pulse" value={vitals.pulse ? `${vitals.pulse} bpm` : '—'} />
+                  <Info label="Temp" value={vitals.temperature ? `${vitals.temperature}°F` : '—'} />
+                  <Info label="SpO2" value={vitals.spo2 ? `${vitals.spo2}%` : '—'} />
+                </div>
+              )}
             </div>
-          ) : null}
 
-          <p className="text-[11px] text-ink-subtle flex items-start gap-1.5">
-            <FileText size={10} className="mt-0.5 shrink-0" />
-            Consultation notes are stored within the clinic's VIITSA database only.
-          </p>
-        </div>
-      </div>
-    </Modal>
+            {appt.ai_summary ? (
+              <AISummaryPanel summary={appt.ai_summary as TriageSummary | null} />
+            ) : aiSession ? (
+              <div className="rounded-lg bg-accent-50 border border-accent-600/20 p-3">
+                <div className="flex items-center gap-1.5 mb-2">
+                  <Sparkles size={12} className="text-accent-600" />
+                  <p className="text-[10px] font-semibold text-accent-600 uppercase">AI Navigator output</p>
+                </div>
+                <div className="space-y-2 text-xs">
+                  <p><span className="font-medium text-ink-muted">Patient symptoms:</span> {aiSession.symptoms_entered ?? '—'}</p>
+                  <p className="flex items-center gap-1.5">
+                    <span className="font-medium text-ink-muted">Triage:</span>
+                    <span className={`badge ${aiSession.triage_level === 'urgent' ? 'badge-urgent' : aiSession.triage_level === 'moderate' ? 'badge-waiting' : 'badge-done'} text-[10px] uppercase`}>{aiSession.triage_level}</span>
+                  </p>
+                  {aiSession.ai_response && (
+                    <p className="rounded bg-white/60 p-2 text-ink-muted">{aiSession.ai_response}</p>
+                  )}
+                  {aiSession.recommendations && aiSession.recommendations.length > 0 && (
+                    <ul className="space-y-1 pt-1">
+                      {aiSession.recommendations.map((r, i) => (
+                        <li key={i} className="flex items-start gap-1.5 text-ink-muted">
+                          <span className={`mt-1 h-1.5 w-1.5 rounded-full shrink-0 ${r.level === 'urgent' ? 'bg-danger' : r.level === 'caution' ? 'bg-warning' : 'bg-accent-600'}`} />
+                          {r.text}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              </div>
+            ) : null}
 
-    {/* Production-Ready A4 Doctor Prescription Modal */}
-    {showA4Rx && (
-      <div className="fixed inset-0 z-[100] overflow-y-auto bg-slate-900/80 backdrop-blur-xs flex justify-center p-2 sm:p-4 animate-fade-in">
-        <div className="relative max-w-4xl w-full my-auto">
-          <PrescriptionView
-            consultation={{
-              prescription,
-              diagnosis,
-              symptoms,
-              patient_name: patient.name,
-              patient_age: patient.age ?? calculateAge(patient.dob),
-              patient_dob: patient.dob,
-              patient_gender: patient.gender,
-              patient_phone: patient.phone,
-              doctor_name: user?.name,
-              chief_complaint: appt.reason || symptoms || 'General Consultation',
-              vitals: vitals ? {
-                temperature: vitals.temperature ? `${vitals.temperature} °F` : undefined,
-                bloodPressure: vitals.blood_pressure || (vitals.bp_sys ? `${vitals.bp_sys}/${vitals.bp_dia} mmHg` : undefined),
-                pulse: vitals.pulse ? `${vitals.pulse}/min` : undefined,
-                spo2: vitals.spo2 ? `${vitals.spo2}%` : undefined
-              } : undefined,
-              follow_up_date: followUp
-            }}
-            patient={patient}
-            clinic={clinic}
-            doctor={{
-              name: user?.name,
-              specialization: user?.specialisation || 'General Physician',
-              registrationNumber: user?.registration_number || '123456 (TSMC)'
-            }}
-            onClose={() => setShowA4Rx(false)}
-          />
+            <p className="text-[11px] text-ink-subtle flex items-start gap-1.5">
+              <FileText size={10} className="mt-0.5 shrink-0" />
+              Consultation notes are stored within the clinic's VIITSA database only.
+            </p>
+          </div>
         </div>
-      </div>
-    )}
+      </Modal>
+
+      {/* Production-Ready A4 Doctor Prescription Modal */}
+      {showA4Rx && (
+        <div className="fixed inset-0 z-[100] overflow-y-auto bg-slate-900/80 backdrop-blur-xs flex justify-center p-2 sm:p-4 animate-fade-in">
+          <div className="relative max-w-4xl w-full my-auto">
+            <PrescriptionView
+              consultation={{
+                prescription,
+                diagnosis,
+                symptoms,
+                patient_name: patient.name,
+                patient_age: patient.age ?? calculateAge(patient.dob),
+                patient_dob: patient.dob,
+                patient_gender: patient.gender,
+                patient_phone: patient.phone,
+                doctor_name: user?.name,
+                chief_complaint: appt.reason || symptoms || 'General Consultation',
+                vitals: vitals ? {
+                  temperature: vitals.temperature ? `${vitals.temperature} °F` : undefined,
+                  bloodPressure: vitals.blood_pressure || (vitals.bp_sys ? `${vitals.bp_sys}/${vitals.bp_dia} mmHg` : undefined),
+                  pulse: vitals.pulse ? `${vitals.pulse}/min` : undefined,
+                  spo2: vitals.spo2 ? `${vitals.spo2}%` : undefined
+                } : undefined,
+                follow_up_date: followUp
+              }}
+              patient={patient}
+              clinic={clinic}
+              doctor={{
+                name: user?.name,
+                specialization: user?.specialisation || 'General Physician',
+                registrationNumber: user?.registration_number || '123456 (TSMC)'
+              }}
+              onClose={() => setShowA4Rx(false)}
+            />
+          </div>
+        </div>
+      )}
     </>
   );
 }

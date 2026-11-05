@@ -10,6 +10,7 @@ import { ref, deleteObject } from 'firebase/storage';
 import { formatDate, formatTime } from '../lib/format';
 import { usePatientAuth } from '../lib/patientAuth';
 import { useAuth } from '../lib/auth';
+import { claimPastAppointmentsForPhone } from '../lib/accountLinking';
 import { ReportScanner } from './ReportScanner';
 import type { Consultation, Vital, HealthReport, Clinic } from '../lib/types';
 import type { PatientTab } from './PatientBottomNav';
@@ -39,6 +40,10 @@ export function PatientRecords({ patientId, onTab }: Props) {
   useEffect(() => {
     const rawPhone = account?.phone || (account as any)?.mobile || user?.phone || '';
     const cleanPhone = rawPhone.replace(/\D/g, '').slice(-10);
+    const targetAccountId = account?.account_id || patientId;
+    if (cleanPhone && targetAccountId) {
+      claimPastAppointmentsForPhone(cleanPhone, targetAccountId).catch(() => {});
+    }
     const ids = new Set<string>();
     if (patientId) ids.add(patientId);
     if (account?.account_id) ids.add(account.account_id);

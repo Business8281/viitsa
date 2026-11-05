@@ -43,6 +43,7 @@ export function AppointmentManagePage() {
   const [doctor, setDoctor] = useState<Doctor | null>(null);
   const [cancelling, setCancelling] = useState(false);
   const [confirmCancel, setConfirmCancel] = useState(false);
+  const [cancelReason, setCancelReason] = useState('Cancelled upon patient request');
   const [showReschedule, setShowReschedule] = useState(false);
   const [newDate, setNewDate] = useState('');
   const [newTime, setNewTime] = useState('');
@@ -99,10 +100,13 @@ export function AppointmentManagePage() {
     if (!appointment) return;
     setCancelling(true);
     try {
+      const reasonToSave = cancelReason.trim() || 'Cancelled upon patient request';
       await updateDoc(doc(db, 'appointments', appointment.appt_id), {
         status: 'cancelled',
         updated_at: new Date().toISOString(),
-        cancelled_reason: 'Cancelled by patient via email link',
+        cancellation_reason: reasonToSave,
+        cancelled_reason: reasonToSave,
+        cancelled_at: new Date().toISOString(),
       });
       // Send Instant Email
       sendInstantAppointmentEmail(appointment.appt_id, 'appointment_cancelled');
@@ -134,8 +138,9 @@ export function AppointmentManagePage() {
     setRescheduling(false);
   };
 
-  const tokenDisplay = appointment?.display_token
+  const rawToken = appointment?.display_token
     || (appointment?.token_number ? `ON-${String(appointment.token_number).padStart(3, '0')}` : '—');
+  const tokenDisplay = rawToken.replace(/^EM-/, 'QR-');
 
   const apptDateFormatted = formatLongDate(appointment?.date);
 
@@ -280,6 +285,20 @@ export function AppointmentManagePage() {
           <div className="border border-red-200 rounded-xl p-4 mb-4 bg-red-50 space-y-3">
             <p className="font-semibold text-red-700 text-sm">Are you sure you want to cancel this appointment?</p>
             <p className="text-xs text-red-500">This action cannot be undone.</p>
+            <div>
+              <label className="text-xs text-gray-700 font-medium block mb-1">Reason for cancellation</label>
+              <select
+                value={cancelReason}
+                onChange={e => setCancelReason(e.target.value)}
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-red-400"
+              >
+                <option value="Cancelled upon patient request">Cancelled upon patient request</option>
+                <option value="Personal emergency / cannot attend">Personal emergency / cannot attend</option>
+                <option value="Feeling better / no longer required">Feeling better / no longer required</option>
+                <option value="Scheduling conflict">Scheduling conflict</option>
+                <option value="Other personal reason">Other personal reason</option>
+              </select>
+            </div>
             <div className="flex gap-2">
               <button
                 onClick={handleCancel}

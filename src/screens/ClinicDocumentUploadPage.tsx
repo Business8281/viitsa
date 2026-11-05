@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { FileUp, Trash2, CheckCircle2, Loader2, AlertCircle, LogOut } from 'lucide-react';
 import { sendEmail } from '../lib/emailService';
+import { sendWhatsAppClinicPendingApproval } from '../lib/whatsappClientService';
 import { doc, setDoc, updateDoc } from 'firebase/firestore';
 import { ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
 import { db, storage } from '../lib/firebase';
@@ -10,7 +11,7 @@ import { ViitsaLogo } from '../components/ViitsaLogo';
 
 export function ClinicDocumentUploadPage() {
   const navigate = useNavigate();
-  const { user, refreshSession, logout } = useAuth();
+  const { user, clinic, refreshSession, logout } = useAuth();
   
   const [files, setFiles] = useState<File[]>([]);
   const [loading, setLoading] = useState(false);
@@ -28,7 +29,9 @@ export function ClinicDocumentUploadPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!user || !user.clinic_id) return;
+    const clinicId = user?.clinic_id || clinic?.clinic_id || (user as any)?.id;
+    const userId = user?.user_id || (user as any)?.id;
+    if (!user || !clinicId) return;
     if (files.length === 0) {
       setError('Please select at least one document to upload for verification.');
       return;
@@ -40,7 +43,7 @@ export function ClinicDocumentUploadPage() {
     try {
       // 1. Upload files to Storage and get URLs
       const uploadedDocs = [];
-      const folderName = user.clinic_name ? user.clinic_name.replace(/[^a-zA-Z0-9 -]/g, '').trim() : user.clinic_id;
+      const folderName = user.clinic_name || clinic?.name ? (user.clinic_name || clinic?.name || '').replace(/[^a-zA-Z0-9 -]/g, '').trim() : clinicId;
       for (const file of files) {
         const storageRef = ref(storage, `clinics onboarding files/${folderName}/${file.name}`);
         const snapshot = await uploadBytesResumable(storageRef, file);
@@ -49,18 +52,26 @@ export function ClinicDocumentUploadPage() {
       }
 
       // 2. Update clinic doc
-      await setDoc(doc(db, 'clinics', user.clinic_id), {
+      await setDoc(doc(db, 'clinics', clinicId), {
         documents_uploaded: true,
         verification_status: 'pending',
         onboarding_documents: uploadedDocs
       }, { merge: true });
 
       // 3. Update user doc
-      await updateDoc(doc(db, 'users', user.user_id), {
-        clinic_documents_uploaded: true,
-        clinic_verification_status: 'pending',
-        updated_at: new Date().toISOString(),
-      });
+      if (userId) {
+        await updateDoc(doc(db, 'users', userId), {
+          clinic_documents_uploaded: true,
+          clinic_verification_status: 'pending',
+          updated_at: new Date().toISOString(),
+        }).catch(async () => {
+          await setDoc(doc(db, 'users', userId), {
+            clinic_documents_uploaded: true,
+            clinic_verification_status: 'pending',
+            updated_at: new Date().toISOString(),
+          }, { merge: true });
+        });
+      }
 
       // 4. Send Instant Email
       try {
@@ -79,6 +90,23 @@ export function ClinicDocumentUploadPage() {
         }
       } catch (err) {
         console.error('Failed to send pending verification email', err);
+      }
+
+      // 4b. Dispatch WhatsApp notification (viitsa_clinic_pending_approval)
+      const contactPhone = user.phone || clinic?.phone;
+      if (contactPhone) {
+        try {
+          await sendWhatsAppClinicPendingApproval({
+            to: contactPhone,
+            clinicId,
+            adminName: user.name || clinic?.owner_name || 'Doctor',
+            clinicName: user.clinic_name || clinic?.name || 'Clinic',
+            submissionDate: new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }),
+            supportPhone: '+91 73961 11081',
+          });
+        } catch (waErr) {
+          console.warn('Failed to dispatch pending approval WhatsApp message:', waErr);
+        }
       }
 
       // 5. Refresh session

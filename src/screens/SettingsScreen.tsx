@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useMemo } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams, Navigate } from 'react-router-dom';
 import { 
   Save, Building2, Clock, Stethoscope, Users, Bell, Plus, AlertCircle, 
   RefreshCw, QrCode, Link2, Share2, FileText, Download, Eye, ExternalLink, 
@@ -23,6 +23,7 @@ import { getAuth, createUserWithEmailAndPassword, sendPasswordResetEmail, update
 import { assertPasswordUniqueness, claimPasswordHash, getPasswordValidationError } from '../lib/passwordSecurity';
 import { PasswordRequirementsGuide } from '../components/PasswordRequirementsGuide';
 import { sendPasswordResetNotificationEmail } from '../lib/emailService';
+import { sendWhatsAppDoctorAddedViaAPI } from '../lib/whatsappClientService';
 import { useToast } from '../lib/toast';
 import { useAuth } from '../lib/auth';
 import { Modal } from '../components/Modal';
@@ -88,6 +89,9 @@ const VALID_TABS: Tab[] = ['profile', 'hours', 'doctors', 'staff', 'notification
 
 export function SettingsScreen() {
   const { clinic, user, logout } = useAuth();
+  if (user?.role === 'doctor' || user?.role === 'clinic_doctor') {
+    return <Navigate to="/doctor/dashboard" replace />;
+  }
   const { toast } = useToast();
   const [searchParams, setSearchParams] = useSearchParams();
   const rawTab = searchParams.get('tab') as Tab | null;
@@ -515,7 +519,8 @@ export function SettingsScreen() {
         experience_years: data.experience_years ?? (isDoc ? 1 : 0),
         consultation_fee: data.consultation_fee ?? (isDoc ? 300 : null),
         qualifications: data.qualifications || null,
-        active: true,
+        active: isDoc ? false : true,
+        verification_status: isDoc ? 'pending' : 'approved',
         avatar_color: isDoc ? '#05C994' : resolvedRole === 'clinic_admin' ? '#0F6E56' : '#E08600',
         certificates: [],
         onboarding_documents: [],
@@ -525,7 +530,30 @@ export function SettingsScreen() {
       await setDoc(doc(db, 'users', userId), newUser);
       await secondaryAuth.signOut();
       
-      toast(`${data.name} added successfully.`, 'success');
+      // 1. Send password setup email to new user
+      try {
+        await sendPasswordResetNotificationEmail(data.email.toLowerCase(), '/clinic/login', 'clinic');
+      } catch (emailErr) {
+        console.warn('Failed to dispatch password setup email:', emailErr);
+      }
+
+      // 2. If user is a doctor and has phone number, dispatch WhatsApp registration notice
+      if (isDoc && data.phone) {
+        try {
+          await sendWhatsAppDoctorAddedViaAPI({
+            to: data.phone,
+            doctorName: data.name,
+            clinicName: clinic!.name,
+            email: data.email.toLowerCase(),
+            clinicPhone: clinic!.phone || '+91 73961 11081',
+            clinicId: clinic!.clinic_id,
+          });
+        } catch (waErr) {
+          console.warn('Failed to dispatch WhatsApp doctor added notice:', waErr);
+        }
+      }
+
+      toast(`${data.name} added successfully. ${isDoc ? 'Doctor verification submitted to platform administration.' : ''}`, 'success');
       setAddUserOpen(false);
       setUsers(prev => [...prev.filter(x => x.user_id !== userId), newUser]);
     } catch (e: any) {

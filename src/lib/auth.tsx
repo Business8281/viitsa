@@ -3,6 +3,7 @@ import {
   signInWithEmailAndPassword, 
   createUserWithEmailAndPassword,
   signInWithPopup, 
+  signInWithCustomToken,
   GoogleAuthProvider, 
   RecaptchaVerifier, 
   signInWithPhoneNumber, 
@@ -13,8 +14,9 @@ import {
   ConfirmationResult,
   User as FirebaseUser 
 } from 'firebase/auth';
-import { doc, setDoc, onSnapshot, deleteDoc } from 'firebase/firestore';
-import { auth, db, DEFAULT_CLINIC_ID } from './firebase';
+import { httpsCallable } from 'firebase/functions';
+import { doc, setDoc, onSnapshot, deleteDoc, collection, query, where, getDocs, updateDoc } from 'firebase/firestore';
+import { auth, db, functions, DEFAULT_CLINIC_ID } from './firebase';
 import type { Clinic, User, PatientAccount, Role } from './types';
 import { PATIENT_ROLES, ADMIN_ROLES, CLINIC_ROLES } from './types';
 import { resolveCanonicalIdentity, generateReadableId, sanitizeForFirestore, getOrInitializeClinic, getCachedIdentity, saveCachedIdentity, type OnboardingData, type IdentityResult } from './identityResolver';
@@ -100,6 +102,9 @@ interface AuthState {
   refreshSession: () => Promise<void>;
   clearError: () => void;
   applyVerificationCode: (code: string) => Promise<{ ok: boolean; error?: string }>;
+  sendWhatsAppLoginOtp: (phone: string, portal?: 'clinic' | 'patient' | 'admin', action?: 'login' | 'register') => Promise<{ ok: boolean; error?: string }>;
+  loginWithWhatsAppOtp: (phone: string, otp: string, onboarding?: OnboardingData) => Promise<AuthResponse>;
+  linkUserEmail: (email: string) => Promise<{ ok: boolean; error?: string }>;
   // Legacy aliases for backward-compatibility with screens
   login: (email: string, password: string) => Promise<{ ok: boolean; error?: string }>;
   loginWithGoogleLegacy: () => Promise<{ ok: boolean; error?: string }>;
@@ -219,31 +224,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       
       const onboardingData = expectedRole ? { role: expectedRole, name: email.split('@')[0], email } : undefined;
       const res = await resolveCanonicalIdentity(cred.user, onboardingData);
-
-      // Enforce email verification for both patients and clinics (only company admin accounts exempt)
-      const isCompanyAdmin = res.user?.role && ADMIN_ROLES.includes(res.user.role);
-      if (!cred.user.emailVerified && !isCompanyAdmin) {
-        try {
-          const isClinic = res.user?.role && CLINIC_ROLES.includes(res.user.role);
-          const origin = (typeof window !== 'undefined' && window.location.origin && !window.location.origin.includes('localhost') && !window.location.origin.includes('127.0.0.1'))
-            ? window.location.origin
-            : 'https://viitsa.com';
-          const continueUrl = `${origin}${isClinic ? '/clinic/login?verified=true' : '/login?verified=true'}`;
-          try {
-            await sendEmailVerification(cred.user, { url: continueUrl, handleCodeInApp: true });
-          } catch (urlErr: any) {
-            if (urlErr.code === 'auth/unauthorized-continue-uri') {
-              await sendEmailVerification(cred.user);
-            } else {
-              await sendVerificationNotificationEmail(email.trim().toLowerCase(), res.user?.name, continueUrl, isClinic ? 'clinic' : 'patient');
-            }
-          }
-        } catch (e) {
-          console.warn('Could not re-dispatch verification email on unverified login:', e);
-        }
-        await signOut(auth);
-        throw new Error('Please verify your email address before logging in. A confirmation link has been sent to your inbox.');
-      }
       
       const portalType = getPortalType(expectedRole);
       const portalCheck = validatePortalRole(res.user.role, portalType);
@@ -317,15 +297,25 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       // Claim password hash globally for this user
       claimPasswordHash(uniqueness.hash, cred.user.uid, cleanEmail).catch(() => {});
 
-      // 1. Instantly dispatch verification email via Titan SMTP (support@viitsa.com)
-      try {
-        const verifRes = await sendVerificationNotificationEmail(cleanEmail, onboarding.name, continueUrl, isClinic ? 'clinic' : 'patient');
-        if (!verifRes.success) {
+      // 1. If email is already verified (e.g. Clinic dual OTP registration), DO NOT dispatch any verification email!
+      if (!onboarding?.email_verified) {
+        try {
+          const verifRes = await sendVerificationNotificationEmail(cleanEmail, onboarding.name, continueUrl, isClinic ? 'clinic' : 'patient');
+          if (!verifRes.success) {
+            await sendEmailVerification(cred.user, actionCodeSettings).catch(() => sendEmailVerification(cred.user).catch(console.warn));
+          }
+        } catch (verifErr: any) {
+          console.warn('Direct sendVerificationNotificationEmail warning, trying client SDK fallback:', verifErr);
           await sendEmailVerification(cred.user, actionCodeSettings).catch(() => sendEmailVerification(cred.user).catch(console.warn));
         }
-      } catch (verifErr: any) {
-        console.warn('Direct sendVerificationNotificationEmail warning, trying client SDK fallback:', verifErr);
-        await sendEmailVerification(cred.user, actionCodeSettings).catch(() => sendEmailVerification(cred.user).catch(console.warn));
+      } else {
+        // Email is ALREADY verified via 6-digit Email OTP! Mark in Firebase Auth directly without sending redundant email.
+        try {
+          const fn = httpsCallable(functions, 'markEmailVerified');
+          await fn({ uid: cred.user.uid, email: cleanEmail });
+        } catch (markErr) {
+          console.warn('markEmailVerified call note:', markErr);
+        }
       }
 
       // 2. Resolve database identity concurrently
@@ -389,19 +379,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
-  // Google Sign-In (Exclusively for Patients)
+  // Google Sign-In (Supports Patients, Attendants, Doctors, and Clinic Staff)
   const loginWithGoogle = useCallback(async (onboarding?: OnboardingData): Promise<AuthResponse> => {
     setError(null);
     try {
-      if (typeof window !== 'undefined') {
-        sessionStorage.setItem('viitsa_portal_intent', 'patient');
-      }
+      const isClinicPath = typeof window !== 'undefined' && (
+        window.location.pathname.startsWith('/clinic') ||
+        sessionStorage.getItem('viitsa_portal_intent') === 'clinic'
+      );
+      const defaultRole: Role = isClinicPath ? 'clinic_admin' : 'patient';
+
       const provider = new GoogleAuthProvider();
       provider.setCustomParameters({ prompt: 'select_account' });
       const cred = await signInWithPopup(auth, provider);
       
       const effectiveOnboarding: OnboardingData = {
-        role: 'patient',
+        role: onboarding?.role || defaultRole,
         ...onboarding,
       };
 
@@ -422,8 +415,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         return { ok: false, error: errMsg };
       }
 
-      // STRICT PATIENT CHECK: Clinic/Admin accounts are not permitted to log in via Google
-      if (CLINIC_ROLES.includes(res.user.role) || ADMIN_ROLES.includes(res.user.role)) {
+      // STRICT ADMIN CHECK: Platform Administrator accounts are strictly forbidden from Google Sign-In
+      if (ADMIN_ROLES.includes(res.user.role)) {
         try {
           await signOut(auth);
         } catch {}
@@ -431,10 +424,30 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setUser(null);
         setClinic(null);
         setPatientAccount(null);
-        const isAdminUser = ADMIN_ROLES.includes(res.user.role);
-        const msg = isAdminUser
-          ? 'This Google account is registered as an Administrator account. Google Sign-In is only enabled for Patients. Please sign in to the Admin Portal (/admin/login) using your credentials.'
-          : 'This Google account is registered as a Clinic / Staff account. Google Sign-In is only enabled for Patients. Please sign in to the Clinic Portal (/clinic/login) using your email and password.';
+        const msg = 'Platform Administrator accounts must log in strictly using email and password at /admin/login.';
+        setError(msg);
+        return { ok: false, error: msg };
+      }
+
+      // Check portal alignment if specified
+      const portalIntent = sessionStorage.getItem('viitsa_portal_intent');
+      if (portalIntent === 'patient' && CLINIC_ROLES.includes(res.user.role)) {
+        try { await signOut(auth); } catch {}
+        clearAllViitsaCaches();
+        setUser(null);
+        setClinic(null);
+        setPatientAccount(null);
+        const msg = 'This Google account is registered as a Clinic / Doctor account. Please sign in via the Clinic Portal (/clinic/login).';
+        setError(msg);
+        return { ok: false, error: msg };
+      }
+      if (portalIntent === 'clinic' && PATIENT_ROLES.includes(res.user.role)) {
+        try { await signOut(auth); } catch {}
+        clearAllViitsaCaches();
+        setUser(null);
+        setClinic(null);
+        setPatientAccount(null);
+        const msg = 'This Google account is registered as a Patient account. Please sign in via the Patient Portal (/login).';
         setError(msg);
         return { ok: false, error: msg };
       }
@@ -460,6 +473,161 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return { ok: false, error: msg };
     }
   }, []);
+
+  // WhatsApp OTP: Step 1 - Send OTP via Cloud Function & Meta Template phone_login_otps
+  const sendWhatsAppLoginOtp = useCallback(async (
+    phone: string,
+    portal: 'clinic' | 'patient' | 'admin' = 'clinic',
+    action: 'login' | 'register' = 'login'
+  ): Promise<{ ok: boolean; error?: string }> => {
+    setError(null);
+    const clean = phone.replace(/\D/g, '').slice(-10);
+    if (clean.length < 10) {
+      const msg = 'Please enter a valid 10-digit mobile number.';
+      setError(msg);
+      return { ok: false, error: msg };
+    }
+
+    try {
+      const fn = httpsCallable(functions, 'sendWhatsAppAuthOtp');
+      const res: any = await fn({ phone: clean, portal, action });
+      if (res.data?.success) {
+        return { ok: true };
+      }
+      throw new Error(res.data?.message || 'Failed to dispatch WhatsApp OTP.');
+    } catch (err: any) {
+      console.error('sendWhatsAppLoginOtp error:', err);
+      const msg = err.message || 'Failed to send WhatsApp OTP. Please ensure your number is registered on WhatsApp.';
+      setError(msg);
+      return { ok: false, error: msg };
+    }
+  }, []);
+
+  // WhatsApp OTP: Step 2 - Verify Code & Login via Custom Token
+  const loginWithWhatsAppOtp = useCallback(async (
+    phone: string,
+    otp: string,
+    onboarding?: OnboardingData
+  ): Promise<AuthResponse> => {
+    setError(null);
+    const cleanPhone = phone.replace(/\D/g, '').slice(-10);
+    const cleanOtp = otp.trim();
+
+    if (!cleanPhone || cleanPhone.length < 10) {
+      const msg = 'Please enter a valid 10-digit mobile number.';
+      setError(msg);
+      return { ok: false, error: msg };
+    }
+    if (!cleanOtp) {
+      const msg = 'Please enter the verification code sent to your WhatsApp.';
+      setError(msg);
+      return { ok: false, error: msg };
+    }
+
+    try {
+      const fn = httpsCallable(functions, 'verifyWhatsAppAuthOtp');
+      const res: any = await fn({
+        phone: cleanPhone,
+        otp: cleanOtp,
+        onboarding,
+      });
+
+      if (!res.data?.success || !res.data?.customToken) {
+        throw new Error(res.data?.message || 'Verification failed. Please check the OTP.');
+      }
+
+      const cred = await signInWithCustomToken(auth, res.data.customToken);
+      const identityRes = await resolveCanonicalIdentity(cred.user, {
+        phone: cleanPhone,
+        ...onboarding,
+      });
+
+      // Platform admins are strictly forbidden from logging in via WhatsApp OTP
+      if (ADMIN_ROLES.includes(identityRes.user.role)) {
+        await signOut(auth);
+        clearAllViitsaCaches();
+        setUser(null);
+        setClinic(null);
+        setPatientAccount(null);
+        const msg = 'Platform Administrator accounts must log in strictly using email and password at /admin/login.';
+        setError(msg);
+        return { ok: false, error: msg };
+      }
+
+      setUser(identityRes.user);
+      setClinic(identityRes.clinic);
+      setPatientAccount(identityRes.patientAccount);
+      logUserLogin(identityRes.user.id || identityRes.user.user_id, identityRes.user.role, identityRes.user.clinic_id, { method: 'whatsapp_otp' });
+      return {
+        ok: true,
+        user: identityRes.user,
+        clinic: identityRes.clinic,
+        patientAccount: identityRes.patientAccount,
+        role: identityRes.user.role,
+        isNewUser: identityRes.isNewUser,
+      };
+    } catch (err: any) {
+      console.error('loginWithWhatsAppOtp error:', err);
+      const msg = err.message || 'Failed to verify WhatsApp OTP. Please try again.';
+      setError(msg);
+      return { ok: false, error: msg };
+    }
+  }, []);
+
+  // Link/Add Email to Current Profile (Non-blocking post-login email linking)
+  const linkUserEmail = useCallback(async (newEmail: string): Promise<{ ok: boolean; error?: string }> => {
+    if (!user) return { ok: false, error: 'User is not authenticated' };
+    const cleanEmail = newEmail.trim().toLowerCase();
+    if (!/^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/.test(cleanEmail)) {
+      return { ok: false, error: 'Please enter a valid email address.' };
+    }
+
+    try {
+      // Check if email already claimed by another user
+      const usersRef = collection(db, 'users');
+      const q = query(usersRef, where('email', '==', cleanEmail));
+      const snap = await getDocs(q);
+      const existingOther = snap.docs.find(d => d.id !== user.user_id && d.data().user_id !== user.user_id);
+      if (existingOther) {
+        return { ok: false, error: 'This email is already linked to another account.' };
+      }
+
+      // Update users collection
+      await updateDoc(doc(db, 'users', user.user_id), {
+        email: cleanEmail,
+        email_verified: false,
+        updated_at: new Date().toISOString(),
+      });
+
+      // Update patient_accounts collection if patient
+      const patId = user.patient_account_id || (PATIENT_ROLES.includes(user.role) ? `pat_${user.user_id}` : null);
+      if (patId) {
+        try {
+          await updateDoc(doc(db, 'patient_accounts', patId), {
+            email: cleanEmail,
+            updated_at: new Date().toISOString(),
+          });
+        } catch {}
+      }
+
+      // Update local React state
+      setUser(prev => prev ? { ...prev, email: cleanEmail } : null);
+
+      // Dispatch verification link via Titan SMTP / Cloud Functions
+      const isClinic = CLINIC_ROLES.includes(user.role);
+      const origin = (typeof window !== 'undefined' && window.location.origin && !window.location.origin.includes('localhost') && !window.location.origin.includes('127.0.0.1'))
+        ? window.location.origin
+        : 'https://viitsa.com';
+      const continueUrl = `${origin}${isClinic ? '/clinic/login?verified=true' : '/login?verified=true'}`;
+
+      await sendVerificationNotificationEmail(cleanEmail, user.name, continueUrl, isClinic ? 'clinic' : 'patient');
+
+      return { ok: true };
+    } catch (err: any) {
+      console.error('linkUserEmail error:', err);
+      return { ok: false, error: err.message || 'Failed to link email address.' };
+    }
+  }, [user]);
 
   // Phone OTP: Step 1 - Send OTP
   const sendPhoneOtp = useCallback(async (
@@ -847,6 +1015,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       refreshSession,
       clearError,
       applyVerificationCode,
+      sendWhatsAppLoginOtp,
+      loginWithWhatsAppOtp,
+      linkUserEmail,
       login,
       loginWithGoogleLegacy,
       loginWithOtp,
@@ -866,6 +1037,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       loginWithGoogle,
       sendPhoneOtp,
       verifyPhoneOtp,
+      sendWhatsAppLoginOtp,
+      loginWithWhatsAppOtp,
+      linkUserEmail,
       updateUserRole,
       logout,
       refreshSession,
@@ -886,9 +1060,40 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   );
 }
 
+const defaultAuthState: AuthState = {
+  user: null,
+  clinic: null,
+  patientAccount: null,
+  loading: true,
+  error: null,
+  clearError: () => {},
+  loginWithEmail: async () => ({ ok: false, error: 'Authentication initializing...' }),
+  registerWithEmail: async () => ({ ok: false, error: 'Authentication initializing...' }),
+  logout: async () => {},
+  switchClinic: async () => {},
+  setClinic: () => {},
+  setUser: () => {},
+  refreshSession: async () => {},
+  updateUserRole: async () => {},
+  sendEmailOtp: async () => ({ ok: false, error: 'Authentication initializing...' }),
+  verifyEmailOtp: async () => ({ ok: false, error: 'Authentication initializing...' }),
+  sendPhoneOtp: async () => ({ ok: false, error: 'Authentication initializing...' }),
+  verifyPhoneOtp: async () => ({ ok: false, error: 'Authentication initializing...' }),
+  sendWhatsAppLoginOtp: async () => ({ ok: false, error: 'Authentication initializing...' }),
+  loginWithWhatsAppOtp: async () => ({ ok: false, error: 'Authentication initializing...' }),
+  linkUserEmail: async () => ({ ok: false, error: 'Authentication initializing...' }),
+  loginWithGoogle: async () => ({ ok: false, error: 'Authentication initializing...' }),
+  applyVerificationCode: async () => ({ ok: false, error: 'Authentication initializing...' }),
+  resendVerificationEmail: async () => ({ ok: false, error: 'Authentication initializing...' }),
+  loginWithGoogleLegacy: async () => ({ ok: false, error: 'Authentication initializing...' }),
+  loginWithOtp: async () => ({ ok: false, error: 'Authentication initializing...' }),
+};
+
 export function useAuth(): AuthState {
   const ctx = useContext(AuthContext);
-  if (!ctx) throw new Error('useAuth must be used within AuthProvider');
+  if (!ctx) {
+    return defaultAuthState;
+  }
   return ctx;
 }
 

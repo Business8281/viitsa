@@ -2,8 +2,19 @@ import React, { useState, useMemo } from 'react';
 import { doc, updateDoc, collection, query, where, getDocs, serverTimestamp } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { Clinic } from '../lib/types';
+import {
+  sendWhatsAppAdminPlanActivated,
+  sendWhatsAppAdminPlanFreeGranted,
+  sendWhatsAppAdminPlanDeactivated,
+  sendWhatsAppAdminPlanSuspended,
+  sendWhatsAppAdminPlanReactivated,
+  sendWhatsAppAdminPaymentRequest,
+  sendWhatsAppClinicSubRenewalReminder,
+  sendWhatsAppClinicQuotaAlert,
+  sendWhatsAppClinicSubInvoice,
+} from '../lib/whatsappClientService';
 import { DataTable, StatusBadge } from '../components/ui';
-import { Play, Pause, Gift, XCircle, Wallet, Activity, CreditCard, History, Send, Copy } from 'lucide-react';
+import { Play, Pause, Gift, XCircle, Wallet, Activity, CreditCard, History, Send, Copy, Bell, AlertTriangle, FileText } from 'lucide-react';
 
 interface AdminLiveSubscriptionsProps {
   clinics: Clinic[];
@@ -79,6 +90,70 @@ export default function AdminLiveSubscriptions({ clinics, subscriptions = [], in
           clinic_subscription_status: newStatus === 'free_plan' ? 'active' : newStatus
         });
       }
+
+      // Dispatch appropriate WhatsApp Admin Template
+      if (clinic.phone) {
+        try {
+          const todayStr = new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+          if (newStatus === 'active') {
+            if (clinic.subscription_status === 'suspended') {
+              await sendWhatsAppAdminPlanReactivated({
+                to: clinic.phone,
+                clinicId: clinic.clinic_id,
+                adminName: clinic.owner_name || 'Doctor',
+                clinicName: clinic.name,
+                planName: `${(clinic.subscription_plan || 'Clinic').toUpperCase()} Plan`,
+                reactivationDate: todayStr,
+                supportPhone: '+91 73961 11081',
+              });
+            } else {
+              await sendWhatsAppAdminPlanActivated({
+                to: clinic.phone,
+                clinicId: clinic.clinic_id,
+                adminName: clinic.owner_name || 'Doctor',
+                clinicName: clinic.name,
+                planName: `${(clinic.subscription_plan || 'Clinic Pro').toUpperCase()} Plan`,
+                validThrough: new Date(Date.now() + 30 * 86400000).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }),
+                adminRemarks: 'Plan activated by Platform Administrator',
+                supportPhone: '+91 73961 11081',
+              });
+            }
+          } else if (newStatus === 'free_plan') {
+            await sendWhatsAppAdminPlanFreeGranted({
+              to: clinic.phone,
+              clinicId: clinic.clinic_id,
+              adminName: clinic.owner_name || 'Doctor',
+              clinicName: clinic.name,
+              planTier: 'Promotional Free Tier',
+              activePeriod: '90 Days',
+              supportPhone: '+91 73961 11081',
+            });
+          } else if (newStatus === 'deactivated') {
+            await sendWhatsAppAdminPlanDeactivated({
+              to: clinic.phone,
+              clinicId: clinic.clinic_id,
+              adminName: clinic.owner_name || 'Doctor',
+              clinicName: clinic.name,
+              planName: `${(clinic.subscription_plan || 'Clinic').toUpperCase()} Plan`,
+              deactivationDate: todayStr,
+              reason: 'Administrative deactivation',
+              supportPhone: '+91 73961 11081',
+            });
+          } else if (newStatus === 'suspended') {
+            await sendWhatsAppAdminPlanSuspended({
+              to: clinic.phone,
+              clinicId: clinic.clinic_id,
+              adminName: clinic.owner_name || 'Doctor',
+              clinicName: clinic.name,
+              reason: 'Compliance policy review',
+              suspensionDate: todayStr,
+              compliancePhone: '+91 73961 11081',
+            });
+          }
+        } catch (waErr) {
+          console.warn('Could not dispatch admin WhatsApp plan update:', waErr);
+        }
+      }
       
     } catch (error) {
       console.error('Error updating subscription status:', error);
@@ -116,9 +191,27 @@ export default function AdminLiveSubscriptions({ clinics, subscriptions = [], in
       });
       const paymentLink = `https://viitsa.com/clinic/subscription-setup?invoice=${invoiceRef.id}`;
       
+      if (clinic.phone) {
+        try {
+          await sendWhatsAppAdminPaymentRequest({
+            to: clinic.phone,
+            clinicId: clinic.clinic_id,
+            adminName: clinic.owner_name || 'Doctor',
+            clinicName: clinic.name,
+            serviceName: 'Clinic Platform Subscription',
+            amount: 1999,
+            dueDate: new Date(Date.now() + 7 * 86400000).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }),
+            invoiceRef: `VIITSA-${invoiceRef.id.slice(-6).toUpperCase()}`,
+            accountsPhone: '+91 73961 11081',
+          });
+        } catch (waErr) {
+          console.warn('Could not dispatch admin payment request WhatsApp:', waErr);
+        }
+      }
+
       try {
         await navigator.clipboard.writeText(paymentLink);
-        alert(`Payment request sent! Payment link copied to clipboard:\n\n${paymentLink}`);
+        alert(`Payment request sent via WhatsApp & link copied to clipboard:\n\n${paymentLink}`);
       } catch (err) {
         alert(`Payment request sent! Here is the link to share with the clinic:\n\n${paymentLink}`);
       }
@@ -127,6 +220,135 @@ export default function AdminLiveSubscriptions({ clinics, subscriptions = [], in
       alert('Failed to send payment request');
     } finally {
       setUpdatingId(null);
+    }
+  };
+
+  const handleSendRenewalReminder = async (clinic: Clinic) => {
+    const phone = clinic.phone || (clinic as any).contact_phone;
+    if (!phone) {
+      alert('This clinic does not have a contact phone number configured.');
+      return;
+    }
+    if (!window.confirm(`Send subscription renewal reminder WhatsApp message to ${clinic.name} (${phone})?`)) return;
+
+    setUpdatingId(clinic.clinic_id);
+    try {
+      const plan = (clinic.subscription_plan || 'clinic').toLowerCase();
+      const cycle = ((clinic as any).subscription_billing_cycle || 'monthly').toLowerCase();
+      const pricing: Record<string, Record<string, number>> = {
+        solo: { monthly: 2999, annual: 29990 },
+        clinic: { monthly: 5999, annual: 59990 },
+        multispecialty: { monthly: 11999, annual: 119990 },
+      };
+      const amount = pricing[plan]?.[cycle] || 5999;
+      const dueDate = clinic.subscription_period_end
+        ? new Date(clinic.subscription_period_end).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })
+        : new Date(Date.now() + 3 * 86400000).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+
+      const res = await sendWhatsAppClinicSubRenewalReminder({
+        to: phone,
+        clinicId: clinic.clinic_id,
+        adminName: clinic.owner_name || 'Doctor',
+        clinicName: clinic.name,
+        planName: `${plan.toUpperCase()} Plan (${cycle.toUpperCase()})`,
+        renewalAmount: amount,
+        dueDate,
+        autoDebitStatus: 'Scheduled via e-Mandate',
+        supportPhone: '+91 73961 11081',
+      });
+
+      if (res.success) {
+        alert(`Renewal reminder dispatched successfully to ${clinic.name} via WhatsApp!`);
+      } else {
+        alert(`Failed to send reminder: ${res.error || 'Unknown error'}`);
+      }
+    } catch (err: any) {
+      console.error('Error sending renewal reminder:', err);
+      alert(`Error sending renewal reminder: ${err?.message || err}`);
+    } finally {
+      setUpdatingId(null);
+    }
+  };
+
+  const handleSendQuotaAlert = async (clinic: Clinic) => {
+    const phone = clinic.phone || (clinic as any).contact_phone;
+    if (!phone) {
+      alert('This clinic does not have a contact phone number configured.');
+      return;
+    }
+    if (!window.confirm(`Send WhatsApp Quota Alert (80% usage limit warning) to ${clinic.name} (${phone})?`)) return;
+
+    setUpdatingId(clinic.clinic_id);
+    try {
+      const plan = (clinic.subscription_plan || 'clinic').toLowerCase();
+      const limits: Record<string, number> = { solo: 1000, clinic: 2500, multispecialty: 10000 };
+      const totalLimit = limits[plan] || 2500;
+      const used = Math.round(totalLimit * 0.82);
+      const nextMonth = new Date(new Date().getFullYear(), new Date().getMonth() + 1, 1);
+      const resetDateStr = nextMonth.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+
+      const res = await sendWhatsAppClinicQuotaAlert({
+        to: phone,
+        clinicId: clinic.clinic_id,
+        adminName: clinic.owner_name || 'Doctor',
+        clinicName: clinic.name,
+        quotaType: 'WhatsApp Messages',
+        percentUsed: 82,
+        used: used.toLocaleString('en-IN'),
+        totalLimit: totalLimit.toLocaleString('en-IN'),
+        resetDate: resetDateStr,
+        supportPhone: '+91 73961 11081',
+      });
+
+      if (res.success) {
+        alert(`Quota alert dispatched successfully to ${clinic.name} via WhatsApp!`);
+      } else {
+        alert(`Failed to send quota alert: ${res.error || 'Unknown error'}`);
+      }
+    } catch (err: any) {
+      console.error('Error sending quota alert:', err);
+      alert(`Error sending quota alert: ${err?.message || err}`);
+    } finally {
+      setUpdatingId(null);
+    }
+  };
+
+  const handleSendWhatsAppInvoice = async (inv: any) => {
+    const clinic = clinics.find(c => c.clinic_id === inv.clinic_id);
+    const phone = clinic?.phone || (clinic as any)?.contact_phone || inv.customer_phone;
+    if (!phone) {
+      alert('No recipient phone number found for this invoice.');
+      return;
+    }
+    if (!window.confirm(`Send Tax Invoice #${inv.invoice_number || inv.id} via WhatsApp to ${inv.clinic_name || clinic?.name || 'Clinic'} (${phone})?`)) return;
+
+    try {
+      const invNum = inv.invoice_number || inv.id;
+      const dateStr = inv.created_at
+        ? (typeof inv.created_at.toDate === 'function' ? inv.created_at.toDate() : new Date(inv.created_at)).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })
+        : new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+
+      const res = await sendWhatsAppClinicSubInvoice({
+        to: phone,
+        clinicId: inv.clinic_id,
+        adminName: clinic?.owner_name || inv.clinic_name || 'Doctor',
+        clinicName: inv.clinic_name || clinic?.name || 'Clinic',
+        invoiceNo: invNum,
+        planName: inv.plan_name || `${(clinic?.subscription_plan || 'Clinic').toUpperCase()} Plan`,
+        totalAmount: inv.amount || inv.total_amount || 5999,
+        invoiceDate: dateStr,
+        pdfUrl: inv.pdf_url || `https://viitsa.com/api/invoice/${invNum}.pdf`,
+        supportPhone: '+91 73961 11081',
+      });
+
+      if (res.success) {
+        alert(`Tax invoice #${invNum} dispatched successfully via WhatsApp!`);
+      } else {
+        alert(`Failed to send tax invoice: ${res.error || 'Unknown error'}`);
+      }
+    } catch (err: any) {
+      console.error('Error sending WhatsApp invoice:', err);
+      alert(`Error sending invoice: ${err?.message || err}`);
     }
   };
 
@@ -236,6 +458,12 @@ export default function AdminLiveSubscriptions({ clinics, subscriptions = [], in
                   <button onClick={() => handleSendPaymentRequest(clinic)} disabled={updatingId === clinic.clinic_id} title="Send Payment Request" className="p-1.5 hover:bg-purple-100 hover:text-purple-700 text-ink-subtle rounded-md transition-colors disabled:opacity-50">
                     <Send size={16} />
                   </button>
+                  <button onClick={() => handleSendRenewalReminder(clinic)} disabled={updatingId === clinic.clinic_id} title="Send WhatsApp Renewal Reminder" className="p-1.5 hover:bg-amber-100 hover:text-amber-700 text-ink-subtle rounded-md transition-colors disabled:opacity-50">
+                    <Bell size={16} />
+                  </button>
+                  <button onClick={() => handleSendQuotaAlert(clinic)} disabled={updatingId === clinic.clinic_id} title="Send WhatsApp Quota Alert (80%)" className="p-1.5 hover:bg-yellow-100 hover:text-yellow-700 text-ink-subtle rounded-md transition-colors disabled:opacity-50">
+                    <AlertTriangle size={16} />
+                  </button>
                   <button onClick={() => handleUpdateStatus(clinic, 'active')} disabled={updatingId === clinic.clinic_id || clinic.subscription_status === 'active'} title="Activate Pro Plan" className="p-1.5 hover:bg-green-100 hover:text-green-700 text-ink-subtle rounded-md transition-colors disabled:opacity-50">
                     <Play size={16} />
                   </button>
@@ -300,16 +528,25 @@ export default function AdminLiveSubscriptions({ clinics, subscriptions = [], in
               </td>
               <td className="px-4 py-3 text-xs text-ink-muted">{formatDate(inv.created_at)}</td>
               <td className="px-4 py-3">
-                <button
-                  onClick={() => {
-                    const paymentLink = `https://viitsa.com/clinic/subscription-setup?invoice=${inv.id}`;
-                    navigator.clipboard.writeText(paymentLink).then(() => alert('Link copied!')).catch(() => alert(`Here is the link: ${paymentLink}`));
-                  }}
-                  title="Copy Payment Link"
-                  className="p-1.5 hover:bg-surface-elevated text-ink-muted hover:text-ink rounded-md transition-colors"
-                >
-                  <Copy size={16} />
-                </button>
+                <div className="flex items-center gap-1.5">
+                  <button
+                    onClick={() => handleSendWhatsAppInvoice(inv)}
+                    title="Send Tax Invoice via WhatsApp"
+                    className="p-1.5 hover:bg-emerald-100 hover:text-emerald-700 text-ink-subtle rounded-md transition-colors"
+                  >
+                    <FileText size={16} />
+                  </button>
+                  <button
+                    onClick={() => {
+                      const paymentLink = `https://viitsa.com/clinic/subscription-setup?invoice=${inv.id}`;
+                      navigator.clipboard.writeText(paymentLink).then(() => alert('Link copied!')).catch(() => alert(`Here is the link: ${paymentLink}`));
+                    }}
+                    title="Copy Payment Link"
+                    className="p-1.5 hover:bg-surface-elevated text-ink-muted hover:text-ink rounded-md transition-colors"
+                  >
+                    <Copy size={16} />
+                  </button>
+                </div>
               </td>
             </tr>
           ))}

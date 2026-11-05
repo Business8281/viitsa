@@ -151,17 +151,11 @@ function ClinicProtectedRoute({ children }: { children: React.ReactNode }) {
   if (ADMIN_ROLES.includes(user.role)) return <Navigate to="/admin/dashboard" replace />;
   if (user.role === 'clinic_doctor' || user.role === 'doctor') {
     const subPath = location.pathname.replace(/^\/clinic/, '');
-    if (!subPath || subPath === '/' || subPath === '/dashboard') {
-      return <Navigate to="/doctor/dashboard" replace />;
-    }
     if (subPath === '/appointments' || subPath === '/patients' || subPath === '/billing' || subPath === '/ai-navigator') {
       return <Navigate to={`/doctor${subPath}`} replace />;
     }
-  }
-  
-  // Unverified password user
-  if (auth.currentUser && !auth.currentUser.emailVerified && auth.currentUser.providerData.some(p => p.providerId === 'password')) {
-    return <Navigate to="/clinic/login?unverified=true" replace />;
+    // Doctors must NEVER access clinic administrative routes (e.g. /clinic/settings, /clinic/inventory, /clinic/analytics, etc.)
+    return <Navigate to="/doctor/dashboard" replace />;
   }
 
   // Clinic admin setup & approval progression
@@ -226,20 +220,18 @@ function ClinicSetupRoute() {
   if (!user) return <Navigate to="/clinic/login" replace />;
   if (PATIENT_ROLES.includes(user.role)) return <Navigate to="/patient/dashboard" replace />;
   if (user.role !== 'clinic_admin') return <Navigate to="/clinic/dashboard" replace />;
-  
-  // If unverified email, must verify first
-  if (auth.currentUser && !auth.currentUser.emailVerified && auth.currentUser.providerData.some(p => p.providerId === 'password')) {
-    return <Navigate to="/clinic/login?unverified=true" replace />;
-  }
 
-  // If already completed setup, proceed to next step
+  // If already completed setup, proceed to next step in onboarding progression
   if (user.clinic_setup_complete === true) {
     if (user.clinic_documents_uploaded !== true) {
       return <Navigate to="/clinic/upload-documents" replace />;
     }
-    const verificationStatus = clinic?.verification_status || user.clinic_verification_status;
+    const verificationStatus = clinic?.verification_status || user.clinic_verification_status || 'unverified';
     if (verificationStatus !== 'approved') {
       return <Navigate to="/clinic/pending-approval" replace />;
+    }
+    if (clinic?.subscription_status !== 'active' && clinic?.subscription_status !== 'free_plan' && clinic?.subscription_status !== 'trial') {
+      return <Navigate to="/clinic/subscription-setup" replace />;
     }
     return <Navigate to="/clinic/dashboard" replace />;
   }
@@ -256,17 +248,19 @@ function ClinicDocumentUploadRoute() {
   if (!user) return <Navigate to="/clinic/login" replace />;
   if (PATIENT_ROLES.includes(user.role)) return <Navigate to="/patient/dashboard" replace />;
   if (user.role !== 'clinic_admin') return <Navigate to="/clinic/dashboard" replace />;
-  
-  if (auth.currentUser && !auth.currentUser.emailVerified && auth.currentUser.providerData.some(p => p.providerId === 'password')) {
-    return <Navigate to="/clinic/login?unverified=true" replace />;
-  }
 
+  // Must complete setup form first before uploading documents
   if (user.clinic_setup_complete !== true) return <Navigate to="/clinic/setup" replace />;
   
+  // If already uploaded documents, proceed to pending approval or dashboard
   if (user.clinic_documents_uploaded === true) {
-    const verificationStatus = clinic?.verification_status || user.clinic_verification_status;
-    if (verificationStatus !== 'approved') return <Navigate to="/clinic/pending-approval" replace />;
-    if (clinic?.subscription_status !== 'active' && clinic?.subscription_status !== 'free_plan' && clinic?.subscription_status !== 'trial') return <Navigate to="/clinic/subscription-setup" replace />;
+    const verificationStatus = clinic?.verification_status || user.clinic_verification_status || 'unverified';
+    if (verificationStatus !== 'approved') {
+      return <Navigate to="/clinic/pending-approval" replace />;
+    }
+    if (clinic?.subscription_status !== 'active' && clinic?.subscription_status !== 'free_plan' && clinic?.subscription_status !== 'trial') {
+      return <Navigate to="/clinic/subscription-setup" replace />;
+    }
     return <Navigate to="/clinic/dashboard" replace />;
   }
   return (
@@ -281,17 +275,15 @@ function ClinicPendingApprovalRoute() {
   if (loading) return <PageLoader />;
   if (!user) return <Navigate to="/clinic/login" replace />;
   if (PATIENT_ROLES.includes(user.role)) return <Navigate to="/patient/dashboard" replace />;
-  
-  if (auth.currentUser && !auth.currentUser.emailVerified && auth.currentUser.providerData.some(p => p.providerId === 'password')) {
-    return <Navigate to="/clinic/login?unverified=true" replace />;
-  }
 
   if (user.role === 'clinic_admin') {
+    // Basic clinic info form must be completed first
     if (user.clinic_setup_complete !== true) return <Navigate to="/clinic/setup" replace />;
+    // Documents must be uploaded before showing pending approval
     if (user.clinic_documents_uploaded !== true) return <Navigate to="/clinic/upload-documents" replace />;
   }
-  
-  const verificationStatus = clinic?.verification_status || user.clinic_verification_status;
+
+  const verificationStatus = clinic?.verification_status || user.clinic_verification_status || 'pending';
   if (verificationStatus === 'approved') {
     if (clinic?.subscription_status !== 'active' && clinic?.subscription_status !== 'free_plan' && clinic?.subscription_status !== 'trial') return <Navigate to="/clinic/subscription-setup" replace />;
     return <Navigate to="/clinic/dashboard" replace />;
@@ -317,12 +309,11 @@ function ClinicSubscriptionRoute() {
   }
   
   const isPayingInvoice = new URLSearchParams(location.search).has('invoice');
-  if (!isPayingInvoice && clinic?.subscription_status !== 'deactivated' && clinic?.subscription_status !== 'cancelled') {
-    if (clinic?.verification_status !== 'approved') return <Navigate to="/clinic/pending-approval" replace />;
-  }
-  
-  if (!isPayingInvoice && (clinic?.subscription_status === 'active' || clinic?.subscription_status === 'free_plan' || clinic?.subscription_status === 'trial')) {
-    return <Navigate to="/clinic/dashboard" replace />;
+  const isRetryOrSetup = new URLSearchParams(location.search).has('mode') || new URLSearchParams(location.search).has('renew');
+  if (!isPayingInvoice && !isRetryOrSetup && clinic?.subscription_status !== 'deactivated' && clinic?.subscription_status !== 'cancelled' && clinic?.subscription_status !== 'payment_failed') {
+    if (clinic?.verification_status !== 'approved' && clinic?.verification_status !== 'verified') {
+      return <Navigate to="/clinic/pending-approval" replace />;
+    }
   }
   
   return (
@@ -368,9 +359,6 @@ function PatientProtectedRoute({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
   if (loading) return <PageLoader />;
   if (!user) return <Navigate to="/login" replace />;
-  if (auth.currentUser && !auth.currentUser.emailVerified && auth.currentUser.providerData.some(p => p.providerId === 'password')) {
-    return <Navigate to="/login?unverified=true" replace />;
-  }
   if (ADMIN_ROLES.includes(user.role as Role)) return <Navigate to="/admin/dashboard" replace />;
   if (CLINIC_ROLES.includes(user.role as Role)) return <Navigate to="/clinic/dashboard" replace />;
   return <>{children}</>;
@@ -391,11 +379,6 @@ function ClinicPublicRoute({ children }: { children: React.ReactNode }) {
       searchParams.get('verified') === 'true' ||
       searchParams.get('unverified') === 'true'
     ) {
-      return <>{children}</>;
-    }
-
-    // If unverified password user, keep them on login page to see verification modal/message
-    if (auth.currentUser && !auth.currentUser.emailVerified && auth.currentUser.providerData.some(p => p.providerId === 'password')) {
       return <>{children}</>;
     }
 
@@ -455,10 +438,6 @@ function DoctorProtectedRoute({ children }: { children: React.ReactNode }) {
   if (PATIENT_ROLES.includes(user.role)) return <Navigate to="/patient/dashboard" replace />;
   if (ADMIN_ROLES.includes(user.role)) return <Navigate to="/admin/dashboard" replace />;
   if (user.role === 'clinic_admin') return <Navigate to="/clinic/dashboard" replace />;
-  
-  if (auth.currentUser && !auth.currentUser.emailVerified && auth.currentUser.providerData.some(p => p.providerId === 'password')) {
-    return <Navigate to="/clinic/login?unverified=true" replace />;
-  }
 
   const verificationStatus = clinic?.verification_status || user.clinic_verification_status;
   if (verificationStatus && verificationStatus !== 'approved') {
@@ -475,10 +454,6 @@ function DoctorLayout() {
   if (PATIENT_ROLES.includes(user.role)) return <Navigate to="/patient/dashboard" replace />;
   if (ADMIN_ROLES.includes(user.role)) return <Navigate to="/admin/dashboard" replace />;
   if (user.role === 'clinic_admin') return <Navigate to="/clinic/dashboard" replace />;
-
-  if (auth.currentUser && !auth.currentUser.emailVerified && auth.currentUser.providerData.some(p => p.providerId === 'password')) {
-    return <Navigate to="/clinic/login?unverified=true" replace />;
-  }
 
   const verificationStatus = clinic?.verification_status || user.clinic_verification_status;
   if (verificationStatus && verificationStatus !== 'approved') {
@@ -503,13 +478,12 @@ function ClinicLayout() {
   if (PATIENT_ROLES.includes(user.role)) {
     return <Navigate to="/patient/dashboard" replace />;
   }
+  // Doctor roles should always be in /doctor/dashboard, never rendering ClinicLayout
+  if (user.role === 'clinic_doctor' || user.role === 'doctor') {
+    return <Navigate to="/doctor/dashboard" replace />;
+  }
   if (!CLINIC_ROLES.includes(user.role as Role) && !ADMIN_ROLES.includes(user.role as Role)) {
     return <Navigate to="/clinic/login" replace />;
-  }
-
-  // Password user email verification guard
-  if (auth.currentUser && !auth.currentUser.emailVerified && auth.currentUser.providerData.some(p => p.providerId === 'password')) {
-    return <Navigate to="/clinic/login?unverified=true" replace />;
   }
   
   // Clinic admin setup guard
@@ -537,7 +511,7 @@ function ClinicLayout() {
 
 function RoleBasedDashboard() {
   const { user } = useAuth();
-  if (user?.role === 'clinic_doctor') return <DoctorDashboard />;
+  if (user?.role === 'clinic_doctor' || user?.role === 'doctor') return <DoctorDashboard />;
   return <DashboardScreen />;
 }
 
@@ -669,6 +643,7 @@ function AppRoutes() {
 
         {/* QR Walkin Page */}
         <Route path="/qr-walkin" element={<Suspense fallback={<PageLoader />}><QRWalkinPage /></Suspense>} />
+        <Route path="/walkin" element={<Suspense fallback={<PageLoader />}><QRWalkinPage /></Suspense>} />
 
         {/* Public Appointment Management — no login required */}
         <Route path="/appointment/manage" element={<Suspense fallback={<PageLoader />}><AppointmentManagePage /></Suspense>} />

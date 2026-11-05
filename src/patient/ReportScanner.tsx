@@ -190,17 +190,28 @@ export function ReportScanner({ patientId, patientName, accountId, clinicId, onB
               try {
                 const downloadUrl = await getDownloadURL(uploadTask.snapshot.ref);
 
+                const doctorObj = selectedDoctor ? doctors.find(d => d.id === selectedDoctor) : null;
+                const docName = doctorObj?.name || null;
+                const reportTitle = item.name || 'Medical Report';
+
                 // Save report doc to Firestore
                 const docRef = await addDoc(collection(db, 'health_reports'), {
                   patient_id: patientId,
                   account_id: accountId,
                   clinic_id: selectedClinic || clinicId || null,
                   doctor_id: selectedDoctor || null,
-                  report_type: item.name || 'Medical Report',
+                  doctor_name: docName,
+                  prescribed_by: docName,
+                  report_type: reportTitle,
+                  test_name: reportTitle,
+                  title: reportTitle,
+                  name: reportTitle,
                   category: item.category,
                   report_date: localDateISO(),
-                  hospital_or_doctor: selectedDoctor ? doctors.find(d => d.id === selectedDoctor)?.name || null : null,
+                  hospital_or_doctor: docName,
                   original_file_url: downloadUrl,
+                  file_url: downloadUrl,
+                  download_url: downloadUrl,
                   original_file_type: item.file.type,
                   ai_processed: false,
                   created_at: new Date().toISOString()

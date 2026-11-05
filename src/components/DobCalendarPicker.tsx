@@ -120,53 +120,58 @@ export function DobCalendarPicker({
     onChange('');
   };
 
-  const formattedDisplay = value ? formatDate(value) : '';
+  const formattedDisplay = (() => {
+    if (!value) return '';
+    try {
+      const parsed = parseDateArg(value);
+      if (isNaN(parsed.getTime())) return '';
+      const day = String(parsed.getDate()).padStart(2, '0');
+      const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+      const month = months[parsed.getMonth()];
+      const year = parsed.getFullYear();
+      return `${day} ${month} ${year}`;
+    } catch {
+      return '';
+    }
+  })();
 
   return (
     <div className={`relative ${className}`} ref={containerRef}>
       {/* Input Display Button */}
       <div
         onClick={() => !disabled && setIsOpen(prev => !prev)}
-        className={`flex items-center justify-between w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm cursor-pointer transition shadow-sm hover:border-primary focus-within:border-primary ${
-          disabled ? 'opacity-60 cursor-not-allowed bg-gray-50' : ''
+        className={`flex items-center justify-between w-full h-11 rounded-xl border border-slate-300 bg-white px-3.5 text-sm cursor-pointer transition shadow-xs hover:border-[#106EBE] focus-within:border-[#106EBE] ${
+          disabled ? 'opacity-60 cursor-not-allowed bg-slate-50' : ''
         }`}
       >
-        <div className="flex items-center gap-2 min-w-0 flex-1">
-          <CalendarIcon size={16} className="text-primary shrink-0" />
-          <span className={`truncate ${formattedDisplay ? 'font-semibold text-gray-800' : 'text-gray-400'}`}>
-            {formattedDisplay || placeholder}
+        <div className="flex items-center gap-2.5 min-w-0 flex-1">
+          <CalendarIcon size={16} className="text-[#106EBE] shrink-0" />
+          <span className={`text-sm ${formattedDisplay ? 'font-semibold text-black font-mono tracking-wide' : 'text-slate-400'}`}>
+            {formattedDisplay || 'DD / MM / YYYY'}
           </span>
         </div>
 
-        <div className="flex items-center gap-1 shrink-0 ml-2">
-          {value && !disabled && (
-            <button
-              type="button"
-              onClick={handleClear}
-              className="p-1 rounded-full text-gray-400 hover:text-red-500 hover:bg-red-50 transition"
-              title="Clear date"
-            >
-              <X size={14} />
-            </button>
-          )}
+        {value && !disabled && (
           <button
             type="button"
-            className="px-2 py-0.5 rounded-lg bg-primary/10 text-primary text-xs font-semibold hover:bg-primary/20 transition"
+            onClick={handleClear}
+            className="p-1 rounded-full text-slate-400 hover:text-rose-500 hover:bg-rose-50 transition shrink-0 ml-1"
+            title="Clear date"
           >
-            {isOpen ? 'Close' : 'Calendar'}
+            <X size={14} />
           </button>
-        </div>
+        )}
       </div>
 
       {/* Calendar Popup Dropdown */}
       {isOpen && (
-        <div className="absolute z-50 left-0 right-0 sm:right-auto sm:w-80 mt-1 bg-white rounded-2xl border border-gray-200 shadow-2xl p-4 animate-in fade-in zoom-in-95 duration-150">
+        <div className="absolute z-50 left-0 right-0 sm:right-auto sm:w-80 mt-1.5 bg-white rounded-2xl border border-slate-200 shadow-2xl p-4 animate-in fade-in zoom-in-95 duration-150">
           {/* Header Controls: Month & Year Selectors */}
           <div className="flex items-center justify-between gap-1 mb-3">
             <button
               type="button"
               onClick={prevMonth}
-              className="p-1.5 rounded-lg text-gray-500 hover:bg-gray-100 transition"
+              className="p-1.5 rounded-lg text-slate-500 hover:bg-slate-100 transition"
               title="Previous month"
             >
               <ChevronLeft size={16} />
@@ -177,7 +182,7 @@ export function DobCalendarPicker({
               <select
                 value={viewMonth}
                 onChange={(e) => setViewMonth(Number(e.target.value))}
-                className="bg-gray-50 border border-gray-200 text-xs font-bold text-gray-800 rounded-lg px-2 py-1 focus:outline-none focus:border-primary"
+                className="bg-slate-50 border border-slate-200 text-xs font-bold text-slate-800 rounded-lg px-2 py-1 focus:outline-none focus:border-[#106EBE]"
               >
                 {MONTH_NAMES.map((name, idx) => {
                   const isFuture = viewYear === currentYear && idx > today.getMonth();
@@ -193,7 +198,7 @@ export function DobCalendarPicker({
               <select
                 value={viewYear}
                 onChange={(e) => setViewYear(Number(e.target.value))}
-                className="bg-gray-50 border border-gray-200 text-xs font-bold text-gray-800 rounded-lg px-2 py-1 focus:outline-none focus:border-primary"
+                className="bg-slate-50 border border-slate-200 text-xs font-bold text-slate-800 rounded-lg px-2 py-1 focus:outline-none focus:border-[#106EBE]"
               >
                 {years.map(y => (
                   <option key={y} value={y}>
@@ -207,7 +212,7 @@ export function DobCalendarPicker({
               type="button"
               onClick={nextMonth}
               disabled={viewYear === currentYear && viewMonth >= today.getMonth()}
-              className="p-1.5 rounded-lg text-gray-500 hover:bg-gray-100 transition disabled:opacity-30 disabled:cursor-not-allowed"
+              className="p-1.5 rounded-lg text-slate-500 hover:bg-slate-100 transition disabled:opacity-30 disabled:cursor-not-allowed"
               title="Next month"
             >
               <ChevronRight size={16} />
@@ -215,7 +220,7 @@ export function DobCalendarPicker({
           </div>
 
           {/* Days of Week Header */}
-          <div className="grid grid-cols-7 gap-1 text-center text-[11px] font-bold text-gray-400 mb-1">
+          <div className="grid grid-cols-7 gap-1 text-center text-[11px] font-bold text-slate-400 mb-1">
             {DAYS_OF_WEEK.map(d => (
               <div key={d} className="py-1">
                 {d}
@@ -247,10 +252,10 @@ export function DobCalendarPicker({
                   onClick={() => handleSelectDay(day)}
                   className={`h-8 w-8 mx-auto rounded-xl text-xs font-semibold flex items-center justify-center transition ${
                     isSelected
-                      ? 'bg-primary text-white shadow-sm'
+                      ? 'bg-[#106EBE] text-white shadow-sm font-bold'
                       : isFuture
-                      ? 'text-gray-200 cursor-not-allowed'
-                      : 'text-gray-700 hover:bg-[#E1F5EE] hover:text-primary'
+                      ? 'text-slate-200 cursor-not-allowed'
+                      : 'text-slate-700 hover:bg-[#0FFCBE]/20 hover:text-black'
                   }`}
                 >
                   {day}
@@ -260,14 +265,14 @@ export function DobCalendarPicker({
           </div>
 
           {/* Footer Quick Actions */}
-          <div className="mt-3 pt-2.5 border-t border-gray-100 flex items-center justify-between text-xs">
+          <div className="mt-3 pt-2.5 border-t border-slate-100 flex items-center justify-between text-xs">
             <button
               type="button"
               onClick={() => {
                 onChange('');
                 setIsOpen(false);
               }}
-              className="text-gray-400 hover:text-red-500 font-medium"
+              className="text-slate-400 hover:text-rose-500 font-medium"
             >
               Clear
             </button>
@@ -275,7 +280,7 @@ export function DobCalendarPicker({
             <button
               type="button"
               onClick={() => setIsOpen(false)}
-              className="px-3 py-1 bg-primary text-white rounded-lg font-semibold hover:opacity-90 transition"
+              className="px-3 py-1 bg-[#106EBE] text-white rounded-lg font-semibold hover:bg-[#0D5A9C] transition"
             >
               Done
             </button>

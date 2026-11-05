@@ -395,8 +395,10 @@ function startListeners(targetClinicId: string) {
         .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
       notifySubscribers();
     },
-    (err) => {
-      console.warn('Live inventory snapshot warning:', err);
+    (err: any) => {
+      if (err?.code !== 'permission-denied') {
+        console.warn('Live inventory snapshot warning:', err);
+      }
     }
   );
 
@@ -414,8 +416,10 @@ function startListeners(targetClinicId: string) {
       );
       recomputeApptsAndBills();
     },
-    (err) => {
-      console.warn('Live appointments snapshot warning:', err);
+    (err: any) => {
+      if (err?.code !== 'permission-denied') {
+        console.warn('Live appointments snapshot warning:', err);
+      }
     }
   );
 
@@ -432,8 +436,10 @@ function startListeners(targetClinicId: string) {
       );
       recomputeApptsAndBills();
     },
-    (err) => {
-      console.warn('Live billing snapshot warning:', err);
+    (err: any) => {
+      if (err?.code !== 'permission-denied') {
+        console.warn('Live billing snapshot warning:', err);
+      }
     }
   );
 
@@ -450,8 +456,10 @@ function startListeners(targetClinicId: string) {
       );
       recomputeApptsAndBills();
     },
-    (err) => {
-      console.warn('Live invoices snapshot warning:', err);
+    (err: any) => {
+      if (err?.code !== 'permission-denied') {
+        console.warn('Live invoices snapshot warning:', err);
+      }
     }
   );
 

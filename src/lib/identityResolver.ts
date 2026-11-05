@@ -15,6 +15,7 @@ import {
 import type { User as FirebaseUser } from 'firebase/auth';
 import { db } from './firebase';
 import type { User, Clinic, PatientAccount, Role } from './types';
+import { claimPastAppointmentsForPhone } from './accountLinking';
 
 export interface IdentityResult {
   user: User;
@@ -73,7 +74,9 @@ export interface OnboardingData {
   role?: Role;
   name?: string;
   phone?: string;
+  phone_verified?: boolean;
   email?: string;
+  email_verified?: boolean;
   clinicName?: string;
 }
 
@@ -227,7 +230,7 @@ export async function resolveCanonicalIdentity(
     }
   }
 
-  // 4. Search by matching Phone Number
+  // 4. Search by matching Phone Number (patient phone or attendant phone)
   if (phone && phone.length >= 10) {
     try {
       const qPhone = query(usersRef, where('phone', '==', phone));
@@ -241,14 +244,45 @@ export async function resolveCanonicalIdentity(
     } catch (e) {
       console.warn('Query users by phone fallback:', e);
     }
+
+    // 4b. Search users by attender_phone / emergency_contact_phone (Attendant Login)
+    if (!isAdminPortal && !isClinicPortal) {
+      try {
+        const qAtt = query(usersRef, where('attender_phone', '==', phone));
+        const attSnap = await getDocs(qAtt);
+        if (!attSnap.empty) {
+          const d = attSnap.docs[0];
+          const res = await handleExistingUser(d.data() as User, d.id, firebaseUser, isGoogleProvider, providerId, isClinicPortal, isPatientPortal, isAdminPortal, { ...onboardingData, role: 'patient_attendant' });
+          saveCachedIdentity(res);
+          return res;
+        }
+      } catch (e) {
+        console.warn('Query users by attender_phone fallback:', e);
+      }
+
+      try {
+        const qEm = query(usersRef, where('emergency_contact_phone', '==', phone));
+        const emSnap = await getDocs(qEm);
+        if (!emSnap.empty) {
+          const d = emSnap.docs[0];
+          const res = await handleExistingUser(d.data() as User, d.id, firebaseUser, isGoogleProvider, providerId, isClinicPortal, isPatientPortal, isAdminPortal, { ...onboardingData, role: 'patient_attendant' });
+          saveCachedIdentity(res);
+          return res;
+        }
+      } catch (e) {
+        console.warn('Query users by emergency_contact_phone fallback:', e);
+      }
+    }
   }
 
   // 5. Search existing patient_accounts collection ONLY for patient portal (STRICT ISOLATION)
   let existingPatientDoc: any = null;
+  let isAttenderMatch = false;
   if (!isClinicPortal && !isAdminPortal) {
     const patientAccountsRef = collection(db, 'patient_accounts');
 
     if (phone && phone.length >= 10) {
+      // 5a. Primary patient phone
       try {
         const qPatPhone = query(patientAccountsRef, where('phone', '==', phone));
         const patSnap = await getDocs(qPatPhone);
@@ -256,7 +290,37 @@ export async function resolveCanonicalIdentity(
       } catch (e) {
         console.warn('Query patient_accounts by phone fallback:', e);
       }
+
+      // 5b. Attendant / Friend phone
+      if (!existingPatientDoc) {
+        try {
+          const qAttPhone = query(patientAccountsRef, where('attender_phone', '==', phone));
+          const attSnap = await getDocs(qAttPhone);
+          if (!attSnap.empty) {
+            existingPatientDoc = attSnap.docs[0];
+            isAttenderMatch = true;
+          }
+        } catch (e) {
+          console.warn('Query patient_accounts by attender_phone fallback:', e);
+        }
+      }
+
+      // 5c. Emergency contact phone
+      if (!existingPatientDoc) {
+        try {
+          const qEmPhone = query(patientAccountsRef, where('emergency_contact_phone', '==', phone));
+          const emSnap = await getDocs(qEmPhone);
+          if (!emSnap.empty) {
+            existingPatientDoc = emSnap.docs[0];
+            isAttenderMatch = true;
+          }
+        } catch (e) {
+          console.warn('Query patient_accounts by emergency_contact_phone fallback:', e);
+        }
+      }
     }
+
+    // 5d. Search by matching Google email
     if (!existingPatientDoc && email) {
       try {
         const qPatEmail = query(patientAccountsRef, where('email', '==', email));
@@ -272,7 +336,10 @@ export async function resolveCanonicalIdentity(
     const patData = existingPatientDoc.data() as PatientAccount;
     const patientAccountId = existingPatientDoc.id;
     const patientCode = patData.id_number || patData.patient_code || generateReadableId('PAT', uid);
-    const patName = patData.name || firebaseUser.displayName || 'Patient';
+    const patName = isAttenderMatch
+      ? ((patData as any).attender_name || patData.emergency_contact_name || 'Patient Attendant')
+      : (patData.name || firebaseUser.displayName || 'Patient');
+    const effectiveRole: Role = isAttenderMatch ? 'patient_attendant' : 'patient';
 
     // Resolve chosen clinic ONLY if the patient already selected one in their profile
     let clinic: Clinic | null = null;
@@ -287,14 +354,14 @@ export async function resolveCanonicalIdentity(
       name: patName,
       full_name: patName,
       email: email || patData.email || '',
-      role: 'patient',
-      user_type: 'patient',
+      role: effectiveRole,
+      user_type: effectiveRole,
       id_number: patientCode,
       display_id: patientCode,
       phone: phone || patData.phone,
       specialisation: null,
       active: true,
-      avatar_color: '#2563EB',
+      avatar_color: isAttenderMatch ? '#0D9488' : '#2563EB',
       created_at: patData.created_at || new Date().toISOString(),
       updated_at: new Date().toISOString(),
       linked_uids: [uid],
@@ -311,17 +378,22 @@ export async function resolveCanonicalIdentity(
     }
 
     try {
-      await updateDoc(doc(db, 'patient_accounts', patientAccountId), sanitizeForFirestore({
-        auth_user_id: uid,
+      const patUpdates: Record<string, any> = {
         otp_verified: true,
         profile_completed: true,
         id_number: patientCode,
         display_id: patientCode,
         patient_code: patientCode,
-        name: patName,
-        full_name: patName,
         updated_at: new Date().toISOString(),
-      }));
+      };
+      if (!isAttenderMatch) {
+        patUpdates.auth_user_id = uid;
+        if (!patData.name && patName) patUpdates.name = patName;
+        if (!patData.full_name && patName) patUpdates.full_name = patName;
+        if (!patData.email && email) patUpdates.email = email;
+        if (!patData.phone && phone) patUpdates.phone = phone;
+      }
+      await updateDoc(doc(db, 'patient_accounts', patientAccountId), sanitizeForFirestore(patUpdates));
     } catch (e) {
       console.warn('Update patient account fallback:', e);
     }
@@ -329,7 +401,7 @@ export async function resolveCanonicalIdentity(
     const res: IdentityResult = {
       user: canonicalUser,
       clinic,
-      patientAccount: { ...patData, account_id: patientAccountId, auth_user_id: uid, id_number: patientCode, display_id: patientCode, patient_code: patientCode, full_name: patName, profile_completed: true },
+      patientAccount: { ...patData, account_id: patientAccountId, id_number: patientCode, display_id: patientCode, patient_code: patientCode, profile_completed: true },
       isNewUser: false,
     };
     saveCachedIdentity(res);
@@ -365,7 +437,7 @@ async function handleExistingUser(
   onboardingData?: OnboardingData
 ): Promise<IdentityResult> {
   // CRITICAL REQUIREMENT: Google Sign-In is EXCLUSIVELY for Patient accounts
-  if (isGoogleProvider && existingUser.role !== 'patient') {
+  if (isGoogleProvider && existingUser.role !== 'patient' && (existingUser.role as any) !== 'patient_attendant') {
     throw new Error('Google Sign-In is only enabled for Patient accounts. Clinic Staff and Administrators must sign in via Email and Password.');
   }
 
@@ -487,9 +559,9 @@ async function handleExistingUser(
     } catch {}
   }
 
-  // Load Patient Account if patient
+  // Load Patient Account if patient or patient attendant
   let patientAccount: PatientAccount | null = null;
-  if (existingUser.role === 'patient') {
+  if (existingUser.role === 'patient' || (existingUser.role as any) === 'patient_attendant') {
     if (existingUser.patient_account_id) {
       try {
         const pSnap = await getDoc(doc(db, 'patient_accounts', existingUser.patient_account_id));
@@ -500,6 +572,8 @@ async function handleExistingUser(
         console.warn('Read patient account warning:', e);
       }
     }
+
+    // Fallback 1: Query by primary phone
     if (!patientAccount && existingUser.phone) {
       try {
         const qP = query(collection(db, 'patient_accounts'), where('phone', '==', existingUser.phone));
@@ -508,7 +582,77 @@ async function handleExistingUser(
           patientAccount = { ...pSnap.docs[0].data(), account_id: pSnap.docs[0].id } as PatientAccount;
         }
       } catch (e) {
-        console.warn('Query patient accounts warning:', e);
+        console.warn('Query patient accounts by phone warning:', e);
+      }
+    }
+
+    // Fallback 2: Query by email (e.g. Google Sign-In)
+    if (!patientAccount && existingUser.email) {
+      try {
+        const qE = query(collection(db, 'patient_accounts'), where('email', '==', existingUser.email.toLowerCase()));
+        const eSnap = await getDocs(qE);
+        if (!eSnap.empty) {
+          patientAccount = { ...eSnap.docs[0].data(), account_id: eSnap.docs[0].id } as PatientAccount;
+        }
+      } catch (e) {
+        console.warn('Query patient accounts by email warning:', e);
+      }
+    }
+
+    // Fallback 3: Query by attendant / emergency contact phone
+    const attPhone = existingUser.attender_phone || (existingUser as any).emergency_contact_phone;
+    if (!patientAccount && attPhone) {
+      try {
+        const qAtt = query(collection(db, 'patient_accounts'), where('attender_phone', '==', attPhone));
+        const aSnap = await getDocs(qAtt);
+        if (!aSnap.empty) {
+          patientAccount = { ...aSnap.docs[0].data(), account_id: aSnap.docs[0].id } as PatientAccount;
+        } else {
+          const qEm = query(collection(db, 'patient_accounts'), where('emergency_contact_phone', '==', attPhone));
+          const emSnap = await getDocs(qEm);
+          if (!emSnap.empty) {
+            patientAccount = { ...emSnap.docs[0].data(), account_id: emSnap.docs[0].id } as PatientAccount;
+          }
+        }
+      } catch (e) {
+        console.warn('Query patient accounts by attender phone warning:', e);
+      }
+    }
+
+    // Cross-sync missing identifiers between existingUser and patientAccount
+    if (patientAccount) {
+      const patSyncUpdates: Record<string, any> = {};
+      const userSyncUpdates: Record<string, any> = {};
+
+      if (existingUser.phone && !patientAccount.phone) {
+        patSyncUpdates.phone = existingUser.phone;
+        patientAccount.phone = existingUser.phone;
+      }
+      if (existingUser.email && !patientAccount.email) {
+        patSyncUpdates.email = existingUser.email.toLowerCase();
+        patientAccount.email = existingUser.email.toLowerCase();
+      }
+      if (patientAccount.phone && !existingUser.phone) {
+        userSyncUpdates.phone = patientAccount.phone;
+        existingUser.phone = patientAccount.phone;
+      }
+      if (patientAccount.email && !existingUser.email) {
+        userSyncUpdates.email = patientAccount.email.toLowerCase();
+        existingUser.email = patientAccount.email.toLowerCase();
+      }
+      if ((patientAccount as any).attender_phone && !existingUser.attender_phone) {
+        userSyncUpdates.attender_phone = (patientAccount as any).attender_phone;
+        userSyncUpdates.emergency_contact_phone = (patientAccount as any).attender_phone;
+        existingUser.attender_phone = (patientAccount as any).attender_phone;
+      }
+
+      if (Object.keys(patSyncUpdates).length > 0) {
+        patSyncUpdates.updated_at = new Date().toISOString();
+        updateDoc(doc(db, 'patient_accounts', patientAccount.account_id), patSyncUpdates).catch(() => {});
+      }
+      if (Object.keys(userSyncUpdates).length > 0) {
+        userSyncUpdates.updated_at = new Date().toISOString();
+        updateDoc(doc(db, 'users', canonicalDocId), userSyncUpdates).catch(() => {});
       }
     }
 
@@ -598,6 +742,12 @@ async function handleExistingUser(
           });
         } catch {}
       }
+
+      // Retroactively link any past appointments booked with this mobile number
+      const patPhone = patientAccount?.phone || existingUser.phone;
+      if (patPhone && patientAccount?.account_id) {
+        claimPastAppointmentsForPhone(patPhone, patientAccount.account_id).catch(() => {});
+      }
     }
 
     // Patients only connect to clinics if their patient account explicitly has a chosen clinic_id
@@ -624,11 +774,15 @@ async function handleExistingUser(
     ? Boolean(existingUser.clinic_setup_complete === true)
     : existingUser.role !== 'patient' 
       ? Boolean(existingUser.clinic_id || existingUser.clinic_setup_complete !== false)
-      : Boolean(
-          existingUser.profile_completed === true || 
-          patientAccount?.profile_completed === true || 
-          existingUser.auth_providers?.includes('google.com') ||
-          (patientAccount?.dob || patientAccount?.gender || patientAccount?.blood_group || patientAccount?.address)
+      : (
+          Boolean(
+            (existingUser.profile_completed === true || patientAccount?.profile_completed === true) &&
+            (existingUser.phone || patientAccount?.phone)
+          ) ||
+          Boolean(
+            (patientAccount?.dob || patientAccount?.gender || patientAccount?.blood_group) &&
+            (existingUser.phone || patientAccount?.phone)
+          )
         );
 
   if (existingUser.role !== 'patient') {
@@ -898,6 +1052,8 @@ async function createNewCanonicalUser(
     id_number: userCode,
     display_id: userCode,
     phone: phone || null,
+    phone_verified: onboardingData?.phone_verified ?? Boolean(phone),
+    email_verified: onboardingData?.email_verified ?? Boolean(firebaseUser.emailVerified),
     specialisation: null,
     active: true,
     avatar_color: avatarColor,

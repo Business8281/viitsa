@@ -368,14 +368,33 @@ function GenericDataView({ activeTab, users, clinics, appointments, invoices, bi
     );
   } else if (activeTab === 'vc_pending_doctors') {
     title = 'Pending Doctors';
-    data = users.filter((u: any) => u.role === 'clinic_doctor' && u.active === false);
-    headers = ['Name', 'Email', 'Clinic', 'Status'];
+    data = users.filter((u: any) => u.role === 'clinic_doctor' && (u.active === false || u.verification_status === 'pending'));
+    headers = ['Name', 'Email', 'Clinic', 'Status', 'Actions'];
     renderRow = (u: any) => (
-      <tr key={u.id} className="hover:bg-surface/60 transition-colors cursor-pointer" onClick={() => onUserSelect(u.id)}>
+      <tr key={u.id} className="hover:bg-surface/60 transition-colors">
         <td className="px-4 py-3"><p className="font-semibold text-ink text-sm truncate">{u.name || '—'}</p></td>
         <td className="px-4 py-3 text-ink-muted text-sm truncate">{u.email || '—'}</td>
         <td className="px-4 py-3 text-ink-muted text-sm truncate">{clinics.find((c: any) => c.id === u.clinic_id)?.name || u.clinic_id || '—'}</td>
         <td className="px-4 py-3"><StatusBadge text="Pending" /></td>
+        <td className="px-4 py-3 text-right">
+          <div className="flex items-center gap-2 justify-end">
+            <button
+              onClick={() => handleVerifyDoctor(u.id, true)}
+              className="px-3 py-1 bg-teal-600 text-white rounded text-xs hover:bg-teal-700"
+            >
+              Approve
+            </button>
+            <button
+              onClick={() => {
+                const reason = prompt("Enter reason for doctor rejection:");
+                if (reason !== null) handleVerifyDoctor(u.id, false, reason);
+              }}
+              className="px-3 py-1 bg-red-100 text-red-700 rounded text-xs hover:bg-red-200"
+            >
+              Reject
+            </button>
+          </div>
+        </td>
       </tr>
     );
   } else if (activeTab === 'sb_invoices') {
@@ -1336,6 +1355,37 @@ export function AdminDashboard() {
     }
   };
 
+  const handleRequestClinicDocs = async (clinicId: string) => {
+    const missing = prompt("Enter required / missing documents (e.g. Clinical Establishment Certificate, Doctor License):");
+    if (!missing) return;
+    try {
+      const clinicRef = doc(db, 'clinics', clinicId);
+      await setDoc(clinicRef, {
+        verification_status: 'docs_needed',
+        missing_documents: missing,
+      }, { merge: true });
+      alert('Requested additional documents from clinic.');
+    } catch (err) {
+      console.error(err);
+      alert('Failed to request documents.');
+    }
+  };
+
+  const handleVerifyDoctor = async (doctorId: string, approved: boolean, reason?: string) => {
+    try {
+      const userRef = doc(db, 'users', doctorId);
+      await setDoc(userRef, {
+        active: approved,
+        verification_status: approved ? 'approved' : 'rejected',
+        deactivation_reason: approved ? deleteField() : (reason || 'Credentials review required'),
+      }, { merge: true });
+      alert(approved ? 'Doctor approved and activated!' : 'Doctor verification rejected.');
+    } catch (err) {
+      console.error(err);
+      alert('Failed to update doctor verification status.');
+    }
+  };
+
   return (
     <div className="min-h-screen bg-surface flex">
       <AdminSidebar activeTab={activeTab} setActiveTab={setActiveTab} mobileOpen={mobileOpen} setMobileOpen={setMobileOpen} />
@@ -1449,7 +1499,7 @@ export function AdminDashboard() {
                                 <div className="min-w-0 flex-1">
                                   <p className="text-sm font-semibold text-ink truncate">
                                     {resolvedPatient}
-                                    {a.display_token && <span className="ml-2 text-xs font-bold text-primary">{a.display_token}</span>}
+                                    {a.display_token && <span className="ml-2 text-xs font-bold text-primary">{a.display_token.replace(/^EM-/, 'QR-')}</span>}
                                   </p>
                                   <p className="text-xs text-ink-muted truncate">{resolveClinicName(a.clinic_id, a.clinic_name)} · {formatDate(a.date || a.created_at)}</p>
                                 </div>
@@ -1634,6 +1684,12 @@ export function AdminDashboard() {
                               Approve
                             </button>
                             <button
+                              onClick={() => handleRequestClinicDocs(c.id)}
+                              className="px-3 py-1 bg-amber-100 text-amber-800 rounded text-xs hover:bg-amber-200"
+                            >
+                              Request Docs
+                            </button>
+                            <button
                               onClick={() => {
                                 const reason = prompt("Enter reason for rejection:");
                                 if (reason !== null) handleVerifyClinic(c.id, false, reason);
@@ -1815,7 +1871,7 @@ export function AdminDashboard() {
                       <tr key={a.id} className="hover:bg-surface/60 transition-colors">
                         <td className="px-4 py-3">
                           <p className="font-semibold text-ink text-sm truncate max-w-[150px]">{resolvePatientName(a.patient_id, a.patient_name)}</p>
-                          {a.display_token && <p className="text-xs font-bold text-primary mt-0.5">{a.display_token}</p>}
+                          {a.display_token && <p className="text-xs font-bold text-primary mt-0.5">{a.display_token.replace(/^EM-/, 'QR-')}</p>}
                         </td>
                         <td className="px-4 py-3 text-ink-muted text-xs hidden sm:table-cell truncate max-w-[160px]">{resolveClinicName(a.clinic_id, a.clinic_name)}</td>
                         <td className="px-4 py-3 text-ink-muted text-xs">{formatDate(a.date || a.created_at)}</td>

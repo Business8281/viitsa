@@ -7,6 +7,8 @@ import {
 import { db } from '../lib/firebase';
 import { collection, query, where, getDoc, getDocs, doc, orderBy, limit, onSnapshot } from 'firebase/firestore';
 import { usePatientAuth } from '../lib/patientAuth';
+import { useAuth } from '../lib/auth';
+import { claimPastAppointmentsForPhone } from '../lib/accountLinking';
 import { formatDate, formatTime, localDateISO } from '../lib/format';
 import type { Appointment, Consultation, Invoice, User, Clinic } from '../lib/types';
 import type { PatientTab } from './PatientBottomNav';
@@ -23,6 +25,7 @@ interface Props { onTab: (t: PatientTab) => void; clinicId: string | null; }
 
 export function PatientHome({ onTab, clinicId }: Props) {
   const { account, clinic, selectClinic, logout } = usePatientAuth();
+  const { user } = useAuth();
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [recentConsults, setRecentConsults] = useState<Consultation[]>([]);
   const [pendingInvoices, setPendingInvoices] = useState<Invoice[]>([]);
@@ -65,17 +68,19 @@ export function PatientHome({ onTab, clinicId }: Props) {
   useEffect(() => {
     if (!account?.account_id) return;
     const pid = account.account_id;
+    const rawPhone = account.phone || (account as any).mobile || user?.phone || '';
+    const cleanPhone = rawPhone.replace(/\D/g, '').slice(-10);
 
-    // Appointments listener (live real-time)
-    const apptQ = query(
-      collection(db, 'appointments'),
-      where('patient_id', '==', pid),
-      orderBy('date', 'desc'),
-      limit(20)
-    );
-    const unsubAppt = onSnapshot(apptQ, async (apptSnap) => {
-      const appts = apptSnap.docs.map(d => ({ ...d.data(), appointment_id: d.id } as Appointment));
-      for (const appt of appts) {
+    // Retroactively claim any past emergency walk-in appointments for this phone
+    if (cleanPhone) {
+      claimPastAppointmentsForPhone(cleanPhone, pid).catch(() => {});
+    }
+
+    const apptMap = new Map<string, Appointment>();
+
+    const syncAppts = async () => {
+      const list = Array.from(apptMap.values());
+      for (const appt of list) {
         if (appt.doctor_id && !appt.doctor) {
           try {
             const docSnap = await getDoc(doc(db, 'users', appt.doctor_id));
@@ -85,8 +90,56 @@ export function PatientHome({ onTab, clinicId }: Props) {
           } catch {}
         }
       }
-      setAppointments(appts);
-    }, (err) => console.warn('Live patient appts snapshot error:', err));
+      list.sort((a, b) => {
+        const da = a.date || '';
+        const dbDate = b.date || '';
+        if (da !== dbDate) return dbDate.localeCompare(da);
+        return (b.time_slot || '').localeCompare(a.time_slot || '');
+      });
+      setAppointments(list);
+    };
+
+    // 1. Appointments where patient_id == pid
+    const apptQ1 = query(
+      collection(db, 'appointments'),
+      where('patient_id', '==', pid),
+      limit(30)
+    );
+    const unsubAppt1 = onSnapshot(apptQ1, (snap) => {
+      snap.docs.forEach((d) => {
+        apptMap.set(d.id, { ...d.data(), appointment_id: d.id, appt_id: d.id } as Appointment);
+      });
+      syncAppts();
+    }, (err) => console.warn('Appts by patient_id error:', err));
+
+    // 2. Appointments where account_id == pid
+    const apptQ2 = query(
+      collection(db, 'appointments'),
+      where('account_id', '==', pid),
+      limit(30)
+    );
+    const unsubAppt2 = onSnapshot(apptQ2, (snap) => {
+      snap.docs.forEach((d) => {
+        apptMap.set(d.id, { ...d.data(), appointment_id: d.id, appt_id: d.id } as Appointment);
+      });
+      syncAppts();
+    }, (err) => console.warn('Appts by account_id error:', err));
+
+    // 3. Appointments where patient_phone == cleanPhone (unclaimed / past walk-in)
+    let unsubAppt3: (() => void) | null = null;
+    if (cleanPhone) {
+      const apptQ3 = query(
+        collection(db, 'appointments'),
+        where('patient_phone', '==', cleanPhone),
+        limit(30)
+      );
+      unsubAppt3 = onSnapshot(apptQ3, (snap) => {
+        snap.docs.forEach((d) => {
+          apptMap.set(d.id, { ...d.data(), appointment_id: d.id, appt_id: d.id } as Appointment);
+        });
+        syncAppts();
+      }, (err) => console.warn('Appts by phone error:', err));
+    }
 
     // Consultations listener (live real-time)
     const consQ = query(collection(db, 'consultations'), where('patient_id', '==', pid), orderBy('created_at', 'desc'), limit(5));
@@ -108,12 +161,14 @@ export function PatientHome({ onTab, clinicId }: Props) {
     }, (err) => console.warn('Live patient reward points error:', err));
 
     return () => {
-      unsubAppt();
+      unsubAppt1();
+      unsubAppt2();
+      if (unsubAppt3) unsubAppt3();
       unsubCons();
       unsubInv();
       unsubPts();
     };
-  }, [account?.account_id]);
+  }, [account?.account_id, account?.phone, user?.phone]);
 
   const sortedAppointments = [...appointments].sort((a, b) => {
     const da = a.date || '';
@@ -240,7 +295,7 @@ export function PatientHome({ onTab, clinicId }: Props) {
             <CalendarClock size={20} className="text-white shrink-0" />
             <div className="flex-1">
               <div className="flex items-center gap-2">
-                <p className="text-xs text-white/70">Next appointment {nextAppt.display_token ? `(Token: ${nextAppt.display_token})` : ''}</p>
+                <p className="text-xs text-white/70">Next appointment {nextAppt.display_token ? `(Token: ${nextAppt.display_token.replace(/^EM-/, 'QR-')})` : ''}</p>
                 {nextAppt.visit_type && (
                   <span className="text-[9px] uppercase font-bold text-white bg-white/20 px-1.5 py-0.5 rounded">
                     {nextAppt.visit_type.replace('-', ' ')}
@@ -422,7 +477,7 @@ export function PatientHome({ onTab, clinicId }: Props) {
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 mb-0.5">
                       <p className="text-sm font-semibold text-gray-900 truncate">{(a.doctor as { name?: string } | null | undefined)?.name ?? 'Doctor'}</p>
-                      {a.display_token && <span className="text-xs font-bold text-primary px-1.5 py-0.5 bg-primary/10 rounded-md">{a.display_token}</span>}
+                      {a.display_token && <span className="text-xs font-bold text-primary px-1.5 py-0.5 bg-primary/10 rounded-md">{a.display_token.replace(/^EM-/, 'QR-')}</span>}
                     </div>
                     <p className="text-xs text-gray-500 truncate">{(a.clinic as { name?: string } | null | undefined)?.name ?? 'Clinic'}</p>
                     <p className="text-xs text-gray-500">

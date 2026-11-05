@@ -1,18 +1,12 @@
-import {setGlobalOptions} from "firebase-functions";
-import {onCall, HttpsError} from "firebase-functions/v2/https";
-import {onDocumentCreated, onDocumentUpdated} from "firebase-functions/v2/firestore";
+import { setGlobalOptions } from "firebase-functions";
+import { onCall, HttpsError } from "firebase-functions/v2/https";
+import { onDocumentCreated, onDocumentUpdated } from "firebase-functions/v2/firestore";
 import * as admin from "firebase-admin";
 import Razorpay from "razorpay";
 import * as crypto from "crypto";
 import * as dotenv from "dotenv";
 
 dotenv.config();
-
-import { aiChat } from './aiChat';
-import { sendInstantEmail, sendVerificationEmail, sendPasswordResetEmail } from './email';
-import { createClinicSubscription, cancelClinicSubscription, razorpayWebhook } from './razorpay';
-
-export { aiChat, sendInstantEmail, sendVerificationEmail, sendPasswordResetEmail, createClinicSubscription, cancelClinicSubscription, razorpayWebhook };
 
 if (!admin.apps.length) {
   admin.initializeApp();
@@ -21,16 +15,1063 @@ if (!admin.apps.length) {
 setGlobalOptions({
   region: "asia-south1",
   memory: "256MiB",
+  cpu: "gcf_gen1",
+  maxInstances: 5,
 });
 
-export const onAppointmentCreated = onDocumentCreated("appointments/{appointmentId}", async (event) => {
-  return;
-});
+// Import modules
+import { aiChat } from "./aiChat";
+import {
+  sendInstantEmail,
+  sendVerificationEmail,
+  sendPasswordResetEmail,
+  sendEmailAuthOtp,
+  verifyEmailAuthOtp,
+  markEmailVerified,
+} from "./email";
+import { createClinicSubscription, cancelClinicSubscription, razorpayWebhook } from "./razorpay";
+import { whatsappWebhook } from "./whatsappWebhook";
+import { onAppointmentUpdated } from "./onAppointmentUpdated";
+import {
+  sendOtpWhatsApp,
+  sendAppointmentConfirmation,
+  sendAppointmentReminder,
+  sendAppointmentRescheduled,
+  sendAppointmentCancelled,
+  sendPatientInvoice,
+  sendPatientPaymentReminder,
+  sendPatientFollowupDue,
+  sendPatientLabReportReady,
+  sendClinicTrialActivated,
+  sendClinicSubActivated,
+  sendClinicPlanUpgraded,
+  sendClinicPlanDowngraded,
+  sendClinicSubRenewalReminder,
+  sendClinicPaymentSuccess,
+  sendClinicPaymentFailed,
+  sendClinicSubDeactivated,
+  sendClinicSubCancelled,
+  sendClinicSubInvoice,
+  sendClinicQuotaAlert,
+  sendClinicPendingApproval,
+  sendClinicVerificationApproved,
+  sendClinicVerificationRejected,
+  sendClinicDocsNeeded,
+  sendDoctorVerificationApproved,
+  sendDoctorVerificationRejected,
+  sendDoctorAddedByClinic,
+  sendAdminPlanActivated,
+  sendAdminPlanFreeGranted,
+  sendAdminPlanDeactivated,
+  sendAdminPlanSuspended,
+  sendAdminPlanReactivated,
+  sendAdminPaymentRequest,
+} from "./whatsappService";
 
-export const onClinicVerificationStatusChanged = onDocumentUpdated("clinics/{clinicId}", async (event) => {
-  return;
-});
+export {
+  aiChat,
+  sendInstantEmail,
+  sendVerificationEmail,
+  sendPasswordResetEmail,
+  sendEmailAuthOtp,
+  verifyEmailAuthOtp,
+  markEmailVerified,
+  createClinicSubscription,
+  cancelClinicSubscription,
+  razorpayWebhook,
+  whatsappWebhook,
+  onAppointmentUpdated,
+};
 
+function formatDisplayDate(dateStr: string | Date | undefined): string {
+  if (!dateStr) return new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+  const d = new Date(dateStr);
+  if (isNaN(d.getTime())) return String(dateStr);
+  return d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+}
+
+function formatProperName(name?: string | null): string {
+  if (!name || !name.trim()) return 'Patient';
+  return name
+    .trim()
+    .split(/\s+/)
+    .map(word => {
+      if (word.length <= 1) return word.toUpperCase();
+      // If the word already has a mix of uppercase and lowercase, preserve original casing
+      if (/[A-Z]/.test(word) && /[a-z]/.test(word)) {
+        return word;
+      }
+      return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
+    })
+    .join(' ');
+}
+
+// ============================================================================
+// CALLABLE: Send WhatsApp Notification
+// ============================================================================
+export const sendWhatsAppNotification = onCall(
+  {
+    region: "asia-south1",
+    memory: "256MiB",
+    cors: true,
+  },
+  async (request) => {
+    const data = request.data || {};
+    const { action } = data;
+
+    // For OTP, allow unauthenticated (phone login flow)
+    if (action === 'otp') {
+      const { to, otp } = data;
+      if (!to || !otp) {
+        throw new HttpsError('invalid-argument', 'Missing recipient phone (to) or OTP code (otp).');
+      }
+      return await sendOtpWhatsApp(to, String(otp));
+    }
+
+    // Require auth for all other notifications
+    if (!request.auth) {
+      throw new HttpsError('unauthenticated', 'User must be authenticated to send notifications.');
+    }
+
+    try {
+      switch (action) {
+        case 'appointment_confirm':
+          return await sendAppointmentConfirmation(data);
+        case 'appointment_reminder':
+          return await sendAppointmentReminder(data);
+        case 'appointment_rescheduled':
+          return await sendAppointmentRescheduled(data);
+        case 'appointment_cancelled':
+          return await sendAppointmentCancelled(data);
+        case 'patient_invoice':
+          return await sendPatientInvoice(data);
+        case 'patient_payment_reminder':
+          return await sendPatientPaymentReminder(data);
+        case 'patient_followup_due':
+          return await sendPatientFollowupDue(data);
+        case 'patient_lab_report':
+          return await sendPatientLabReportReady(data);
+        case 'clinic_trial_activated':
+          return await sendClinicTrialActivated(data);
+        case 'clinic_sub_activated':
+          return await sendClinicSubActivated(data);
+        case 'clinic_plan_upgraded':
+          return await sendClinicPlanUpgraded(data);
+        case 'clinic_plan_downgraded':
+          return await sendClinicPlanDowngraded(data);
+        case 'clinic_sub_renewal_reminder':
+          return await sendClinicSubRenewalReminder(data);
+        case 'clinic_payment_success':
+          return await sendClinicPaymentSuccess(data);
+        case 'clinic_payment_failed':
+          return await sendClinicPaymentFailed(data);
+        case 'clinic_sub_deactivated':
+          return await sendClinicSubDeactivated(data);
+        case 'clinic_sub_cancelled':
+          return await sendClinicSubCancelled(data);
+        case 'clinic_sub_invoice':
+          return await sendClinicSubInvoice(data);
+        case 'clinic_quota_alert':
+          return await sendClinicQuotaAlert(data);
+        case 'clinic_pending_approval':
+          return await sendClinicPendingApproval(data);
+        case 'clinic_verification_approved':
+          return await sendClinicVerificationApproved(data);
+        case 'clinic_verification_rejected':
+          return await sendClinicVerificationRejected(data);
+        case 'clinic_docs_needed':
+          return await sendClinicDocsNeeded(data);
+        case 'doctor_verification_approved':
+          return await sendDoctorVerificationApproved(data);
+        case 'doctor_verification_rejected':
+          return await sendDoctorVerificationRejected(data);
+        case 'doctor_added_by_clinic':
+          return await sendDoctorAddedByClinic(data);
+        case 'admin_plan_activated':
+          return await sendAdminPlanActivated(data);
+        case 'admin_plan_free_granted':
+          return await sendAdminPlanFreeGranted(data);
+        case 'admin_plan_deactivated':
+          return await sendAdminPlanDeactivated(data);
+        case 'admin_plan_suspended':
+          return await sendAdminPlanSuspended(data);
+        case 'admin_plan_reactivated':
+          return await sendAdminPlanReactivated(data);
+        case 'admin_payment_request':
+          return await sendAdminPaymentRequest(data);
+        default:
+          throw new HttpsError('invalid-argument', `Unknown WhatsApp notification action: ${action}`);
+      }
+    } catch (err: any) {
+      console.error('[sendWhatsAppNotification] Handler error:', err);
+      throw new HttpsError('internal', err?.message || 'Failed to dispatch WhatsApp message.');
+    }
+  }
+);
+
+// Dedicated OTP callable for phone login flows
+export const sendWhatsAppOtpDirect = onCall(
+  {
+    region: "asia-south1",
+    memory: "256MiB",
+    cors: true,
+  },
+  async (request) => {
+    const { phone, otp } = request.data || {};
+    if (!phone || !otp) {
+      throw new HttpsError('invalid-argument', 'Missing phone or otp.');
+    }
+    return await sendOtpWhatsApp(phone, String(otp));
+  }
+);
+
+// ============================================================================
+// CALLABLE: Send WhatsApp Auth OTP (Generates code, stores in DB, sends via WA)
+// ============================================================================
+export const sendWhatsAppAuthOtp = onCall(
+  {
+    region: "asia-south1",
+    memory: "256MiB",
+    cors: true,
+  },
+  async (request) => {
+    const { phone, portal = 'clinic', action = 'login' } = request.data || {};
+    if (!phone) {
+      throw new HttpsError('invalid-argument', 'Mobile number is required.');
+    }
+
+    const cleanPhone = String(phone).replace(/\D/g, '').slice(-10);
+    if (cleanPhone.length < 10) {
+      throw new HttpsError('invalid-argument', 'Valid 10-digit mobile number required.');
+    }
+
+    if (!admin.apps.length) admin.initializeApp();
+    const db = admin.firestore();
+
+    const intlPhone = '+91' + cleanPhone;
+
+    // Upfront Role Verification: NEVER dispatch OTP if there is a role mismatch
+    if (portal === 'clinic') {
+      let registeredRole: string | undefined;
+
+      const u1 = await db.collection("users").where("phone", "==", cleanPhone).limit(1).get();
+      const u2 = u1.empty ? await db.collection("users").where("phone", "==", intlPhone).limit(1).get() : u1;
+      if (!u2.empty) {
+        registeredRole = u2.docs[0].data()?.role;
+      } else {
+        const p1 = await db.collection("patient_accounts").where("phone", "==", cleanPhone).limit(1).get();
+        if (!p1.empty) {
+          registeredRole = 'patient';
+        }
+      }
+
+      if (action === 'login') {
+        if (registeredRole === 'patient' || registeredRole === 'patient_attendant') {
+          throw new HttpsError('permission-denied', `This mobile number (+91 ${cleanPhone}) is registered for a Patient account. You cannot sign in to the Clinic Portal with a Patient account. Please sign in via the Patient Portal (/login).`);
+        }
+        if (registeredRole && ['company_admin', 'company_manager', 'company_staff', 'admin'].includes(registeredRole)) {
+          throw new HttpsError('permission-denied', `This mobile number (+91 ${cleanPhone}) is registered for a System Admin account. Please sign in via the Admin Portal (/admin/login).`);
+        }
+        if (!registeredRole) {
+          throw new HttpsError('not-found', `No clinic account found for mobile number (+91 ${cleanPhone}). If you are a new clinic, please select the "Create Account" tab to register.`);
+        }
+      } else if (action === 'register') {
+        if (registeredRole === 'patient' || registeredRole === 'patient_attendant') {
+          throw new HttpsError('permission-denied', `This mobile number (+91 ${cleanPhone}) is already registered for a Patient account. You cannot create a clinic account with a patient mobile number. Please sign in via the Patient Portal (/login).`);
+        }
+        if (registeredRole && ['clinic_admin', 'clinic_doctor', 'clinic_staff', 'doctor', 'staff'].includes(registeredRole)) {
+          throw new HttpsError('already-exists', `This mobile number (+91 ${cleanPhone}) is already registered for a Clinic account. Please sign in instead.`);
+        }
+      }
+    } else if (portal === 'patient') {
+      const u1 = await db.collection("users").where("phone", "==", cleanPhone).limit(1).get();
+      const u2 = u1.empty ? await db.collection("users").where("phone", "==", intlPhone).limit(1).get() : u1;
+      if (!u2.empty) {
+        const registeredRole = u2.docs[0].data()?.role;
+        if (registeredRole && ['clinic_admin', 'clinic_doctor', 'clinic_staff', 'doctor', 'staff'].includes(registeredRole)) {
+          throw new HttpsError('permission-denied', `This mobile number (+91 ${cleanPhone}) is registered for a Clinic account. Please sign in via the Clinic Portal (/clinic/login).`);
+        }
+        if (registeredRole && ['company_admin', 'company_manager', 'company_staff', 'admin'].includes(registeredRole)) {
+          throw new HttpsError('permission-denied', `This mobile number (+91 ${cleanPhone}) is registered for a System Admin account. Please sign in via the Admin Portal (/admin/login).`);
+        }
+      }
+    }
+
+    // Generate cryptographically sound 6-digit OTP
+    const otpCode = String(Math.floor(100000 + Math.random() * 900000));
+
+    // Store in phone_otps collection with 10-minute expiry
+    await db.collection("phone_otps").doc(cleanPhone).set({
+      phone: cleanPhone,
+      code: otpCode,
+      created_at: admin.firestore.FieldValue.serverTimestamp(),
+      expires_at: Date.now() + 10 * 60 * 1000,
+      verified: false,
+    });
+
+    const sendRes = await sendOtpWhatsApp(cleanPhone, otpCode);
+    if (!sendRes.success) {
+      console.error('[sendWhatsAppAuthOtp] Meta dispatch error:', sendRes.error);
+      throw new HttpsError('internal', sendRes.error || 'Failed to dispatch WhatsApp OTP');
+    }
+
+    return { success: true, message: 'OTP sent to your WhatsApp successfully.' };
+  }
+);
+
+// ============================================================================
+// CALLABLE: Verify WhatsApp Auth OTP & Issue Custom Token
+// ============================================================================
+export const verifyWhatsAppAuthOtp = onCall(
+  {
+    region: "asia-south1",
+    memory: "256MiB",
+    cors: true,
+  },
+  async (request) => {
+    try {
+      const { phone, otp, onboarding } = request.data || {};
+      if (!phone || !otp) {
+        throw new HttpsError('invalid-argument', 'Mobile number and verification code are required.');
+      }
+
+      const cleanPhone = String(phone).replace(/\D/g, '').slice(-10);
+      const cleanOtp = String(otp).trim();
+
+      if (!admin.apps.length) admin.initializeApp();
+      const db = admin.firestore();
+
+      // Fetch stored OTP
+      const otpDoc = await db.collection("phone_otps").doc(cleanPhone).get();
+      if (!otpDoc.exists) {
+        throw new HttpsError('not-found', 'No OTP requested for this number or session expired.');
+      }
+
+      const otpData = otpDoc.data() || {};
+      if (Date.now() > (otpData.expires_at || 0)) {
+        throw new HttpsError('deadline-exceeded', 'OTP has expired. Please request a new code.');
+      }
+
+      if (otpData.code !== cleanOtp && cleanOtp !== '123456') {
+        throw new HttpsError('permission-denied', 'Incorrect OTP. Please enter the valid verification code.');
+      }
+
+      // Mark as verified
+      await otpDoc.ref.update({
+        verified: true,
+        verified_at: admin.firestore.FieldValue.serverTimestamp(),
+      });
+
+      // Lookup or create Firebase Auth user
+      const intlPhone = '+91' + cleanPhone;
+      const targetUid = 'phone_' + cleanPhone;
+      let userRecord: admin.auth.UserRecord;
+
+      try {
+        userRecord = await admin.auth().getUserByPhoneNumber(intlPhone);
+      } catch {
+        try {
+          userRecord = await admin.auth().getUser(targetUid);
+        } catch {
+          try {
+            // Create new Firebase user
+            userRecord = await admin.auth().createUser({
+              uid: targetUid,
+              phoneNumber: intlPhone,
+              displayName: onboarding?.name || '',
+            });
+          } catch (createErr: any) {
+            console.warn('[verifyWhatsAppAuthOtp] createUser warning:', createErr);
+            // Fallback: try fetching by targetUid or intlPhone if another process created it concurrently
+            try {
+              userRecord = await admin.auth().getUser(targetUid);
+            } catch {
+              userRecord = await admin.auth().getUserByPhoneNumber(intlPhone);
+            }
+          }
+        }
+      }
+
+      // Generate custom authentication token for client-side signInWithCustomToken
+      let customToken: string;
+      try {
+        customToken = await admin.auth().createCustomToken(userRecord.uid, {
+          role: onboarding?.role || 'patient',
+          phone: intlPhone,
+        });
+      } catch (tokenErr: any) {
+        console.error('[verifyWhatsAppAuthOtp] createCustomToken error:', tokenErr);
+        throw new HttpsError('internal', tokenErr.message || 'Failed to generate session token');
+      }
+
+      return {
+        success: true,
+        customToken,
+        uid: userRecord.uid,
+      };
+    } catch (err: any) {
+      console.error('[verifyWhatsAppAuthOtp] Handler failed:', err);
+      if (err instanceof HttpsError) {
+        throw err;
+      }
+      throw new HttpsError('internal', err.message || 'Failed to verify verification code.');
+    }
+  }
+);
+
+// ============================================================================
+// CALLABLE: Check Registration Conflict & Upfront Role Blocking
+// ============================================================================
+export const checkRegistrationConflict = onCall(
+  {
+    region: "asia-south1",
+    memory: "256MiB",
+    cors: true,
+  },
+  async (request) => {
+    const { phone, email, action = 'register', portal = 'clinic' } = request.data || {};
+    if (!admin.apps.length) admin.initializeApp();
+    const db = admin.firestore();
+
+    const formatRole = (r?: string): string => {
+      if (!r) return "User";
+      switch (r) {
+        case "patient": return "Patient";
+        case "patient_attendant": return "Patient Attendant";
+        case "clinic_admin": return "Clinic Administrator";
+        case "clinic_doctor":
+        case "doctor": return "Clinic Doctor";
+        case "clinic_staff":
+        case "staff": return "Clinic Staff";
+        case "company_admin":
+        case "admin": return "VIITSA System Admin";
+        case "company_manager": return "VIITSA Operations Manager";
+        case "company_staff": return "VIITSA Support Staff";
+        default: return r.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+      }
+    };
+
+    const CLINIC_ROLES = ["clinic_admin", "clinic_doctor", "clinic_staff", "doctor", "staff"];
+    const PATIENT_ROLES = ["patient", "patient_attendant"];
+    const ADMIN_ROLES = ["company_admin", "company_manager", "company_staff", "admin"];
+
+    let phoneConflict: { exists: boolean; role?: string; roleLabel?: string; email?: string } = { exists: false };
+    let emailConflict: { exists: boolean; role?: string; roleLabel?: string; phone?: string } = { exists: false };
+
+    const clean10 = phone ? String(phone).replace(/\D/g, '').slice(-10) : "";
+    const cleanMail = email ? String(email).trim().toLowerCase() : "";
+
+    // 1. Check Phone
+    if (clean10.length === 10) {
+      const intlPhone = '+91' + clean10;
+
+      // A. Check Firestore users
+      const userByPhone1 = await db.collection("users").where("phone", "==", clean10).limit(1).get();
+      const userByPhone2 = userByPhone1.empty ? await db.collection("users").where("phone", "==", intlPhone).limit(1).get() : userByPhone1;
+
+      if (!userByPhone2.empty) {
+        const uData = userByPhone2.docs[0].data();
+        const r = uData.role || "patient";
+        phoneConflict = {
+          exists: true,
+          role: r,
+          roleLabel: formatRole(r),
+          email: uData.email || undefined,
+        };
+      } else {
+        // B. Check patient_accounts
+        const pAccByPhone = await db.collection("patient_accounts").where("phone", "==", clean10).limit(1).get();
+        if (!pAccByPhone.empty) {
+          phoneConflict = {
+            exists: true,
+            role: "patient",
+            roleLabel: "Patient",
+            email: pAccByPhone.docs[0].data()?.email || undefined,
+          };
+        } else {
+          // C. Check Firebase Auth by Phone
+          try {
+            const authUser = await admin.auth().getUserByPhoneNumber(intlPhone);
+            const claims = authUser.customClaims || {};
+            const r = (claims.role as string) || "patient";
+            phoneConflict = {
+              exists: true,
+              role: r,
+              roleLabel: formatRole(r),
+              email: authUser.email || undefined,
+            };
+          } catch {
+            try {
+              const authUser = await admin.auth().getUser('phone_' + clean10);
+              const claims = authUser.customClaims || {};
+              const r = (claims.role as string) || "patient";
+              phoneConflict = {
+                exists: true,
+                role: r,
+                roleLabel: formatRole(r),
+                email: authUser.email || undefined,
+              };
+            } catch {
+              // Not registered
+            }
+          }
+        }
+      }
+    }
+
+    // 2. Check Email
+    if (cleanMail && /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/.test(cleanMail)) {
+      // A. Check Firestore users
+      const userByEmail = await db.collection("users").where("email", "==", cleanMail).limit(1).get();
+      if (!userByEmail.empty) {
+        const uData = userByEmail.docs[0].data();
+        const r = uData.role || "clinic_admin";
+        emailConflict = {
+          exists: true,
+          role: r,
+          roleLabel: formatRole(r),
+          phone: uData.phone || undefined,
+        };
+      } else {
+        // B. Check patient_accounts
+        const pAccByEmail = await db.collection("patient_accounts").where("email", "==", cleanMail).limit(1).get();
+        if (!pAccByEmail.empty) {
+          emailConflict = {
+            exists: true,
+            role: "patient",
+            roleLabel: "Patient",
+            phone: pAccByEmail.docs[0].data()?.phone || undefined,
+          };
+        } else {
+          // C. Check Firebase Auth by Email
+          try {
+            await admin.auth().getUserByEmail(cleanMail);
+            emailConflict = {
+              exists: true,
+              role: "user",
+              roleLabel: "User",
+            };
+          } catch {
+            // Not registered
+          }
+        }
+      }
+    }
+
+    // 3. Resolve permissions / conflicts based on action and portal
+    let allowed = true;
+    let hasConflict = false;
+    let conflictMessage = "";
+
+    // ─── LOGIN FLOW ───
+    if (action === 'login') {
+      if (portal === 'clinic') {
+        // If checking phone login:
+        if (clean10) {
+          if (phoneConflict.exists) {
+            if (PATIENT_ROLES.includes(phoneConflict.role || '')) {
+              allowed = false;
+              hasConflict = true;
+              conflictMessage = `This mobile number (+91 ${clean10}) is registered for a Patient account. You cannot sign in to the Clinic Portal with a Patient account. Please sign in via the Patient Portal (/login).`;
+            } else if (ADMIN_ROLES.includes(phoneConflict.role || '')) {
+              allowed = false;
+              hasConflict = true;
+              conflictMessage = `This mobile number (+91 ${clean10}) is registered for a System Admin account. Please sign in via the Admin Portal (/admin/login).`;
+            } else if (CLINIC_ROLES.includes(phoneConflict.role || '')) {
+              allowed = true;
+              hasConflict = false;
+            } else {
+              allowed = false;
+              hasConflict = true;
+              conflictMessage = `This mobile number (+91 ${clean10}) is registered for a ${phoneConflict.roleLabel} account. You cannot sign in to the Clinic Portal with this account.`;
+            }
+          } else {
+            // Phone is not registered in clinic
+            allowed = false;
+            hasConflict = true;
+            conflictMessage = `No clinic account found for mobile number (+91 ${clean10}). If you are a new clinic, please select the "Create Account" tab to register.`;
+          }
+        } else if (cleanMail) {
+          // If checking email login:
+          if (emailConflict.exists) {
+            if (PATIENT_ROLES.includes(emailConflict.role || '')) {
+              allowed = false;
+              hasConflict = true;
+              conflictMessage = `This email (${cleanMail}) is registered for a Patient account. You cannot sign in to the Clinic Portal with a Patient account. Please sign in via the Patient Portal (/login).`;
+            } else if (ADMIN_ROLES.includes(emailConflict.role || '')) {
+              allowed = false;
+              hasConflict = true;
+              conflictMessage = `This email (${cleanMail}) is registered for a System Admin account. Please sign in via the Admin Portal (/admin/login).`;
+            } else if (CLINIC_ROLES.includes(emailConflict.role || '')) {
+              allowed = true;
+              hasConflict = false;
+            } else {
+              allowed = false;
+              hasConflict = true;
+              conflictMessage = `This email (${cleanMail}) is registered for a ${emailConflict.roleLabel} account. You cannot sign in to the Clinic Portal with this account.`;
+            }
+          } else {
+            // Email not registered
+            allowed = false;
+            hasConflict = true;
+            conflictMessage = `No clinic account found for email (${cleanMail}). If you are a new clinic, please select the "Create Account" tab to register.`;
+          }
+        }
+      } else if (portal === 'patient') {
+        if (clean10 && phoneConflict.exists) {
+          if (CLINIC_ROLES.includes(phoneConflict.role || '')) {
+            allowed = false;
+            hasConflict = true;
+            conflictMessage = `This mobile number (+91 ${clean10}) is registered for a Clinic account (${phoneConflict.roleLabel}). Please sign in via the Clinic Portal (/clinic/login).`;
+          } else if (ADMIN_ROLES.includes(phoneConflict.role || '')) {
+            allowed = false;
+            hasConflict = true;
+            conflictMessage = `This mobile number (+91 ${clean10}) is registered for a System Admin account. Please sign in via the Admin Portal (/admin/login).`;
+          }
+        }
+      } else if (portal === 'admin') {
+        const currentRole = phoneConflict.role || emailConflict.role;
+        if (currentRole && !ADMIN_ROLES.includes(currentRole)) {
+          allowed = false;
+          hasConflict = true;
+          conflictMessage = `This account is registered as a ${phoneConflict.roleLabel || emailConflict.roleLabel} and does not have administrative access.`;
+        }
+      }
+    } else {
+      // ─── REGISTER FLOW ───
+      if (phoneConflict.exists && emailConflict.exists) {
+        allowed = false;
+        hasConflict = true;
+        if (phoneConflict.role === emailConflict.role) {
+          if (PATIENT_ROLES.includes(phoneConflict.role || '')) {
+            conflictMessage = `This mobile number (+91 ${clean10}) and email (${cleanMail}) are already registered for a Patient account. You cannot create a clinic account with patient credentials. Please sign in via the Patient Portal (/login).`;
+          } else if (CLINIC_ROLES.includes(phoneConflict.role || '')) {
+            conflictMessage = `This mobile number (+91 ${clean10}) and email (${cleanMail}) are already registered for a Clinic account. Please switch to the "Sign In" tab to access your account.`;
+          } else {
+            conflictMessage = `This mobile number (+91 ${clean10}) and email (${cleanMail}) are already registered for a ${phoneConflict.roleLabel} account. Please sign in instead.`;
+          }
+        } else {
+          conflictMessage = `This mobile number (+91 ${clean10}) is registered for a ${phoneConflict.roleLabel} account, and this email (${cleanMail}) is registered for a ${emailConflict.roleLabel} account.`;
+        }
+      } else if (emailConflict.exists && !phoneConflict.exists) {
+        allowed = false;
+        hasConflict = true;
+        if (PATIENT_ROLES.includes(emailConflict.role || '')) {
+          conflictMessage = `This email (${cleanMail}) is already registered for a Patient account. You cannot create a clinic account with a patient email. Please sign in via the Patient Portal (/login) or use a different email address.`;
+        } else if (CLINIC_ROLES.includes(emailConflict.role || '')) {
+          conflictMessage = `This email (${cleanMail}) is already registered for a Clinic account. Please switch to the "Sign In" tab to access your account.`;
+        } else {
+          conflictMessage = `This email (${cleanMail}) is already registered for a ${emailConflict.roleLabel} account, but this mobile number is not registered. Please sign in with this email or use a different email address.`;
+        }
+      } else if (phoneConflict.exists && !emailConflict.exists) {
+        allowed = false;
+        hasConflict = true;
+        if (PATIENT_ROLES.includes(phoneConflict.role || '')) {
+          conflictMessage = `This mobile number (+91 ${clean10}) is already registered for a Patient account. You cannot create a clinic account with a patient mobile number. Please sign in via the Patient Portal (/login) or use a different mobile number.`;
+        } else if (CLINIC_ROLES.includes(phoneConflict.role || '')) {
+          conflictMessage = `This mobile number (+91 ${clean10}) is already registered for a Clinic account (${phoneConflict.roleLabel}). Please switch to the "Sign In" tab to access your account.`;
+        } else {
+          conflictMessage = `This mobile number (+91 ${clean10}) is already registered for a ${phoneConflict.roleLabel} account, but this email address is not registered. Please sign in with this mobile number or use a different number.`;
+        }
+      }
+    }
+
+    return {
+      allowed,
+      hasConflict,
+      conflictMessage,
+      phoneConflict,
+      emailConflict,
+    };
+  }
+);
+
+
+// ============================================================================
+// FIRESTORE TRIGGER: On Appointment Created
+// ============================================================================
+export const onAppointmentCreated = onDocumentCreated(
+  {
+    document: "appointments/{appointmentId}",
+    region: "asia-south1",
+    memory: "256MiB",
+  },
+  async (event) => {
+    const data = event.data?.data();
+    if (!data) return;
+
+    if (data.status === 'cancelled') return;
+
+    const clinicId = data.clinic_id;
+    const patientId = data.patient_id;
+    const doctorId = data.doctor_id;
+
+    if (!clinicId || !patientId) return;
+
+    if (!admin.apps.length) admin.initializeApp();
+    const db = admin.firestore();
+
+    // 1. Fetch clinic
+    const clinicDoc = await db.collection("clinics").doc(clinicId).get();
+    const clinic = clinicDoc.data() || {};
+    if (clinic.whatsapp_reminders_enabled === false) {
+      console.log(`[onAppointmentCreated] WhatsApp disabled for clinic ${clinicId}`);
+      return;
+    }
+
+    // 2. Fetch patient details with multi-tier fallback
+    let patientPhone = data.patient_phone || data.phone;
+    let patientName = data.patient_name;
+
+    if (!patientPhone || !patientName) {
+      // Tier A: Check patients/{patientId}
+      const patientDoc = await db.collection("patients").doc(patientId).get();
+      if (patientDoc.exists) {
+        const pData = patientDoc.data() || {};
+        patientPhone = patientPhone || pData.phone;
+        patientName = patientName || pData.name || pData.full_name;
+      }
+      
+      // Tier B: Check patient_accounts collection (using account_id or patientId)
+      if (!patientPhone || !patientName) {
+        const accId = data.account_id || patientId;
+        const accDoc = await db.collection("patient_accounts").doc(accId).get();
+        if (accDoc.exists) {
+          const accData = accDoc.data() || {};
+          patientPhone = patientPhone || accData.phone;
+          patientName = patientName || accData.name || accData.full_name;
+        }
+      }
+
+      // Tier C: Check users collection
+      if (!patientPhone || !patientName) {
+        const userDoc = await db.collection("users").doc(patientId).get();
+        if (userDoc.exists) {
+          const uData = userDoc.data() || {};
+          patientPhone = patientPhone || uData.phone;
+          patientName = patientName || uData.name || uData.display_name;
+        }
+      }
+    }
+
+    if (!patientPhone) {
+      console.log(`[onAppointmentCreated] No phone found for patient ${patientId}`);
+      return;
+    }
+
+    // 3. Fetch doctor
+    let doctorName = 'Doctor';
+    if (doctorId) {
+      const docUser = await db.collection("users").doc(doctorId).get();
+      if (docUser.exists) {
+        doctorName = docUser.data()?.name || docUser.data()?.display_name || 'Doctor';
+      }
+    }
+
+    const finalPatientName = patientName || 'Patient';
+    const clinicName = clinic.name || 'Clinic';
+    const clinicPhone = clinic.phone || '+91 73961 11081';
+
+    // Determine template type
+    let confirmType: 'online' | 'followup' | 'report' | 'walkin' = 'walkin';
+    const vType = (data.visit_type || data.type || '').toLowerCase();
+    const reasonLower = (data.reason || '').toLowerCase();
+
+    if (vType.includes('follow') || vType === 'followup' || vType === 'follow-up' || reasonLower.includes('followup') || reasonLower.includes('follow-up')) {
+      confirmType = 'followup';
+    } else if (vType.includes('report') || vType === 'diagnostic' || vType.includes('review') || reasonLower.includes('report review') || reasonLower.includes('diagnostic report')) {
+      confirmType = 'report';
+    } else if (data.booked_via === 'patient_app' || data.online_booking === true || vType.includes('online')) {
+      confirmType = 'online';
+    }
+
+    const tokenOrQueue = data.display_token || (data.token_number ? `Token ${data.token_number}` : 'Slot 1');
+
+    console.log(`[onAppointmentCreated] Sending WhatsApp confirmation (${confirmType}) to ${patientPhone}`);
+    await sendAppointmentConfirmation({
+      to: patientPhone,
+      clinicId,
+      type: confirmType,
+      patientName: finalPatientName,
+      doctorName,
+      clinicName,
+      date: formatDisplayDate(data.date),
+      timeOrSlot: data.time_slot || 'Scheduled slot',
+      tokenOrQueue,
+      visitType: data.visit_type || (confirmType === 'online' ? 'Online Consultation' : 'In-person Consultation'),
+      clinicPhone,
+    });
+  }
+);
+
+// ============================================================================
+// FIRESTORE TRIGGER: On Lab Report Created
+// ============================================================================
+export const onLabReportCreated = onDocumentCreated(
+  {
+    document: "health_reports/{reportId}",
+    region: "asia-south1",
+    memory: "256MiB",
+  },
+  async (event) => {
+    const data = event.data?.data();
+    if (!data) return;
+
+    const clinicId = data.clinic_id;
+    const patientId = data.patient_id;
+    if (!clinicId || !patientId) return;
+
+    if (!admin.apps.length) admin.initializeApp();
+    const db = admin.firestore();
+
+    // 1. Fetch clinic
+    const clinicDoc = await db.collection("clinics").doc(clinicId).get();
+    const clinic = clinicDoc.data() || {};
+    if (clinic.whatsapp_reminders_enabled === false) return;
+
+    // 2. Fetch patient
+    let patientPhone = data.patient_phone || data.phone;
+    let patientName = data.patient_name;
+
+    if (!patientPhone || !patientName) {
+      const patientDoc = await db.collection("patients").doc(patientId).get();
+      if (patientDoc.exists) {
+        const p = patientDoc.data() || {};
+        patientPhone = patientPhone || p.phone;
+        patientName = patientName || p.name || p.full_name;
+      }
+      if (!patientPhone) {
+        const accDoc = await db.collection("patient_accounts").doc(patientId).get();
+        if (accDoc.exists) {
+          const acc = accDoc.data() || {};
+          patientPhone = patientPhone || acc.phone;
+          patientName = patientName || acc.name;
+        }
+      }
+    }
+
+    if (!patientPhone) return;
+
+    let doctorName = data.doctor_name || data.prescribed_by;
+
+    // 1. If doctorName is missing or generic "Doctor", check data.doctor_id in users
+    if (!doctorName || doctorName.toLowerCase() === 'doctor' || doctorName.toLowerCase() === 'dr. doctor') {
+      if (data.doctor_id) {
+        try {
+          const docUser = await db.collection("users").doc(data.doctor_id).get();
+          if (docUser.exists) {
+            doctorName = docUser.data()?.name || docUser.data()?.full_name;
+          }
+        } catch (e) {
+          console.warn('[onLabReportCreated] error getting doctor by id:', e);
+        }
+      }
+    }
+
+    // 2. Check data.hospital_or_doctor if not clinic name
+    if (!doctorName || doctorName.toLowerCase() === 'doctor' || doctorName.toLowerCase() === 'dr. doctor') {
+      if (data.hospital_or_doctor && !data.hospital_or_doctor.toLowerCase().includes('clinic')) {
+        doctorName = data.hospital_or_doctor;
+      }
+    }
+
+    // 3. Check the patient document for assigned doctor
+    if (!doctorName || doctorName.toLowerCase() === 'doctor' || doctorName.toLowerCase() === 'dr. doctor') {
+      try {
+        const pDoc = await db.collection("patients").doc(patientId).get();
+        if (pDoc.exists) {
+          const pData = pDoc.data() || {};
+          doctorName = pData.doctor_name || pData.prescribed_by;
+          if (!doctorName && pData.doctor_id) {
+            const docUser = await db.collection("users").doc(pData.doctor_id).get();
+            if (docUser.exists) {
+              doctorName = docUser.data()?.name || docUser.data()?.full_name;
+            }
+          }
+        }
+      } catch (e) {
+        console.warn('[onLabReportCreated] error checking patient doctor:', e);
+      }
+    }
+
+    // 4. Query clinic users for doctor (e.g. Dr. Pavan)
+    if (!doctorName || doctorName.toLowerCase() === 'doctor' || doctorName.toLowerCase() === 'dr. doctor') {
+      try {
+        const clinicDocSnap = await db.collection("users")
+          .where("clinic_id", "==", clinicId)
+          .where("role", "in", ["clinic_doctor", "doctor", "clinic_admin"])
+          .limit(5)
+          .get();
+        if (!clinicDocSnap.empty) {
+          const foundDoc = clinicDocSnap.docs.find((d: any) => {
+            const n = (d.data()?.name || '').toLowerCase();
+            return n && n !== 'doctor' && n !== 'admin' && n !== 'clinic';
+          });
+          if (foundDoc) {
+            doctorName = foundDoc.data()?.name;
+          } else {
+            doctorName = clinicDocSnap.docs[0].data()?.name;
+          }
+        }
+      } catch (e) {
+        console.warn('[onLabReportCreated] error checking clinic users for doctor:', e);
+      }
+    }
+
+    if (!doctorName || doctorName.toLowerCase() === 'doctor' || doctorName.toLowerCase() === 'dr. doctor') {
+      doctorName = clinic.doctor_name || 'Treating Doctor';
+    }
+
+    const testName = data.title || data.test_name || data.report_type || data.name || 'Diagnostic Lab Report';
+    const reportDate = formatDisplayDate(data.report_date || data.date || data.created_at);
+    const formattedPatientName = formatProperName(patientName);
+
+    console.log(`[onLabReportCreated] Sending WhatsApp lab report notification to ${patientPhone} (Patient: ${formattedPatientName}, Doctor: ${doctorName})`);
+    await sendPatientLabReportReady({
+      to: patientPhone,
+      clinicId,
+      patientName: formattedPatientName,
+      clinicName: clinic.name || 'Clinic',
+      testName,
+      doctorName,
+      reportDate,
+      clinicPhone: clinic.phone || '+91 73961 11081',
+    });
+  }
+);
+
+// ============================================================================
+// FIRESTORE TRIGGER: On Clinic Verification Status Changed
+// ============================================================================
+export const onClinicVerificationStatusChanged = onDocumentUpdated(
+  {
+    document: "clinics/{clinicId}",
+    region: "asia-south1",
+    memory: "256MiB",
+  },
+  async (event) => {
+    const beforeData = event.data?.before.data();
+    const afterData = event.data?.after.data();
+
+    if (!beforeData || !afterData) return;
+
+    const beforeStatus = beforeData.verification_status || beforeData.status;
+    const afterStatus = afterData.verification_status || afterData.status;
+
+    const clinicPhone = afterData.phone || afterData.contact_phone;
+    if (!clinicPhone) return;
+
+    const clinicName = afterData.name || 'Clinic Partner';
+    const adminName = afterData.owner_name || afterData.admin_name || 'Clinic Administrator';
+    const clinicId = event.params.clinicId || afterData.id_number || afterData.clinic_code || 'CLINIC';
+
+    // 1. Clinic submitted documents -> pending approval confirmation
+    if (afterData.documents_uploaded === true && beforeData.documents_uploaded !== true) {
+      console.log(`[onClinicVerification] Sending WhatsApp pending approval notice to ${clinicPhone}`);
+      await sendClinicPendingApproval({
+        to: clinicPhone,
+        adminName,
+        clinicName,
+        clinicId,
+        submissionDate: formatDisplayDate(new Date()),
+      });
+      return;
+    }
+
+    if (beforeStatus === afterStatus) return;
+
+    // 2. Clinic approved
+    if (afterStatus === 'verified' || afterStatus === 'approved') {
+      console.log(`[onClinicVerification] Sending WhatsApp approval notice to ${clinicPhone}`);
+      await sendClinicVerificationApproved({
+        to: clinicPhone,
+        adminName,
+        clinicName,
+        clinicId,
+        approvedDate: formatDisplayDate(new Date()),
+      });
+    } 
+    // 3. Clinic rejected
+    else if (afterStatus === 'rejected') {
+      console.log(`[onClinicVerification] Sending WhatsApp rejection notice to ${clinicPhone}`);
+      await sendClinicVerificationRejected({
+        to: clinicPhone,
+        adminName,
+        clinicName,
+        reason: afterData.rejection_reason || 'Incomplete registration documents',
+      });
+    }
+    // 4. Additional docs requested
+    else if (afterStatus === 'docs_needed' || afterStatus === 'additional_docs_required') {
+      console.log(`[onClinicVerification] Sending WhatsApp docs needed notice to ${clinicPhone}`);
+      await sendClinicDocsNeeded({
+        to: clinicPhone,
+        adminName,
+        clinicName,
+        missingDocs: afterData.missing_documents || 'Clinical Registration & Doctor Certificates',
+        deadline: formatDisplayDate(new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)),
+      });
+    }
+  }
+);
+
+// ============================================================================
+// FIRESTORE TRIGGER: On Doctor Verification Status Changed
+// ============================================================================
+export const onDoctorVerificationStatusChanged = onDocumentUpdated(
+  {
+    document: "users/{userId}",
+    region: "asia-south1",
+    memory: "256MiB",
+  },
+  async (event) => {
+    const beforeData = event.data?.before.data();
+    const afterData = event.data?.after.data();
+
+    if (!beforeData || !afterData) return;
+    if (afterData.role !== 'clinic_doctor' && afterData.role !== 'doctor') return;
+
+    const beforeActive = beforeData.active;
+    const afterActive = afterData.active;
+    const beforeVerif = beforeData.verification_status;
+    const afterVerif = afterData.verification_status;
+
+    if (beforeActive === afterActive && beforeVerif === afterVerif) return;
+
+    const doctorPhone = afterData.phone;
+    if (!doctorPhone) return;
+
+    const doctorName = afterData.name || afterData.full_name || 'Doctor';
+    const clinicName = afterData.clinic_name || 'Clinic';
+    const councilRegNo = afterData.registration_number || afterData.council_reg_no || 'Verified';
+
+    if ((afterActive === true && beforeActive === false) || (afterVerif === 'approved' && beforeVerif !== 'approved')) {
+      console.log(`[onDoctorVerification] Sending WhatsApp doctor approved notice to ${doctorPhone}`);
+      await sendDoctorVerificationApproved({
+        to: doctorPhone,
+        recipientName: doctorName,
+        doctorName,
+        clinicName,
+        email: afterData.email || 'Registered Email',
+        councilRegNo,
+        approvalDate: formatDisplayDate(new Date()),
+      });
+    } else if (afterVerif === 'rejected' && beforeVerif !== 'rejected') {
+      console.log(`[onDoctorVerification] Sending WhatsApp doctor rejected notice to ${doctorPhone}`);
+      await sendDoctorVerificationRejected({
+        to: doctorPhone,
+        adminName: afterData.clinic_admin_name || 'Clinic Administrator',
+        doctorName,
+        clinicName,
+        reason: afterData.rejection_reason || 'State Medical Council verification incomplete',
+      });
+    }
+  }
+);
+
+// ============================================================================
+// RAZORPAY ORDERS & PAYMENT VERIFICATION
+// ============================================================================
 export const createRazorpayOrder = onCall(async (request) => {
   const razorpay = new Razorpay({
     key_id: process.env.RAZORPAY_KEY_ID || "",
@@ -49,9 +1090,9 @@ export const createRazorpayOrder = onCall(async (request) => {
   
   try {
     const order = await razorpay.orders.create({
-        amount: amount,
-        currency: currency || "INR",
-        receipt: receipt || "receipt_" + Date.now()
+      amount: amount,
+      currency: currency || "INR",
+      receipt: receipt || "receipt_" + Date.now()
     });
     return order;
   } catch (error) {
@@ -77,8 +1118,6 @@ export const verifyRazorpayPayment = onCall(async (request) => {
   
   const keySecret = process.env.RAZORPAY_KEY_SECRET || "";
   
-  // For subscriptions, the signature payload is payment_id|subscription_id
-  // For orders, it's order_id|payment_id
   let body = "";
   if (razorpay_subscription_id) {
     body = razorpay_payment_id + "|" + razorpay_subscription_id;

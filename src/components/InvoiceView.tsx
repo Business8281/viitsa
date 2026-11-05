@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { 
   Printer, Share2, Download, Building, User, FileText, Phone, Mail, 
   ShieldCheck, Users, TrendingUp, Pill, FlaskConical, Activity, 
-  ClipboardList, Loader2, X, Send, Check 
+  ClipboardList, Loader2, X, Send, Check, Bell 
 } from 'lucide-react';
 import { formatDate, formatRs, parseDateArg } from '../lib/format';
 import type { Invoice, Clinic, Patient, User as Doctor } from '../lib/types';
@@ -17,6 +17,7 @@ import {
 } from '../lib/pdf';
 import { sendEmail } from '../lib/emailService';
 import { useToast } from '../lib/toast';
+import { sendWhatsAppPatientInvoiceViaAPI, sendWhatsAppPaymentReminderViaAPI } from '../lib/whatsappClientService';
 
 interface Props {
   invoice: Invoice;
@@ -64,7 +65,7 @@ export function InvoiceView({ invoice, clinic, patient, doctor, onClose }: Props
   const idStr = invoice.invoice_number || invoice.id || invoice.invoice_id || 'UNKNOWN';
 
   const { toast } = useToast();
-  const [isUploading, setIsUploading] = useState<'wa' | 'email' | null>(null);
+  const [isUploading, setIsUploading] = useState<'wa' | 'email' | 'reminder' | null>(null);
   const [emailModalOpen, setEmailModalOpen] = useState(false);
   const [targetEmail, setTargetEmail] = useState(p?.email || '');
 
@@ -85,6 +86,36 @@ export function InvoiceView({ invoice, clinic, patient, doctor, onClose }: Props
         console.warn('PDF upload error:', uErr);
       }
 
+      // 1. Direct delivery via official Meta WhatsApp Cloud API with PDF document attachment!
+      const cleanPhone = (p?.phone || '').replace(/\D/g, '');
+      if (cleanPhone.length >= 10) {
+        try {
+          toast('Sending official WhatsApp invoice with PDF...', 'info');
+          const res = await sendWhatsAppPatientInvoiceViaAPI({
+            to: cleanPhone,
+            clinicId: c?.clinic_id || '',
+            patientName: p?.name || 'Patient',
+            clinicName: c?.name || 'Clinic',
+            invoiceNumber: idStr,
+            totalAmount: Number(invoice.total || invoice.amount || 0),
+            paymentStatus: String(invoice.payment_status || 'PAID').toUpperCase(),
+            billingDate: invoiceDateDisplay,
+            clinicPhone: c?.phone || '+91 73961 11081',
+            pdfUrl: pdfUrl || undefined,
+          });
+
+          if (res.success) {
+            toast(`Official WhatsApp invoice delivered to ${p?.name || 'patient'}!`, 'success');
+            return;
+          } else {
+            console.warn('[shareViaWhatsAppText] API error, falling back to manual share:', res.error);
+          }
+        } catch (apiErr) {
+          console.warn('[shareViaWhatsAppText] API error, falling back to manual share:', apiErr);
+        }
+      }
+
+      // 2. Fallback to native Web Share / WhatsApp Web link
       const loginUrl = 'https://viitsa.com/login';
       const text = `*Payment Invoice — ${c?.name ?? 'Clinic'}*\n\n` +
         `👤 Patient: ${p?.name ?? 'Patient'}\n` +
@@ -113,6 +144,37 @@ export function InvoiceView({ invoice, clinic, patient, doctor, onClose }: Props
     } catch (e) {
       console.error(e);
       toast('Failed to generate PDF for WhatsApp. Please try Download.', 'error');
+    } finally {
+      setIsUploading(null);
+    }
+  };
+
+  const sendPaymentReminderViaWhatsApp = async () => {
+    const cleanPhone = (p?.phone || '').replace(/\D/g, '');
+    if (!cleanPhone || cleanPhone.length < 10) {
+      toast('Patient phone number is missing or invalid.', 'error');
+      return;
+    }
+    try {
+      setIsUploading('reminder');
+      toast('Sending official WhatsApp payment reminder...', 'info');
+      const res = await sendWhatsAppPaymentReminderViaAPI({
+        to: cleanPhone,
+        clinicId: c?.clinic_id || '',
+        patientName: p?.name || 'Patient',
+        clinicName: c?.name || 'Clinic',
+        pendingAmount: balanceDue || grandTotal,
+        visitDate: invoiceDateDisplay,
+        upiId: (c as any)?.upi_id || (c as any)?.upiId || 'clinic@upi',
+        clinicPhone: c?.phone || '+91 73961 11081',
+      });
+      if (res.success) {
+        toast(`WhatsApp payment reminder delivered to ${p?.name || 'patient'}!`, 'success');
+      } else {
+        toast(`Failed: ${res.error || 'Could not send reminder'}`, 'error');
+      }
+    } catch (err: any) {
+      toast(`Error sending reminder: ${err?.message || err}`, 'error');
     } finally {
       setIsUploading(null);
     }
@@ -490,6 +552,17 @@ export function InvoiceView({ invoice, clinic, patient, doctor, onClose }: Props
         >
           {isUploading === 'wa' ? <Loader2 size={16} className="animate-spin" /> : <Share2 size={16} />} WhatsApp
         </button>
+
+        {!isPaidStatus && balanceDue > 0 && (
+          <button 
+            onClick={sendPaymentReminderViaWhatsApp} 
+            disabled={isUploading !== null} 
+            className="btn-secondary px-6 bg-amber-50 text-amber-800 hover:bg-amber-100 border-amber-200 disabled:opacity-50 flex items-center gap-2"
+            title="Send official WhatsApp payment reminder to patient"
+          >
+            {isUploading === 'reminder' ? <Loader2 size={16} className="animate-spin" /> : <Bell size={16} />} Send Payment Reminder
+          </button>
+        )}
 
         <button 
           onClick={handleOpenEmailDialog} 

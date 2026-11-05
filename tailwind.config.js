@@ -5,6 +5,32 @@ export default {
     extend: {
       colors: {
         // Brand
+        brandBlue: {
+          DEFAULT: '#106EBE',
+          50: '#F0F7FD',
+          100: '#E1EFFB',
+          200: '#C2DEF7',
+          300: '#94C5F1',
+          400: '#5FA6E8',
+          500: '#106EBE',
+          600: '#0E5EA2',
+          700: '#0B4D86',
+          800: '#093E6C',
+          900: '#072E51',
+        },
+        brandMint: {
+          DEFAULT: '#0FFCBE',
+          50: '#F0FEFA',
+          100: '#D6FCF2',
+          200: '#A4FCE6',
+          300: '#69FBD6',
+          400: '#34FBC7',
+          500: '#0FFCBE',
+          600: '#00D49C',
+          700: '#00A678',
+          800: '#007856',
+          900: '#004A35',
+        },
         primary: {
           DEFAULT: '#0F6E56',
           50: '#E1F5EE',

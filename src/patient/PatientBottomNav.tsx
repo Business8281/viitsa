@@ -33,24 +33,24 @@ export function PatientBottomNav({ aiBadge, paymentBadge }: PatientBottomNavProp
               key={key}
               to={`/patient/${key === 'home' ? 'dashboard' : key}`}
               className={`relative flex flex-col items-center pt-2 pb-safe pb-3 gap-0.5 transition-colors ${
-                isActive ? 'text-primary' : 'text-gray-400'
+                isActive ? 'text-[#106EBE]' : 'text-gray-400'
               }`}
             >
               {isActive && (
-                <span className="absolute top-0 left-1/2 -translate-x-1/2 w-8 h-0.5 rounded-full bg-primary" />
+                <span className="absolute top-0 left-1/2 -translate-x-1/2 w-8 h-0.5 rounded-full bg-[#106EBE]" />
               )}
               <div className="relative">
-                <Icon size={22} className={isActive ? 'text-primary' : 'text-gray-400'} />
+                <Icon size={22} className={isActive ? 'text-[#106EBE]' : 'text-gray-400'} />
                 {showDotBadge ? (
-                  <span className="absolute -top-1 -right-1 h-2 w-2 rounded-full bg-danger" />
+                  <span className="absolute -top-1 -right-1 h-2 w-2 rounded-full bg-[#0FFCBE] border border-black/10" />
                 ) : null}
                 {hasNumericBadge ? (
-                  <span className="absolute -top-1.5 -right-2 min-w-[16px] h-4 rounded-full bg-danger text-[10px] text-white font-bold flex items-center justify-center px-1 shadow-xs">
+                  <span className="absolute -top-1.5 -right-2 min-w-[16px] h-4 rounded-full bg-[#106EBE] text-[10px] text-white font-bold flex items-center justify-center px-1 shadow-xs">
                     {(paymentBadge ?? 0) > 9 ? '9+' : paymentBadge}
                   </span>
                 ) : null}
               </div>
-              <span className={`text-[10px] font-semibold ${isActive ? 'text-primary' : 'text-gray-400'}`}>{label}</span>
+              <span className={`text-[10px] font-bold ${isActive ? 'text-[#106EBE]' : 'text-gray-400'}`}>{label}</span>
             </Link>
           );
         })}
