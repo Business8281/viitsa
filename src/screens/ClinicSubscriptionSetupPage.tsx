@@ -86,6 +86,14 @@ export function ClinicSubscriptionSetupPage() {
         subscription_auto_renew: true
       };
 
+      if (paymentData?.razorpay_subscription_id) {
+        clinicUpdates.razorpay_subscription_id = paymentData.razorpay_subscription_id;
+      }
+      if (paymentData?.razorpay_payment_id) {
+        clinicUpdates.last_payment_id = paymentData.razorpay_payment_id;
+        clinicUpdates.last_payment_status = 'paid';
+      }
+
       if (isTrial) {
         userUpdates.trial_used = true;
         userUpdates.has_used_trial = true;
