@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Building2, CheckCircle2, Crown, CalendarClock, LogOut, Sparkles, AlertTriangle, ArrowLeft, CreditCard } from 'lucide-react';
+import { Building2, CheckCircle2, Crown, CalendarClock, LogOut, Sparkles, AlertTriangle, ArrowLeft, ArrowRight, CreditCard, ChevronDown } from 'lucide-react';
 import { doc, updateDoc } from 'firebase/firestore';
 import { getAuth, signOut } from 'firebase/auth';
 import { getFunctions, httpsCallable } from 'firebase/functions';
@@ -17,46 +17,54 @@ export function ClinicSubscriptionSetupPage() {
   const invoiceId = searchParams.get('invoice');
   const mode = searchParams.get('mode');
   const isRetry = mode === 'retry' || mode === 'payment-failed' || clinic?.subscription_status === 'payment_failed' || clinic?.subscription_status === 'past_due' || clinic?.subscription_status === 'deactivated';
-  const isAlreadySubscribed = clinic?.subscription_status === 'active' || clinic?.subscription_status === 'trial' || clinic?.subscription_status === 'free_plan';
+  
+  const isTrialActive = clinic?.subscription_status === 'trial';
+  const isPaidActive = clinic?.subscription_status === 'active' || clinic?.subscription_status === 'free_plan';
+  const isAlreadySubscribed = isTrialActive || isPaidActive;
+  const hasCompletedTrial = clinic?.trial_completed === true;
+  const isTrialEligible = !isTrialActive && !isPaidActive && !hasCompletedTrial && !invoiceId;
+
+  const [showSwitchPlans, setShowSwitchPlans] = useState(false);
   const [success, setSuccess] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [selectedTier, setSelectedTier] = useState<'solo' | 'clinic' | 'multispecialty'>('clinic');
   const [selectedCycle, setSelectedCycle] = useState<'monthly' | 'annual'>('monthly');
 
+  // Trial countdown info
+  const trialEndsAtDate = clinic?.trial_ends_at ? new Date(clinic.trial_ends_at) : null;
+  const trialDaysRemaining = trialEndsAtDate 
+    ? Math.max(0, Math.ceil((trialEndsAtDate.getTime() - Date.now()) / (1000 * 60 * 60 * 24)))
+    : 30;
+  const formattedTrialEnd = trialEndsAtDate 
+    ? trialEndsAtDate.toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })
+    : '30 Days from activation';
+
   // Self-healing: If an aborted checkout previously left premature trial flags before payment was ever made,
   // restore clean trial eligibility immediately.
   useEffect(() => {
     if (!clinic?.clinic_id) return;
-    const isActuallySubscribed = clinic.subscription_status === 'trial' || clinic.subscription_status === 'active';
-    if (!isActuallySubscribed && !clinic.trial_activated && !clinic.trial_completed) {
-      if (clinic.trial_used || clinic.has_used_trial || clinic.trial_started_at) {
+    const isSubscribedOrTrial = clinic.subscription_status === 'trial' || clinic.subscription_status === 'active';
+    if (!isSubscribedOrTrial && !clinic.trial_completed) {
+      if (clinic.trial_used || clinic.has_used_trial || clinic.trial_activated || clinic.trial_started_at) {
         updateDoc(doc(db, 'clinics', clinic.clinic_id), {
           trial_used: false,
           has_used_trial: false,
+          trial_activated: false,
           trial_started_at: null,
           trial_ends_at: null
         }).catch(() => {});
       }
-      if (user?.user_id && ((user as any).trial_used || (user as any).has_used_trial)) {
+      if (user?.user_id && ((user as any).trial_used || (user as any).has_used_trial || (user as any).trial_activated)) {
         updateDoc(doc(db, 'users', user.user_id), {
           trial_used: false,
           has_used_trial: false,
+          trial_activated: false,
           trial_ends_at: null
         }).catch(() => {});
       }
     }
-  }, [clinic?.clinic_id, clinic?.subscription_status, clinic?.trial_activated, clinic?.trial_completed, clinic?.trial_used, user?.user_id]);
+  }, [clinic?.clinic_id, clinic?.subscription_status, clinic?.trial_completed, clinic?.trial_activated, clinic?.trial_used, user?.user_id]);
 
-  // STRICT ONE-TIME TRIAL ELIGIBILITY:
-  // A clinic has used a trial ONLY if they actually activated or completed a trial.
-  // Merely opening or closing the checkout without paying NEVER consumes the free trial.
-  const isActuallySubscribed = clinic?.subscription_status === 'trial' || clinic?.subscription_status === 'active';
-  const hasUsedTrial = Boolean(
-    isActuallySubscribed ||
-    clinic?.trial_completed === true ||
-    ((clinic?.subscription_status === 'cancelled' || clinic?.subscription_status === 'deactivated') && (clinic?.trial_activated || clinic?.trial_used))
-  );
-  const isTrialEligible = !hasUsedTrial && !invoiceId;
 
   const handleSuccess = async (paymentData?: any, chosenTier?: 'solo' | 'clinic' | 'multispecialty') => {
     if (!user || !clinic) return;
@@ -255,95 +263,164 @@ export function ClinicSubscriptionSetupPage() {
           </div>
         )}
 
-        {isAlreadySubscribed && !isRetry && (
-          <div className="mb-8 p-5 rounded-2xl bg-primary-50/50 border border-primary/20 flex flex-col sm:flex-row sm:items-center justify-between gap-4 text-left">
-            <div>
-              <div className="flex items-center gap-2">
-                <Crown size={18} className="text-accent" />
-                <span className="text-xs font-bold text-primary uppercase tracking-wider">Current Clinic Plan</span>
-              </div>
-              <h3 className="text-lg font-bold text-ink mt-0.5 capitalize">
-                {clinic?.subscription_plan || 'Clinic'} Plan ({clinic?.subscription_billing_cycle || 'monthly'})
-              </h3>
-              <p className="text-xs text-ink-muted mt-0.5">
-                {clinic?.subscription_status === 'trial' ? (
-                  <>
-                    Status: <strong className="text-emerald-700 font-bold uppercase">30-Day Free Trial Active</strong>
-                    {clinic?.trial_ends_at && (
-                      <span> • Valid until <strong>{new Date(clinic.trial_ends_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })}</strong> • Auto-debits on Day 31</span>
-                    )}
-                  </>
-                ) : (
-                  <>
-                    Status: <strong className="text-primary capitalize">{clinic?.subscription_status || 'Active'}</strong> • You can switch plans or re-authorize your payment method below.
-                  </>
-                )}
-              </p>
+        {isTrialActive && !isRetry && (
+          <div className="max-w-2xl mx-auto bg-white border border-emerald-500/30 rounded-3xl p-8 sm:p-10 shadow-xl text-center animate-fade-in mb-8">
+            <div className="w-20 h-20 bg-emerald-50 text-emerald-600 rounded-full flex items-center justify-center mx-auto mb-5 border border-emerald-200 shadow-inner">
+              <Sparkles size={38} className="text-emerald-600 animate-pulse" />
             </div>
-            <div className="flex items-center gap-2">
+
+            <div className="inline-flex items-center gap-1.5 px-3.5 py-1 rounded-full bg-emerald-100/80 border border-emerald-200 text-emerald-800 text-xs font-bold uppercase tracking-wider mb-3">
+              <CheckCircle2 size={14} className="text-emerald-600" />
+              <span>30-Day Free Trial Active</span>
+            </div>
+
+            <h2 className="text-2xl sm:text-3xl font-extrabold text-slate-900 mb-2 capitalize">
+              {clinic?.subscription_plan || 'Clinic'} Plan Activated
+            </h2>
+            <p className="text-sm text-slate-600 max-w-lg mx-auto mb-6 leading-relaxed">
+              Your clinic is completely set up! You have 100% unrestricted access to all doctor seats, AI intake workflows, and WhatsApp automation throughout your 30-day trial period.
+            </p>
+
+            <div className="bg-slate-50 border border-slate-200/80 rounded-2xl p-5 mb-8 text-left grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wide block">Trial Valid Until</span>
+                <span className="text-sm font-bold text-slate-800 block mt-0.5">
+                  {formattedTrialEnd}
+                </span>
+                <span className="text-xs text-emerald-700 font-semibold block mt-0.5">
+                  🌟 {trialDaysRemaining} days remaining (₹0 charged today)
+                </span>
+              </div>
+              <div>
+                <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wide block">First Auto-Debit (Day 31)</span>
+                <span className="text-sm font-bold text-slate-800 block mt-0.5">
+                  {clinic?.subscription_plan === 'solo' ? '₹2,999' : clinic?.subscription_plan === 'multispecialty' ? '₹11,999' : '₹5,999'} / month
+                </span>
+                <span className="text-xs text-slate-500 block mt-0.5">
+                  UPI Autopay / Card mandate registered
+                </span>
+              </div>
+            </div>
+
+            <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
               <button
                 type="button"
                 onClick={() => navigate('/clinic/dashboard')}
-                className="px-4 py-2 bg-white border border-black/10 rounded-xl text-xs font-bold text-ink hover:bg-slate-50 transition"
+                className="w-full sm:w-auto px-8 py-3.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-sm font-bold transition shadow-md hover:shadow-lg flex items-center justify-center gap-2"
               >
-                ← Back to Dashboard
+                <span>Enter Clinic Dashboard</span>
+                <ArrowRight size={16} />
               </button>
               <button
                 type="button"
                 onClick={() => navigate('/clinic/settings?tab=billing')}
-                className="px-4 py-2 bg-primary text-white rounded-xl text-xs font-bold hover:bg-primary-dark transition shadow-sm"
+                className="w-full sm:w-auto px-6 py-3.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-sm font-semibold transition"
               >
-                Settings & Billing
+                Manage Mandate & Billing
+              </button>
+            </div>
+            
+            <div className="mt-6 pt-5 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setShowSwitchPlans(!showSwitchPlans)}
+                className="text-xs font-semibold text-slate-500 hover:text-slate-800 inline-flex items-center gap-1 transition"
+              >
+                <span>{showSwitchPlans ? 'Hide plan comparison' : 'Want to switch tier or change billing cycle? Click to view plans'}</span>
+                <ChevronDown size={14} className={`transition-transform duration-200 ${showSwitchPlans ? 'rotate-180' : ''}`} />
               </button>
             </div>
           </div>
         )}
 
-        <div className="text-center mb-8">
-          <div className="inline-flex h-12 w-12 bg-primary/10 text-primary rounded-full items-center justify-center mb-4">
-            <Building2 size={24} />
+        {isPaidActive && !isRetry && !isTrialActive && (
+          <div className="max-w-2xl mx-auto bg-white border border-primary/20 rounded-3xl p-8 shadow-lg text-center animate-fade-in mb-8">
+            <div className="w-16 h-16 bg-primary/10 text-primary rounded-full flex items-center justify-center mx-auto mb-4">
+              <Crown size={32} />
+            </div>
+            <h2 className="text-2xl font-bold text-ink mb-1 capitalize">
+              {clinic?.subscription_plan || 'Clinic'} Plan Active
+            </h2>
+            <p className="text-xs text-ink-muted mb-6">
+              Your clinic subscription is running actively. You can enter your clinic dashboard below.
+            </p>
+            <div className="flex items-center justify-center gap-3">
+              <button
+                type="button"
+                onClick={() => navigate('/clinic/dashboard')}
+                className="btn-primary text-xs py-2.5 px-6 font-bold flex items-center gap-2 shadow-sm"
+              >
+                <span>Enter Clinic Dashboard</span>
+                <ArrowRight size={14} />
+              </button>
+              <button
+                type="button"
+                onClick={() => navigate('/clinic/settings?tab=billing')}
+                className="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition"
+              >
+                Settings & Billing
+              </button>
+            </div>
+            <div className="mt-6 pt-4 border-t border-black/5">
+              <button
+                type="button"
+                onClick={() => setShowSwitchPlans(!showSwitchPlans)}
+                className="text-xs font-semibold text-slate-500 hover:text-slate-800 inline-flex items-center gap-1 transition"
+              >
+                <span>{showSwitchPlans ? 'Hide plan options' : 'Looking to upgrade or change plan? View options'}</span>
+                <ChevronDown size={14} className={`transition-transform duration-200 ${showSwitchPlans ? 'rotate-180' : ''}`} />
+              </button>
+            </div>
           </div>
-          <h1 className="text-3xl font-bold text-ink mb-3">
-            Choose your subscription tier
-          </h1>
-          <p className="text-base text-ink-subtle max-w-2xl mx-auto">
-            {user?.role === 'clinic_admin'
-              ? isRetry
-                ? 'Select your tier below to update your payment method and complete your pending subscription renewal.'
-                : isTrialEligible
-                ? 'Your clinic is approved! Choose your preferred plan below. All plans include a 30-Day Free Trial with automatic renewal via UPI Autopay / Card. Cancel anytime before Day 30 at ₹0.'
-                : 'Select your subscription tier below to activate or manage your recurring subscription.'
-              : 'Your clinic subscription is inactive. Please wait for your administrator to renew it.'}
-          </p>
+        )}
 
-          {/* Billing Cycle Selector */}
-          <div className="mt-6 inline-flex items-center gap-2 p-1 bg-surface-subtle border border-black/5 rounded-xl">
-            <button
-              type="button"
-              onClick={() => setSelectedCycle('monthly')}
-              className={`px-4 py-1.5 text-xs font-semibold rounded-lg transition-all ${selectedCycle === 'monthly'
-                  ? 'bg-white text-ink shadow-sm'
-                  : 'text-ink-subtle hover:text-ink'
-                }`}
-            >
-              Monthly Billing
-            </button>
-            <button
-              type="button"
-              onClick={() => setSelectedCycle('annual')}
-              className={`px-4 py-1.5 text-xs font-semibold rounded-lg transition-all flex items-center gap-1.5 ${selectedCycle === 'annual'
-                  ? 'bg-primary text-white shadow-sm'
-                  : 'text-ink-subtle hover:text-ink'
-                }`}
-            >
-              <span>Annual Billing</span>
-              <span className={`text-[10px] font-bold px-1.5 py-0.2 rounded-full ${selectedCycle === 'annual' ? 'bg-white/20 text-white' : 'bg-primary/10 text-primary'
-                }`}>
-                2 Mo Free
-              </span>
-            </button>
-          </div>
-        </div>
+        {(!isAlreadySubscribed || isRetry || showSwitchPlans) && (
+          <>
+            <div className="text-center mb-8">
+              <div className="inline-flex h-12 w-12 bg-primary/10 text-primary rounded-full items-center justify-center mb-4">
+                <Building2 size={24} />
+              </div>
+              <h1 className="text-3xl font-bold text-ink mb-3">
+                Choose your subscription tier
+              </h1>
+              <p className="text-base text-ink-subtle max-w-2xl mx-auto">
+                {user?.role === 'clinic_admin'
+                  ? isRetry
+                    ? 'Select your tier below to update your payment method and complete your pending subscription renewal.'
+                    : isTrialEligible
+                    ? 'Your clinic is approved! Choose your preferred plan below. All plans include a 30-Day Free Trial with automatic renewal via UPI Autopay / Card. Cancel anytime before Day 30 at ₹0.'
+                    : 'Select your subscription tier below to activate or manage your recurring subscription.'
+                  : 'Your clinic subscription is inactive. Please wait for your administrator to renew it.'}
+              </p>
+
+              {/* Billing Cycle Selector */}
+              <div className="mt-6 inline-flex items-center gap-2 p-1 bg-surface-subtle border border-black/5 rounded-xl">
+                <button
+                  type="button"
+                  onClick={() => setSelectedCycle('monthly')}
+                  className={`px-4 py-1.5 text-xs font-semibold rounded-lg transition-all ${selectedCycle === 'monthly'
+                      ? 'bg-white text-ink shadow-sm'
+                      : 'text-ink-subtle hover:text-ink'
+                    }`}
+                >
+                  Monthly Billing
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSelectedCycle('annual')}
+                  className={`px-4 py-1.5 text-xs font-semibold rounded-lg transition-all flex items-center gap-1.5 ${selectedCycle === 'annual'
+                      ? 'bg-primary text-white shadow-sm'
+                      : 'text-ink-subtle hover:text-ink'
+                    }`}
+                >
+                  <span>Annual Billing</span>
+                  <span className={`text-[10px] font-bold px-1.5 py-0.2 rounded-full ${selectedCycle === 'annual' ? 'bg-white/20 text-white' : 'bg-primary/10 text-primary'
+                    }`}>
+                    2 Mo Free
+                  </span>
+                </button>
+              </div>
+            </div>
 
         {/* Tier Cards Grid */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
@@ -485,6 +562,8 @@ export function ClinicSubscriptionSetupPage() {
         <p className="text-center text-xs text-ink-subtle">
           🔒 Secured by Razorpay Subscriptions • 30-Day Free Trial (₹0 charged today) • Auto-debits chosen plan on Day 31 • Cancel anytime before Day 30 at zero charge
         </p>
+      </>
+    )}
 
         {user?.role !== 'clinic_admin' && (
           <div className="max-w-md mx-auto mt-6 bg-red-50 text-red-600 p-4 rounded-xl text-center text-sm font-medium border border-red-100">

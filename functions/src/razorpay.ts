@@ -166,24 +166,22 @@ export const createClinicSubscription = onCall({ region: "asia-south1" }, async 
 
   // STRICT ONE-TIME 30-DAY TRIAL ENFORCEMENT
   // A clinic or user has used a trial ONLY if they actually activated or completed a trial.
-  // Opening the checkout modal without paying NEVER consumes the trial.
+  // Merely opening or closing the checkout without paying NEVER consumes the free trial.
   const isActuallySubscribed = clinicData.subscription_status === 'trial' || clinicData.subscription_status === 'active';
   const hasCompletedOrActiveTrial = Boolean(
-    clinicData.trial_activated ||
-    clinicData.trial_completed ||
     isActuallySubscribed ||
-    ((clinicData.subscription_status === 'cancelled' || clinicData.subscription_status === 'deactivated') && (clinicData.trial_activated || clinicData.trial_used)) ||
-    userData.trial_completed ||
-    userData.trial_activated
+    clinicData.trial_completed === true ||
+    ((clinicData.subscription_status === 'cancelled' || clinicData.subscription_status === 'deactivated') && clinicData.trial_completed === true) ||
+    userData.trial_completed === true
   );
 
   let trialAlreadyUsed = hasCompletedOrActiveTrial;
 
   if (!trialAlreadyUsed && clinicEmail) {
-    const trialRecordSnap = await getDb().collection("trial_records").where("email", "==", clinicEmail).where("status", "==", "active_trial").limit(1).get();
+    const trialRecordSnap = await getDb().collection("trial_records").where("email", "==", clinicEmail).limit(1).get();
     if (!trialRecordSnap.empty) {
       const trDoc = trialRecordSnap.docs[0].data();
-      if (trDoc.trial_activated === true) {
+      if (trDoc.status === "completed" || (trDoc.status === "active_trial" && isActuallySubscribed)) {
         trialAlreadyUsed = true;
       }
     }
@@ -636,6 +634,7 @@ export const razorpayWebhook = onRequest(async (req, res) => {
           subscription_plan: tier,
           subscription_billing_cycle: cycle,
           trial_status: "converted",
+          trial_completed: true,
           last_renewal_at: new Date().toISOString(),
           last_payment_id: payment?.id || null,
           last_payment_status: "paid"
@@ -646,7 +645,8 @@ export const razorpayWebhook = onRequest(async (req, res) => {
           await uDoc.ref.update({
             clinic_subscription_status: "active",
             subscription_plan: tier,
-            subscription_billing_cycle: cycle
+            subscription_billing_cycle: cycle,
+            trial_completed: true
           }).catch(() => {});
         }
 

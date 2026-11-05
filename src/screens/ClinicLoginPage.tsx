@@ -448,8 +448,8 @@ export function ClinicLoginPage() {
         return;
       }
       // 4. Check subscription status
-      if (clinicObj?.subscription_status === 'deactivated' || clinic?.subscription_status === 'deactivated' ||
-        clinicObj?.subscription_status === 'cancelled' || clinic?.subscription_status === 'cancelled') {
+      const subStatus = clinicObj?.subscription_status || clinic?.subscription_status;
+      if (subStatus !== 'active' && subStatus !== 'free_plan' && subStatus !== 'trial') {
         navigate('/clinic/subscription-setup', { replace: true });
         return;
       }
@@ -765,29 +765,46 @@ export function ClinicLoginPage() {
         email_verified: true,
       };
 
+      // Persist verified credentials to session and local storage immediately
+      if (typeof window !== 'undefined') {
+        sessionStorage.setItem('viitsa_reg_phone', clean);
+        sessionStorage.setItem('viitsa_reg_email', cleanEmail);
+        localStorage.setItem('viitsa_clinic_phone', clean);
+        localStorage.setItem('viitsa_clinic_email', cleanEmail);
+      }
+
       const res = await registerWithEmail(cleanEmail, regPassword, onboarding);
 
       if (res.ok && res.user) {
         // Enforce unverified state and setup flags so clinic completes onboarding form & documents upload first
         try {
-          const userRef = doc(db, 'users', res.user.id || res.user.user_id);
-          await updateDoc(userRef, {
+          const userId = res.user.id || res.user.user_id;
+          const userRef = doc(db, 'users', userId);
+          await setDoc(userRef, {
+            phone: clean,
+            email: cleanEmail,
+            phone_verified: true,
+            email_verified: true,
             clinic_setup_complete: false,
             clinic_documents_uploaded: false,
             clinic_verification_status: 'unverified',
             verification_status: 'unverified',
+            updated_at: new Date().toISOString()
+          }, { merge: true });
+
+          const clinicId = res.clinic?.id || res.clinic?.clinic_id || `cln_${userId}`;
+          const clinicRef = doc(db, 'clinics', clinicId);
+          await setDoc(clinicRef, {
+            phone: clean,
+            email: cleanEmail,
             phone_verified: true,
             email_verified: true,
-          });
-
-          const clinicId = res.clinic?.id || res.clinic?.clinic_id || `cln_${res.user.id || res.user.user_id}`;
-          const clinicRef = doc(db, 'clinics', clinicId);
-          await updateDoc(clinicRef, {
             clinic_setup_complete: false,
             documents_uploaded: false,
             verification_status: 'unverified',
             approval_status: 'pending',
-          }).catch(() => {});
+            updated_at: new Date().toISOString()
+          }, { merge: true });
         } catch (dbErr) {
           console.warn('Set initial clinic state error:', dbErr);
         }

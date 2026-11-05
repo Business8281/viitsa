@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Building2,
@@ -26,9 +26,35 @@ export function ClinicSetupPage() {
   const navigate = useNavigate();
   const { user, clinic, refreshSession, logout } = useAuth();
 
-  // Dual-verified credentials from OTP registration (non-editable)
-  const verifiedPhone = (user?.phone || clinic?.phone || '').replace(/\D/g, '').slice(-10);
-  const verifiedEmail = (user?.email || clinic?.email || '').trim().toLowerCase();
+  // Dual-verified credentials from OTP registration or active session
+  const sessionPhone = (
+    user?.phone || 
+    clinic?.phone || 
+    (typeof window !== 'undefined' ? (sessionStorage.getItem('viitsa_reg_phone') || localStorage.getItem('viitsa_clinic_phone') || '') : '')
+  ).replace(/\D/g, '').slice(-10);
+
+  const sessionEmail = (
+    user?.email || 
+    clinic?.email || 
+    auth.currentUser?.email ||
+    (typeof window !== 'undefined' ? (sessionStorage.getItem('viitsa_reg_email') || localStorage.getItem('viitsa_clinic_email') || '') : '')
+  ).trim().toLowerCase();
+
+  const isPhoneLocked = Boolean(sessionPhone && sessionPhone.length === 10);
+  const isEmailLocked = Boolean(sessionEmail && sessionEmail.includes('@'));
+
+  const [enteredPhone, setEnteredPhone] = useState(sessionPhone || '');
+  const [enteredEmail, setEnteredEmail] = useState(sessionEmail || '');
+
+  // Keep state in sync if auth/clinic resolves after initial mount
+  useEffect(() => {
+    if (sessionPhone && (!enteredPhone || enteredPhone.length < 10)) {
+      setEnteredPhone(sessionPhone);
+    }
+    if (sessionEmail && (!enteredEmail || !enteredEmail.includes('@'))) {
+      setEnteredEmail(sessionEmail);
+    }
+  }, [sessionPhone, sessionEmail]);
 
   // Clinic info
   const [clinicName, setClinicName] = useState(clinic?.name || (user as any)?.clinic_name || '');
@@ -58,11 +84,17 @@ export function ClinicSetupPage() {
     e.preventDefault();
     setError(null);
 
+    const finalPhone = (isPhoneLocked ? sessionPhone : enteredPhone).replace(/\D/g, '').slice(-10);
+    const finalEmail = (isEmailLocked ? sessionEmail : enteredEmail).trim().toLowerCase();
+
     if (!clinicName.trim()) { setError('Clinic name is required.'); return; }
     if (!address.trim()) { setError('Clinic address is required.'); return; }
     if (!city.trim()) { setError('City is required.'); return; }
-    if (!verifiedPhone || verifiedPhone.length < 10) {
-      setError('Verified 10-digit mobile number not found in session. Please sign in again.'); return;
+    if (!finalPhone || finalPhone.length < 10) {
+      setError('Please enter a valid 10-digit clinic mobile number.'); return;
+    }
+    if (!finalEmail || !finalEmail.includes('@')) {
+      setError('Please enter a valid clinic email address.'); return;
     }
     if (workingDays.length === 0) { setError('Please select at least one working day.'); return; }
 
@@ -89,8 +121,10 @@ export function ClinicSetupPage() {
       name: clinicName.trim(),
       address: address.trim(),
       city: city.trim(),
-      phone: verifiedPhone,
-      email: verifiedEmail,
+      phone: finalPhone,
+      email: finalEmail,
+      phone_verified: true,
+      email_verified: true,
       reception_phone: cleanReception || null,
       owner_name: ownerName.trim() || user?.name || '',
       owner_user_id: authUid || uid,
@@ -134,8 +168,8 @@ export function ClinicSetupPage() {
         clinic_name: clinicName.trim(),
         name: ownerName.trim() || user?.name,
         full_name: ownerName.trim() || user?.name,
-        phone: verifiedPhone || user?.phone || null,
-        email: verifiedEmail || user?.email || null,
+        phone: finalPhone || user?.phone || null,
+        email: finalEmail || user?.email || null,
         phone_verified: true,
         email_verified: true,
         updated_at: nowIso,
@@ -314,31 +348,54 @@ export function ClinicSetupPage() {
                 </div>
               </div>
 
-              {/* Clinic Registered Mobile (Locked / Verified) */}
+              {/* Clinic Registered Mobile */}
               <div>
                 <div className="flex items-center justify-between mb-1.5">
                   <label className="block text-xs font-bold text-slate-700 uppercase tracking-wide">
-                    Registered Mobile
+                    Registered Mobile <span className="text-rose-500">*</span>
                   </label>
-                  <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
-                    <CheckCircle2 className="w-3 h-3 text-emerald-600" />
-                    Verified via WhatsApp
-                  </span>
+                  {isPhoneLocked && (
+                    <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
+                      <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                      Verified via WhatsApp
+                    </span>
+                  )}
                 </div>
                 <div className="flex items-center gap-2">
                   <span className="h-11 px-3 bg-slate-100 border border-slate-300 rounded-xl text-sm font-bold text-slate-700 flex items-center">+91</span>
                   <div className="relative flex-1">
                     <input
-                      type="text"
-                      readOnly
-                      disabled
-                      value={verifiedPhone || '—'}
-                      className="w-full h-11 px-4 bg-slate-100/80 border border-slate-300 rounded-xl text-sm font-mono text-slate-700 cursor-not-allowed select-none"
+                      type="tel"
+                      required
+                      inputMode="numeric"
+                      maxLength={10}
+                      readOnly={isPhoneLocked}
+                      disabled={isPhoneLocked}
+                      value={isPhoneLocked ? sessionPhone : enteredPhone}
+                      onKeyDown={e => {
+                        if (isPhoneLocked) return;
+                        if (['Backspace','Delete','Tab','Escape','Enter','ArrowLeft','ArrowRight'].includes(e.key)) return;
+                        if (e.ctrlKey || e.metaKey) return;
+                        if (!/^\d$/.test(e.key)) e.preventDefault();
+                      }}
+                      onChange={e => {
+                        if (!isPhoneLocked) setEnteredPhone(e.target.value.replace(/\D/g, '').slice(0, 10));
+                      }}
+                      placeholder="10-digit mobile number"
+                      className={`w-full h-11 px-4 border border-slate-300 rounded-xl text-sm font-mono transition-all ${
+                        isPhoneLocked
+                          ? 'bg-slate-100/80 text-slate-700 cursor-not-allowed select-none pr-10'
+                          : 'bg-white text-slate-900 placeholder:text-slate-400 focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/20'
+                      }`}
                     />
-                    <Lock className="w-4 h-4 text-slate-400 absolute right-3.5 top-3.5" />
+                    {isPhoneLocked && (
+                      <Lock className="w-4 h-4 text-slate-400 absolute right-3.5 top-3.5" />
+                    )}
                   </div>
                 </div>
-                <p className="text-[11px] text-slate-500 mt-1">Primary phone verified during signup.</p>
+                <p className="text-[11px] text-slate-500 mt-1">
+                  {isPhoneLocked ? 'Primary phone verified during signup.' : 'Primary clinic mobile number for alerts & OTPs.'}
+                </p>
               </div>
 
               {/* Reception / Desk Phone (Optional) */}
@@ -366,29 +423,44 @@ export function ClinicSetupPage() {
                 <p className="text-[11px] text-slate-500 mt-1">Alternate number for patient enquiries.</p>
               </div>
 
-              {/* Clinic Registered Official Email (Locked / Verified) */}
+              {/* Clinic Registered Official Email */}
               <div className="sm:col-span-2">
                 <div className="flex items-center justify-between mb-1.5">
                   <label className="block text-xs font-bold text-slate-700 uppercase tracking-wide">
-                    Registered Official Email
+                    Registered Official Email <span className="text-rose-500">*</span>
                   </label>
-                  <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
-                    <CheckCircle2 className="w-3 h-3 text-emerald-600" />
-                    Verified via Email OTP
-                  </span>
+                  {isEmailLocked && (
+                    <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
+                      <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                      Verified via Email OTP
+                    </span>
+                  )}
                 </div>
                 <div className="relative">
                   <Mail className="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5" />
                   <input
                     type="email"
-                    readOnly
-                    disabled
-                    value={verifiedEmail || '—'}
-                    className="w-full h-11 pl-10 pr-10 bg-slate-100/80 border border-slate-300 rounded-xl text-sm text-slate-700 cursor-not-allowed select-none"
+                    required
+                    readOnly={isEmailLocked}
+                    disabled={isEmailLocked}
+                    value={isEmailLocked ? sessionEmail : enteredEmail}
+                    onChange={e => {
+                      if (!isEmailLocked) setEnteredEmail(e.target.value.trim().toLowerCase());
+                    }}
+                    placeholder="clinic@example.com"
+                    className={`w-full h-11 pl-10 border border-slate-300 rounded-xl text-sm transition-all ${
+                      isEmailLocked
+                        ? 'bg-slate-100/80 text-slate-700 cursor-not-allowed select-none pr-10'
+                        : 'bg-white text-slate-900 placeholder:text-slate-400 focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/20'
+                    }`}
                   />
-                  <Lock className="w-4 h-4 text-slate-400 absolute right-3.5 top-3.5" />
+                  {isEmailLocked && (
+                    <Lock className="w-4 h-4 text-slate-400 absolute right-3.5 top-3.5" />
+                  )}
                 </div>
-                <p className="text-[11px] text-slate-500 mt-1">Official clinic email verified during signup.</p>
+                <p className="text-[11px] text-slate-500 mt-1">
+                  {isEmailLocked ? 'Official clinic email verified during signup.' : 'Primary official clinic email for reports & invoices.'}
+                </p>
               </div>
             </div>
           </div>
@@ -425,22 +497,36 @@ export function ClinicSetupPage() {
                   <label className="block text-xs font-bold text-slate-700 uppercase tracking-wide">
                     Admin Mobile
                   </label>
-                  <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
-                    <CheckCircle2 className="w-3 h-3 text-emerald-600" />
-                    Verified
-                  </span>
+                  {isPhoneLocked && (
+                    <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
+                      <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                      Verified
+                    </span>
+                  )}
                 </div>
                 <div className="flex items-center gap-2">
                   <span className="h-11 px-3 bg-slate-100 border border-slate-300 rounded-xl text-sm font-bold text-slate-700 flex items-center">+91</span>
                   <div className="relative flex-1">
                     <input
-                      type="text"
-                      readOnly
-                      disabled
-                      value={verifiedPhone || '—'}
-                      className="w-full h-11 px-4 bg-slate-100/80 border border-slate-300 rounded-xl text-sm font-mono text-slate-700 cursor-not-allowed select-none"
+                      type="tel"
+                      inputMode="numeric"
+                      maxLength={10}
+                      readOnly={isPhoneLocked}
+                      disabled={isPhoneLocked}
+                      value={isPhoneLocked ? sessionPhone : enteredPhone}
+                      onChange={e => {
+                        if (!isPhoneLocked) setEnteredPhone(e.target.value.replace(/\D/g, '').slice(0, 10));
+                      }}
+                      placeholder="10-digit mobile number"
+                      className={`w-full h-11 px-4 border border-slate-300 rounded-xl text-sm font-mono transition-all ${
+                        isPhoneLocked
+                          ? 'bg-slate-100/80 text-slate-700 cursor-not-allowed select-none pr-10'
+                          : 'bg-white text-slate-900 placeholder:text-slate-400 focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/20'
+                      }`}
                     />
-                    <Lock className="w-4 h-4 text-slate-400 absolute right-3.5 top-3.5" />
+                    {isPhoneLocked && (
+                      <Lock className="w-4 h-4 text-slate-400 absolute right-3.5 top-3.5" />
+                    )}
                   </div>
                 </div>
               </div>
