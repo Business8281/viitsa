@@ -162,6 +162,16 @@ export async function sendWhatsAppTemplate(options: {
     return { success: false, error: `Invalid phone number: ${options.to}` };
   }
 
+  // Business Self-Send Guard: Meta WhatsApp Cloud API does not permit sending messages to the business's own registered phone number
+  const BUSINESS_PHONE_CLEAN = '917396111081';
+  if (normalizedPhone === BUSINESS_PHONE_CLEAN) {
+    console.warn(`[WhatsAppService] Warning: Recipient ${normalizedPhone} is Viitsa's own registered WhatsApp Business number. Meta API rejects self-messaging.`);
+    return {
+      success: false,
+      error: 'Recipient phone number is Viitsa’s registered WhatsApp Business number (+91 73961 11081). Meta Cloud API does not allow a WhatsApp business account to message itself. Please test with an external phone number.',
+    };
+  }
+
   // Deduplication Guard: Prevent duplicate delivery of the same template to the same phone within 45s
   const isOtp = options.templateName.includes('otp');
   const dedupKey = `${normalizedPhone}_${options.templateName}`;
@@ -990,6 +1000,7 @@ export interface PatientMedicineReminderData {
   dosageTiming: string;
   instructions?: string;
   clinicPhone: string;
+  doctorName?: string;
 }
 
 /**
@@ -1000,7 +1011,7 @@ export async function sendPatientMedicineReminder(data: PatientMedicineReminderD
   const templateName = process.env.WA_TEMPLATE_MEDICINE_REMINDER || 'viitsa_patient_medicine_reminder';
   const patient = formatProperName(data.patientName);
 
-  return sendWhatsAppTemplate({
+  const res = await sendWhatsAppTemplate({
     to: data.to,
     templateName,
     clinicId: data.clinicId,
@@ -1017,6 +1028,19 @@ export async function sendPatientMedicineReminder(data: PatientMedicineReminderD
         ],
       },
     ],
+  });
+
+  if (res.success) return res;
+
+  // Graceful fallback to viitsa_patient_followup_due if medicine reminder template is not yet approved on Meta
+  return sendPatientFollowupDue({
+    to: data.to,
+    clinicId: data.clinicId,
+    patientName: data.patientName,
+    doctorName: data.doctorName || 'Doctor',
+    clinicName: data.clinicName,
+    dueDate: `${data.medicineName || 'Medication'} (${data.dosageTiming || 'Active Course'})`,
+    clinicPhone: data.clinicPhone,
   });
 }
 

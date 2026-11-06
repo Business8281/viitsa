@@ -79,7 +79,16 @@ export function RazorpaySubscriptionButton({
         throw new Error('Failed to create subscription mandate');
       }
 
-      const isTrial = subscription.is_trial;
+      const isTrial = Boolean(subscription.is_trial);
+
+      // Persist trial state in sessionStorage so redirect flow (UPI Autopay / Netbanking / 3DS) on SubscriptionSuccessPage detects trial
+      if (typeof window !== 'undefined') {
+        sessionStorage.setItem('viitsa_is_trial', isTrial ? 'true' : 'false');
+        sessionStorage.setItem('viitsa_target_clinic_id', clinicId);
+        sessionStorage.setItem('viitsa_sub_tier', tier);
+        sessionStorage.setItem('viitsa_sub_cycle', cycle);
+        if (prefillContact) sessionStorage.setItem('viitsa_clinic_phone', prefillContact);
+      }
 
       // 2. Configure and open Razorpay modal
       const options = {
@@ -91,7 +100,7 @@ export function RazorpaySubscriptionButton({
           : `${tier.toUpperCase()} Plan (${cycle.toUpperCase()}) Subscription`,
         handler: async function (response: any) {
           toast(isTrial ? '30-Day Free Trial activated successfully!' : 'Subscription activated successfully!', 'success');
-          if (onSuccess) onSuccess({ ...response, is_trial: isTrial });
+          if (onSuccess) onSuccess({ ...response, is_trial: isTrial, contact: prefillContact });
         },
         prefill: {
           name: prefillName || '',

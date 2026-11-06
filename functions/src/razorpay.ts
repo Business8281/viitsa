@@ -165,23 +165,22 @@ export const createClinicSubscription = onCall({ region: "asia-south1" }, async 
   const clinicEmail = (clinicData.email || userData.email || request.auth.token?.email || "").toLowerCase().trim();
 
   // STRICT ONE-TIME 30-DAY TRIAL ENFORCEMENT
-  // A clinic or user has used a trial ONLY if they actually activated or completed a trial.
-  // Merely opening or closing the checkout without paying NEVER consumes the free trial.
-  const isActuallySubscribed = clinicData.subscription_status === 'trial' || clinicData.subscription_status === 'active';
-  const hasCompletedOrActiveTrial = Boolean(
-    isActuallySubscribed ||
+  // A clinic or user has used a trial ONLY if they actually activated/completed a trial or are already an active paying subscriber.
+  // Merely opening or closing the checkout without paying, or being in 'trial' onboarding state, NEVER consumes the free trial.
+  const isAlreadyActivePaid = clinicData.subscription_status === 'active';
+  const hasCompletedTrial = Boolean(
     clinicData.trial_completed === true ||
-    ((clinicData.subscription_status === 'cancelled' || clinicData.subscription_status === 'deactivated') && clinicData.trial_completed === true) ||
-    userData.trial_completed === true
+    userData.trial_completed === true ||
+    ((clinicData.subscription_status === 'cancelled' || clinicData.subscription_status === 'deactivated') && clinicData.trial_completed === true)
   );
 
-  let trialAlreadyUsed = hasCompletedOrActiveTrial;
+  let trialAlreadyUsed = Boolean(isAlreadyActivePaid || hasCompletedTrial);
 
   if (!trialAlreadyUsed && clinicEmail) {
     const trialRecordSnap = await getDb().collection("trial_records").where("email", "==", clinicEmail).limit(1).get();
     if (!trialRecordSnap.empty) {
       const trDoc = trialRecordSnap.docs[0].data();
-      if (trDoc.status === "completed" || (trDoc.status === "active_trial" && isActuallySubscribed)) {
+      if (trDoc.status === "completed" || (trDoc.status === "active_trial" && isAlreadyActivePaid)) {
         trialAlreadyUsed = true;
       }
     }
@@ -400,12 +399,29 @@ export const razorpayWebhook = onRequest(async (req, res) => {
     return;
   }
 
-  const expectedSignature = crypto
-    .createHmac("sha256", secret)
-    .update(JSON.stringify(req.body))
-    .digest("hex");
+  // Resilient signature validation: check raw bytes first (standard for Razorpay webhooks in Cloud Functions v2), then fallback to JSON representation
+  let isSignatureValid = false;
+  if ((req as any).rawBody) {
+    const rawExpectedSignature = crypto
+      .createHmac("sha256", secret)
+      .update((req as any).rawBody)
+      .digest("hex");
+    if (rawExpectedSignature === signature) {
+      isSignatureValid = true;
+    }
+  }
 
-  if (expectedSignature !== signature) {
+  if (!isSignatureValid) {
+    const jsonExpectedSignature = crypto
+      .createHmac("sha256", secret)
+      .update(typeof req.body === "string" ? req.body : JSON.stringify(req.body))
+      .digest("hex");
+    if (jsonExpectedSignature === signature) {
+      isSignatureValid = true;
+    }
+  }
+
+  if (!isSignatureValid) {
     console.error("Webhook signature mismatch.");
     res.status(400).send("Invalid signature");
     return;
@@ -419,8 +435,10 @@ export const razorpayWebhook = onRequest(async (req, res) => {
       const clinicId = sub.notes?.clinic_id;
       const tier = sub.notes?.tier || "clinic";
       const cycle = sub.notes?.cycle || "monthly";
-      const isTrial = sub.start_at && (sub.start_at * 1000 > Date.now());
-      const trialEndsAt = isTrial ? new Date(sub.start_at * 1000).toISOString() : null;
+      const isTrial = sub.notes?.is_trial === "true" || (sub.start_at && (sub.start_at * 1000 > Date.now()));
+      const trialEndsAt = isTrial 
+        ? (sub.start_at ? new Date(sub.start_at * 1000).toISOString() : new Date(Date.now() + 30 * 86400000).toISOString())
+        : null;
 
       if (clinicId) {
         await getDb().collection("subscriptions").doc(sub.id).set({

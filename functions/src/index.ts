@@ -1075,8 +1075,14 @@ export const onClinicSubscriptionStatusChanged = onDocumentUpdated(
     const cycle = afterData.subscription_billing_cycle || 'monthly';
     const now = Date.now();
 
-    // 1. Trial Activated (status became 'trial')
-    if (afterStatus === 'trial' && beforeStatus !== 'trial') {
+    // 1. Trial Activated (status became 'trial' OR trial mandate was newly activated / authenticated)
+    const isNewTrialActivation = (
+      (afterStatus === 'trial' && beforeStatus !== 'trial') ||
+      (afterStatus === 'trial' && Boolean(afterData.trial_activated) && !Boolean(beforeData.trial_activated)) ||
+      (afterStatus === 'trial' && Boolean(afterData.last_payment_id) && afterData.last_payment_id !== beforeData.last_payment_id)
+    );
+
+    if (isNewTrialActivation) {
       const lastSent = afterData.last_trial_wa_sent_at ? new Date(afterData.last_trial_wa_sent_at).getTime() : 0;
       if (now - lastSent > 60000) {
         console.log(`[onClinicSubscription] Dispatching viitsa_clinic_trial_activated to ${clinicPhone}`);

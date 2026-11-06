@@ -6,7 +6,7 @@ import { collection, addDoc, doc, updateDoc, getDocs, query, where, serverTimest
 import { httpsCallable } from 'firebase/functions';
 import { useAuth } from '../lib/auth';
 import { buildSubscriptionActivatedHtml } from '../lib/emailService';
-import { sendWhatsAppClinicSubActivated } from '../lib/whatsappClientService';
+import { sendWhatsAppClinicSubActivated, sendWhatsAppClinicTrialActivated } from '../lib/whatsappClientService';
 
 export function SubscriptionSuccessPage() {
   const [searchParams] = useSearchParams();
@@ -17,6 +17,7 @@ export function SubscriptionSuccessPage() {
   const [activationError, setActivationError] = useState<string | null>(null);
   const [resolvedTier, setResolvedTier] = useState<string>('clinic');
   const [resolvedCycle, setResolvedCycle] = useState<string>('monthly');
+  const [resolvedIsTrial, setResolvedIsTrial] = useState<boolean>(false);
   const hasProcessed = useRef(false);
 
   // Extract payment reference information from query params
@@ -104,13 +105,22 @@ export function SubscriptionSuccessPage() {
       try {
         setSaving(true);
 
+        // Detect if this transaction corresponds to a 30-Day Free Trial mandate
+        const isTrialParam = searchParams.get('is_trial') === 'true' || searchParams.get('trial') === 'true';
+        const isTrialSession = typeof window !== 'undefined' && sessionStorage.getItem('viitsa_is_trial') === 'true';
+        const isTrialClinic = (clinic?.subscription_status === 'trial' || (clinic as any)?.trial_status === 'active_trial') ||
+          ((clinic as any)?.trial_completed !== true && detectedCycle === 'monthly' && clinic?.subscription_status !== 'active');
+        const isTrial = Boolean(isTrialParam || isTrialSession || (pendingUpgrade?.is_trial === true) || isTrialClinic);
+        const trialEndsAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+        setResolvedIsTrial(isTrial);
+
         // 1. Calculate billing cycle period end date
         const durationDays = detectedCycle === 'annual' ? 365 : 30;
-        const periodEndIso = new Date(Date.now() + durationDays * 24 * 60 * 60 * 1000).toISOString();
+        const periodEndIso = isTrial ? trialEndsAt : new Date(Date.now() + durationDays * 24 * 60 * 60 * 1000).toISOString();
 
         // 2. Update Clinic document immediately
-        await updateDoc(doc(db, 'clinics', targetClinicId), {
-          subscription_status: 'active',
+        const clinicUpdates: any = {
+          subscription_status: isTrial ? 'trial' : 'active',
           subscription_plan: detectedTier,
           subscription_billing_cycle: detectedCycle,
           subscription_activated_at: new Date().toISOString(),
@@ -127,19 +137,38 @@ export function SubscriptionSuccessPage() {
           last_payment_id: paymentId || 'online_checkout',
           last_payment_link_id: paymentLinkId || null,
           last_payment_status: 'paid'
-        });
+        };
 
-        // 2. Update User document if user ID is known
-        const targetUserId = user?.user_id || pendingUpgrade?.user_id;
-        if (targetUserId) {
-          await updateDoc(doc(db, 'users', targetUserId), {
-            clinic_subscription_status: 'active',
-            subscription_plan: detectedTier,
-            subscription_billing_cycle: detectedCycle
-          });
+        if (isTrial) {
+          clinicUpdates.trial_used = true;
+          clinicUpdates.has_used_trial = true;
+          clinicUpdates.trial_activated = true;
+          clinicUpdates.trial_completed = false;
+          clinicUpdates.trial_status = 'active_trial';
+          clinicUpdates.trial_started_at = new Date().toISOString();
+          clinicUpdates.trial_ends_at = trialEndsAt;
         }
 
-        // 3. Log to subscriptions collection for billing record
+        await updateDoc(doc(db, 'clinics', targetClinicId), clinicUpdates);
+
+        // 3. Update User document if user ID is known
+        const targetUserId = user?.user_id || pendingUpgrade?.user_id;
+        if (targetUserId) {
+          const userUpdates: any = {
+            clinic_subscription_status: isTrial ? 'trial' : 'active',
+            subscription_plan: detectedTier,
+            subscription_billing_cycle: detectedCycle
+          };
+          if (isTrial) {
+            userUpdates.trial_used = true;
+            userUpdates.has_used_trial = true;
+            userUpdates.trial_completed = false;
+            userUpdates.trial_ends_at = trialEndsAt;
+          }
+          await updateDoc(doc(db, 'users', targetUserId), userUpdates);
+        }
+
+        // 4. Log to subscriptions collection for billing record
         const logPaymentId = paymentId || `pay_link_${Date.now()}`;
         const q = query(collection(db, 'subscriptions'), where('payment_id', '==', logPaymentId));
         const snap = await getDocs(q);
@@ -148,9 +177,11 @@ export function SubscriptionSuccessPage() {
             clinic_id: targetClinicId,
             clinic_name: clinic?.name || 'Clinic',
             tier: detectedTier,
-            plan_name: `${detectedTier.toUpperCase()} Plan`,
+            plan_name: isTrial ? `${detectedTier.toUpperCase()} Plan (30-Day Free Trial)` : `${detectedTier.toUpperCase()} Plan`,
             billing_cycle: detectedCycle,
-            status: 'active',
+            status: isTrial ? 'trial' : 'active',
+            is_trial: isTrial,
+            trial_ends_at: isTrial ? trialEndsAt : null,
             payment_id: paymentId || null,
             payment_link_id: paymentLinkId || null,
             payment_status: 'paid',
@@ -159,7 +190,7 @@ export function SubscriptionSuccessPage() {
           });
         }
 
-        // 4. Send instant branded email confirmation to clinic admin
+        // 5. Send instant branded email confirmation to clinic admin
         const recipientEmail = user?.email || clinic?.email;
         if (recipientEmail) {
           try {
@@ -169,33 +200,37 @@ export function SubscriptionSuccessPage() {
               multispecialty: { monthly: 11999, annual: 119990 },
             };
             const paidAmount = planPricing[detectedTier]?.[detectedCycle] || (detectedTier === 'multispecialty' ? 11999 : detectedTier === 'clinic' ? 5999 : 2999);
-            const invNumber = `VIITSA-INV-${Date.now().toString().slice(-6)}`;
+            const invNumber = `VIITSA-${isTrial ? 'TRL' : 'INV'}-${Date.now().toString().slice(-6)}`;
 
             const sendInstantEmail = httpsCallable(functions, 'sendInstantEmail');
             await sendInstantEmail({
               to: recipientEmail,
-              subject: `Payment Confirmed: ${detectedTier.toUpperCase()} Plan (${detectedCycle.toUpperCase()}) Activated | Viitsa Healthcare`,
+              subject: isTrial
+                ? `30-Day Free Trial Activated: ${detectedTier.toUpperCase()} Plan | Viitsa Healthcare`
+                : `Payment Confirmed: ${detectedTier.toUpperCase()} Plan (${detectedCycle.toUpperCase()}) Activated | Viitsa Healthcare`,
               invoiceData: {
                 invoiceNumber: invNumber,
                 invoiceDate: new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }),
-                status: 'PAID',
+                status: isTrial ? 'TRIAL ACTIVE' : 'PAID',
                 clinicName: clinic?.name || 'Clinic Partner',
                 customerEmail: recipientEmail,
                 customerPhone: (clinic as any)?.phone || (clinic as any)?.contact_phone || '',
                 planName: `${detectedTier.toUpperCase()} Plan (${detectedCycle.toUpperCase()})`,
                 tier: detectedTier,
                 cycle: detectedCycle,
-                amount: paidAmount,
-                paymentId: paymentId || paymentLinkId || 'Online Payment',
-                notes: 'Subscription activated in real-time via Razorpay checkout.'
+                amount: isTrial ? 0 : paidAmount,
+                paymentId: paymentId || paymentLinkId || (isTrial ? 'Trial Mandate Registration' : 'Online Payment'),
+                isTrial,
+                notes: isTrial ? '30-Day Free Trial Activated. Auto-mandate registered.' : 'Subscription activated in real-time via Razorpay checkout.'
               },
               htmlContent: buildSubscriptionActivatedHtml({
                 clinicName: clinic?.name || 'Doctor',
                 planName: `${detectedTier.toUpperCase()} Plan`,
                 cycle: detectedCycle,
-                isTrial: false,
-                paymentId: paymentId || paymentLinkId || 'Online Checkout',
-                amount: paidAmount
+                isTrial,
+                trialEndsAt: isTrial ? new Date(trialEndsAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' }) : undefined,
+                paymentId: paymentId || paymentLinkId || (isTrial ? 'Trial Mandate Registration' : 'Online Checkout'),
+                amount: isTrial ? 0 : paidAmount
               })
             });
           } catch (emailErr) {
@@ -203,43 +238,67 @@ export function SubscriptionSuccessPage() {
           }
         }
 
-        // 5. Send instant WhatsApp confirmation to clinic admin with multi-tier phone fallback
+        // 6. Send instant WhatsApp confirmation to clinic admin with multi-tier phone fallback
         const targetPhone = (
           (clinic as any)?.phone || 
           (clinic as any)?.contact_phone || 
           user?.phone || 
+          (user as any)?.phone_number ||
           (typeof window !== 'undefined' ? (sessionStorage.getItem('viitsa_reg_phone') || localStorage.getItem('viitsa_clinic_phone') || '') : '')
         ).replace(/\D/g, '').slice(-10);
 
         if (targetPhone && targetPhone.length === 10) {
           try {
-            const planPricing: Record<string, Record<string, number>> = {
-              solo: { monthly: 2999, annual: 29990 },
-              clinic: { monthly: 5999, annual: 59990 },
-              multispecialty: { monthly: 11999, annual: 119990 },
-            };
-            const paidAmount = planPricing[detectedTier]?.[detectedCycle] || (detectedTier === 'multispecialty' ? 11999 : detectedTier === 'clinic' ? 5999 : 2999);
-            const durationDays = detectedCycle === 'annual' ? 365 : 30;
+            if (isTrial) {
+              const waRes = await sendWhatsAppClinicTrialActivated({
+                to: targetPhone,
+                clinicId: targetClinicId,
+                adminName: user?.name || (clinic as any)?.owner_name || 'Doctor',
+                clinicName: clinic?.name || 'Clinic',
+                planTier: `${detectedTier.toUpperCase()} Plan`,
+                trialValidUntil: new Date(trialEndsAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }),
+                supportPhone: '+91 73961 11081',
+              });
+              if (waRes?.success) {
+                await updateDoc(doc(db, 'clinics', targetClinicId), {
+                  last_trial_wa_sent_at: new Date().toISOString()
+                }).catch(() => {});
+              }
+            } else {
+              const planPricing: Record<string, Record<string, number>> = {
+                solo: { monthly: 2999, annual: 29990 },
+                clinic: { monthly: 5999, annual: 59990 },
+                multispecialty: { monthly: 11999, annual: 119990 },
+              };
+              const paidAmount = planPricing[detectedTier]?.[detectedCycle] || (detectedTier === 'multispecialty' ? 11999 : detectedTier === 'clinic' ? 5999 : 2999);
+              const durationDays = detectedCycle === 'annual' ? 365 : 30;
 
-            await sendWhatsAppClinicSubActivated({
-              to: targetPhone,
-              clinicId: targetClinicId,
-              adminName: user?.name || (clinic as any)?.owner_name || 'Doctor',
-              clinicName: clinic?.name || 'Clinic',
-              planName: `${detectedTier.toUpperCase()} Plan`,
-              billingCycle: detectedCycle.toUpperCase(),
-              amountPaid: paidAmount,
-              nextRenewalDate: new Date(Date.now() + durationDays * 86400000).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }),
-              supportPhone: '+91 73961 11081',
-            });
+              const waRes = await sendWhatsAppClinicSubActivated({
+                to: targetPhone,
+                clinicId: targetClinicId,
+                adminName: user?.name || (clinic as any)?.owner_name || 'Doctor',
+                clinicName: clinic?.name || 'Clinic',
+                planName: `${detectedTier.toUpperCase()} Plan`,
+                billingCycle: detectedCycle.toUpperCase(),
+                amountPaid: paidAmount,
+                nextRenewalDate: new Date(Date.now() + durationDays * 86400000).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }),
+                supportPhone: '+91 73961 11081',
+              });
+              if (waRes?.success) {
+                await updateDoc(doc(db, 'clinics', targetClinicId), {
+                  last_sub_wa_sent_at: new Date().toISOString()
+                }).catch(() => {});
+              }
+            }
           } catch (waErr) {
             console.warn('Could not send WhatsApp subscription activation notification:', waErr);
           }
         }
 
-        // Clean up stored pending upgrade
+        // Clean up stored pending upgrade and trial session
         try {
           localStorage.removeItem('viitsa_pending_upgrade');
+          sessionStorage.removeItem('viitsa_is_trial');
         } catch (e) {}
 
       } catch (err: any) {
@@ -346,14 +405,18 @@ export function SubscriptionSuccessPage() {
         </div>
         
         <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-800 mb-3">
-          ✓ Real-time Active
+          ✓ {resolvedIsTrial ? '30-Day Free Trial Active' : 'Real-time Active'}
         </span>
 
         <h1 className="text-3xl font-bold text-slate-900 mb-2">
-          Payment Successful & Plan Activated!
+          {resolvedIsTrial ? '30-Day Free Trial Activated!' : 'Payment Successful & Plan Activated!'}
         </h1>
         <p className="text-slate-600 text-sm mb-8 leading-relaxed max-w-lg mx-auto">
-          Thank you for your payment. Your <strong className="text-emerald-700 capitalize">{resolvedTier} Plan</strong> is now active in real time across your clinic.
+          {resolvedIsTrial ? (
+            <>Welcome to Viitsa Healthcare! Your 30-day free trial for the <strong className="text-emerald-700 capitalize">{resolvedTier} Plan</strong> is now active. You have full access to all doctor seats and features with ₹0 billed today.</>
+          ) : (
+            <>Thank you for your payment. Your <strong className="text-emerald-700 capitalize">{resolvedTier} Plan</strong> is now active in real time across your clinic.</>
+          )}
         </p>
 
         {activationError && (

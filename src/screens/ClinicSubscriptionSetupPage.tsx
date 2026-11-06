@@ -94,7 +94,12 @@ export function ClinicSubscriptionSetupPage() {
     setIsProcessing(true);
 
     const activeTier = chosenTier || selectedTier;
-    const isTrial = Boolean(paymentData?.is_trial);
+    // Resilient trial detection: if payment response confirms trial, OR user was eligible for trial, OR monthly plan chosen while not already active
+    const isTrial = Boolean(
+      paymentData?.is_trial || 
+      isTrialEligible || 
+      (selectedCycle === 'monthly' && clinic?.subscription_status !== 'active' && clinic?.trial_completed !== true)
+    );
     const trialEndsAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
 
     try {
@@ -139,9 +144,7 @@ export function ClinicSubscriptionSetupPage() {
         clinicUpdates.trial_status = 'active_trial';
         clinicUpdates.trial_started_at = new Date().toISOString();
         clinicUpdates.trial_ends_at = trialEndsAt;
-        clinicUpdates.last_trial_wa_sent_at = new Date().toISOString();
-      } else {
-        clinicUpdates.last_sub_wa_sent_at = new Date().toISOString();
+        // NOTE: Do not set last_trial_wa_sent_at here so backend trigger can act as reliable fallback if frontend is interrupted
       }
 
       await updateDoc(doc(db, 'users', user.user_id), userUpdates);
@@ -212,15 +215,19 @@ export function ClinicSubscriptionSetupPage() {
 
       // Send instant WhatsApp notification to clinic admin
       const targetPhone = (
+        paymentData?.contact ||
+        paymentData?.customer_contact ||
         (clinic as any)?.phone || 
+        (clinic as any)?.contact_phone ||
         user?.phone || 
+        (user as any)?.phone_number ||
         (typeof window !== 'undefined' ? (sessionStorage.getItem('viitsa_reg_phone') || localStorage.getItem('viitsa_clinic_phone') || '') : '')
       ).replace(/\D/g, '').slice(-10);
 
       if (targetPhone && targetPhone.length === 10) {
         try {
           if (isTrial) {
-            await sendWhatsAppClinicTrialActivated({
+            const waRes = await sendWhatsAppClinicTrialActivated({
               to: targetPhone,
               clinicId: clinic.clinic_id,
               adminName: user.name || (clinic as any)?.owner_name || 'Doctor',
@@ -229,8 +236,13 @@ export function ClinicSubscriptionSetupPage() {
               trialValidUntil: new Date(trialEndsAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }),
               supportPhone: '+91 73961 11081',
             });
+            if (waRes?.success) {
+              await updateDoc(doc(db, 'clinics', clinic.clinic_id), {
+                last_trial_wa_sent_at: new Date().toISOString()
+              }).catch(() => {});
+            }
           } else {
-            await sendWhatsAppClinicSubActivated({
+            const waRes = await sendWhatsAppClinicSubActivated({
               to: targetPhone,
               clinicId: clinic.clinic_id,
               adminName: user.name || (clinic as any)?.owner_name || 'Doctor',
@@ -241,6 +253,11 @@ export function ClinicSubscriptionSetupPage() {
               nextRenewalDate: new Date(Date.now() + durationDays * 86400000).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }),
               supportPhone: '+91 73961 11081',
             });
+            if (waRes?.success) {
+              await updateDoc(doc(db, 'clinics', clinic.clinic_id), {
+                last_sub_wa_sent_at: new Date().toISOString()
+              }).catch(() => {});
+            }
           }
         } catch (waErr) {
           console.warn('Could not dispatch WhatsApp subscription confirmation:', waErr);
