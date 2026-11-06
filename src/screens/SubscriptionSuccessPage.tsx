@@ -203,9 +203,15 @@ export function SubscriptionSuccessPage() {
           }
         }
 
-        // 5. Send instant WhatsApp confirmation to clinic admin
-        const targetPhone = (clinic as any)?.phone || (clinic as any)?.contact_phone || user?.phone;
-        if (targetPhone) {
+        // 5. Send instant WhatsApp confirmation to clinic admin with multi-tier phone fallback
+        const targetPhone = (
+          (clinic as any)?.phone || 
+          (clinic as any)?.contact_phone || 
+          user?.phone || 
+          (typeof window !== 'undefined' ? (sessionStorage.getItem('viitsa_reg_phone') || localStorage.getItem('viitsa_clinic_phone') || '') : '')
+        ).replace(/\D/g, '').slice(-10);
+
+        if (targetPhone && targetPhone.length === 10) {
           try {
             const planPricing: Record<string, Record<string, number>> = {
               solo: { monthly: 2999, annual: 29990 },

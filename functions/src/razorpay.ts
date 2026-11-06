@@ -575,7 +575,16 @@ export const razorpayWebhook = onRequest(async (req, res) => {
         try {
           const clinicDoc = await getDb().collection("clinics").doc(clinicId).get();
           const clinicData = clinicDoc.data() || {};
-          const cPhone = clinicData.phone || clinicData.contact_phone || sub.customer_details?.contact;
+          let cPhone = clinicData.phone || clinicData.contact_phone || sub.customer_details?.contact;
+          if (!cPhone && clinicUsers.docs.length > 0) {
+            cPhone = clinicUsers.docs[0].data()?.phone;
+          }
+          if (!cPhone && (clinicData.owner_user_id || clinicData.admin_user_id)) {
+            const uSnap = await getDb().collection("users").doc(clinicData.owner_user_id || clinicData.admin_user_id).get();
+            if (uSnap.exists) {
+              cPhone = uSnap.data()?.phone;
+            }
+          }
           if (cPhone) {
             if (isTrial) {
               await sendClinicTrialActivated({
@@ -678,7 +687,16 @@ export const razorpayWebhook = onRequest(async (req, res) => {
           try {
             const clinicDoc = await getDb().collection("clinics").doc(clinicId).get();
             const clinicData = clinicDoc.data() || {};
-            const cPhone = clinicData.phone || clinicData.contact_phone || sub.customer_details?.contact || payment?.contact;
+            let cPhone = clinicData.phone || clinicData.contact_phone || sub.customer_details?.contact || payment?.contact;
+            if (!cPhone && clinicUsers.docs.length > 0) {
+              cPhone = clinicUsers.docs[0].data()?.phone;
+            }
+            if (!cPhone && (clinicData.owner_user_id || clinicData.admin_user_id)) {
+              const uSnap = await getDb().collection("users").doc(clinicData.owner_user_id || clinicData.admin_user_id).get();
+              if (uSnap.exists) {
+                cPhone = uSnap.data()?.phone;
+              }
+            }
             if (cPhone) {
               await sendClinicTrialActivated({
                 to: cPhone,
@@ -807,7 +825,16 @@ export const razorpayWebhook = onRequest(async (req, res) => {
           try {
             const clinicDoc = await getDb().collection("clinics").doc(clinicId).get();
             const clinicData = clinicDoc.data() || {};
-            const cPhone = clinicData.phone || clinicData.contact_phone || sub.customer_details?.contact || payment?.contact;
+            let cPhone = clinicData.phone || clinicData.contact_phone || sub.customer_details?.contact || payment?.contact;
+            if (!cPhone && clinicUsers.docs.length > 0) {
+              cPhone = clinicUsers.docs[0].data()?.phone;
+            }
+            if (!cPhone && (clinicData.owner_user_id || clinicData.admin_user_id)) {
+              const uSnap = await getDb().collection("users").doc(clinicData.owner_user_id || clinicData.admin_user_id).get();
+              if (uSnap.exists) {
+                cPhone = uSnap.data()?.phone;
+              }
+            }
             if (cPhone) {
               const planPricing: Record<string, Record<string, number>> = {
                 solo: { monthly: 2999, annual: 29990 },
@@ -1052,6 +1079,45 @@ export const razorpayWebhook = onRequest(async (req, res) => {
             console.warn("Could not send webhook confirmation email:", e);
           }
         }
+
+        // Dispatch WhatsApp notification to clinic
+        try {
+          const clinicDoc = await getDb().collection("clinics").doc(clinicId).get();
+          const clinicData = clinicDoc.data() || {};
+          let cPhone = clinicData.phone || clinicData.contact_phone || plink?.customer?.contact || payment?.contact;
+          if (!cPhone && clinicUsers.docs.length > 0) {
+            cPhone = clinicUsers.docs[0].data()?.phone;
+          }
+          if (!cPhone && (clinicData.owner_user_id || clinicData.admin_user_id)) {
+            const uSnap = await getDb().collection("users").doc(clinicData.owner_user_id || clinicData.admin_user_id).get();
+            if (uSnap.exists) {
+              cPhone = uSnap.data()?.phone;
+            }
+          }
+          if (cPhone) {
+            const planPricing: Record<string, Record<string, number>> = {
+              solo: { monthly: 2999, annual: 29990 },
+              clinic: { monthly: 5999, annual: 59990 },
+              multispecialty: { monthly: 11999, annual: 119990 },
+            };
+            const paidAmt = payment?.amount ? (payment.amount / 100) : (plink?.amount ? plink.amount / 100 : (planPricing[tier]?.[cycle] || 5999));
+            const durationDays = cycle === 'annual' ? 365 : 30;
+
+            await sendClinicSubActivated({
+              to: cPhone,
+              adminName: clinicData.owner_name || plink?.customer?.name || 'Doctor',
+              clinicName: clinicData.name || 'Clinic',
+              planName: `${tier.toUpperCase()} Plan`,
+              billingCycle: cycle.toUpperCase(),
+              amountPaid: paidAmt,
+              nextRenewalDate: new Date(Date.now() + durationDays * 86400000).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }),
+              supportPhone: '+91 73961 11081',
+              clinicId,
+            });
+          }
+        } catch (waErr) {
+          console.warn("Could not dispatch WhatsApp payment link confirmation:", waErr);
+        }
       }
     } else if (event.event === "invoice.paid") {
       const invoice = event.payload.invoice.entity;
@@ -1163,7 +1229,24 @@ export const razorpayWebhook = onRequest(async (req, res) => {
           });
 
           // Dispatch WhatsApp template viitsa_clinic_sub_invoice
-          const contact = invoice.customer_details?.contact;
+          let contact = invoice.customer_details?.contact;
+          if (!contact && clinicId) {
+            try {
+              const cDoc = await getDb().collection("clinics").doc(clinicId).get();
+              if (cDoc.exists) {
+                const cData = cDoc.data() || {};
+                contact = cData.phone || cData.contact_phone;
+                if (!contact && (cData.owner_user_id || cData.admin_user_id)) {
+                  const uSnap = await getDb().collection("users").doc(cData.owner_user_id || cData.admin_user_id).get();
+                  if (uSnap.exists) {
+                    contact = uSnap.data()?.phone;
+                  }
+                }
+              }
+            } catch (cErr) {
+              console.warn("Error fetching clinic phone for invoice WhatsApp:", cErr);
+            }
+          }
           if (contact) {
             try {
               await sendClinicSubInvoice({
