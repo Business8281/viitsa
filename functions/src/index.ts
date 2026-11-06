@@ -42,6 +42,7 @@ import {
   sendPatientPaymentReminder,
   sendPatientFollowupDue,
   sendPatientLabReportReady,
+  sendPatientMedicineReminder,
   sendClinicTrialActivated,
   sendClinicSubActivated,
   sendClinicPlanUpgraded,
@@ -151,6 +152,8 @@ export const sendWhatsAppNotification = onCall(
           return await sendPatientFollowupDue(data);
         case 'patient_lab_report':
           return await sendPatientLabReportReady(data);
+        case 'patient_medicine_reminder':
+          return await sendPatientMedicineReminder(data);
         case 'clinic_trial_activated':
           return await sendClinicTrialActivated(data);
         case 'clinic_sub_activated':

@@ -2,7 +2,7 @@ import React, { useRef, useState } from 'react';
 import { 
   Building2, Phone, Mail, User, ClipboardList, FileText, FlaskConical, 
   ShieldCheck, Users, TrendingUp, Printer, Download, Share2, 
-  X, Check, AlertCircle, Clock, Loader2, Send
+  X, Check, AlertCircle, Clock, Loader2, Send, Pill
 } from 'lucide-react';
 import { formatDate, formatTime, calculateAge } from '../lib/format';
 import { 
@@ -15,6 +15,7 @@ import {
 } from '../lib/pdf';
 import { sendEmail } from '../lib/emailService';
 import { useToast } from '../lib/toast';
+import { sendWhatsAppPatientMedicineReminder } from '../lib/whatsappClientService';
 
 export interface PrescriptionMedicine {
   id?: string;
@@ -113,6 +114,7 @@ export function PrescriptionView({
   const [emailModalOpen, setEmailModalOpen] = useState(false);
   const [targetEmail, setTargetEmail] = useState('');
   const [copied, setCopied] = useState(false);
+  const [sendingReminder, setSendingReminder] = useState(false);
 
   // Helper to extract clean medicines from consultation record if provided
   const parsedMedicines: PrescriptionMedicine[] = React.useMemo(() => {
@@ -372,6 +374,52 @@ export function PrescriptionView({
     }
   };
 
+  // SEND OFFICIAL WHATSAPP MEDICINE DOSAGE REMINDER
+  const handleSendMedicineReminderWhatsApp = async () => {
+    const rawPhone = patientInfo.mobile || (patient as any)?.phone || '';
+    const cleanPhone = rawPhone.replace(/\D/g, '').slice(-10);
+    if (!cleanPhone || cleanPhone.length !== 10) {
+      toast('Valid 10-digit patient phone number not found to dispatch WhatsApp reminder.', 'error');
+      return;
+    }
+
+    if (!parsedMedicines || parsedMedicines.length === 0) {
+      toast('No prescribed medicines found to send reminder.', 'error');
+      return;
+    }
+
+    try {
+      setSendingReminder(true);
+      toast('Sending official WhatsApp medicine dosage reminder...', 'info');
+      const primaryMed = parsedMedicines[0];
+      const allMedNames = parsedMedicines.map(m => m.name).slice(0, 3).join(', ');
+      const timing = `${primaryMed.dose || '1 dose'} • ${primaryMed.timesPerDay || primaryMed.intakeTime || 'As advised'}`;
+      const instructions = primaryMed.instructions || primaryMed.foodInstruction || 'Complete full prescribed course as advised by doctor.';
+
+      const res = await sendWhatsAppPatientMedicineReminder({
+        to: cleanPhone,
+        clinicId: clinic?.clinic_id || '',
+        patientName: patientInfo.name || 'Patient',
+        clinicName: clinicInfo.name || 'Clinic',
+        medicineName: allMedNames || primaryMed.name,
+        dosageTiming: timing,
+        instructions,
+        clinicPhone: clinicInfo.phone || '+91 73961 11081',
+      });
+
+      if (res.success) {
+        toast(`WhatsApp medicine reminder sent successfully to ${patientInfo.name}!`, 'success');
+      } else {
+        toast(res.error || 'Failed to dispatch WhatsApp medicine reminder.', 'error');
+      }
+    } catch (err: any) {
+      console.error('Medicine reminder error:', err);
+      toast(err?.message || 'Failed to dispatch WhatsApp medicine reminder.', 'error');
+    } finally {
+      setSendingReminder(false);
+    }
+  };
+
   // OPEN EMAIL MODAL
   const handleOpenEmailDialog = () => {
     setTargetEmail(patientInfo.email || '');
@@ -490,6 +538,16 @@ export function PrescriptionView({
         >
           {sharingWa ? <Loader2 size={14} className="animate-spin" /> : <Share2 size={14} />} 
           {sharingWa ? 'Preparing...' : 'WhatsApp'}
+        </button>
+
+        <button
+          onClick={handleSendMedicineReminderWhatsApp}
+          disabled={sendingReminder}
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-indigo-700 hover:bg-indigo-600 disabled:opacity-50 text-white text-xs font-semibold transition active:scale-95"
+          title="Send official Meta WhatsApp medicine dosage reminder to patient"
+        >
+          {sendingReminder ? <Loader2 size={14} className="animate-spin" /> : <Pill size={14} />} 
+          {sendingReminder ? 'Sending...' : 'Dosage Reminder'}
         </button>
 
         <button

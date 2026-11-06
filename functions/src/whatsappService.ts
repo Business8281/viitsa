@@ -947,6 +947,45 @@ export async function sendPatientLabReportReady(data: PatientLabReportData): Pro
   });
 }
 
+export interface PatientMedicineReminderData {
+  to: string;
+  clinicId?: string;
+  patientName: string;
+  clinicName: string;
+  medicineName: string;
+  dosageTiming: string;
+  instructions?: string;
+  clinicPhone: string;
+}
+
+/**
+ * Template: viitsa_patient_medicine_reminder (6 params)
+ * {{1}}=patient, {{2}}=clinic, {{3}}=medicine, {{4}}=dosageTiming, {{5}}=instructions, {{6}}=phone
+ */
+export async function sendPatientMedicineReminder(data: PatientMedicineReminderData): Promise<WhatsAppSendResult> {
+  const templateName = process.env.WA_TEMPLATE_MEDICINE_REMINDER || 'viitsa_patient_medicine_reminder';
+  const patient = formatProperName(data.patientName);
+
+  return sendWhatsAppTemplate({
+    to: data.to,
+    templateName,
+    clinicId: data.clinicId,
+    components: [
+      {
+        type: 'body',
+        parameters: [
+          { type: 'text', text: patient },
+          { type: 'text', text: data.clinicName || 'Clinic' },
+          { type: 'text', text: data.medicineName || 'Prescribed Medicine' },
+          { type: 'text', text: data.dosageTiming || 'As prescribed' },
+          { type: 'text', text: data.instructions || 'Complete full course as directed' },
+          { type: 'text', text: data.clinicPhone || '+91 73961 11081' },
+        ],
+      },
+    ],
+  });
+}
+
 // ============================================================================
 // 6. CLINIC B2B SUBSCRIPTIONS & ADMIN GOVERNANCE
 // ============================================================================

@@ -172,6 +172,25 @@ export async function sendWhatsAppLabReportViaAPI(params: {
   });
 }
 
+/**
+ * Send official Meta WhatsApp patient medicine dosage reminder
+ */
+export async function sendWhatsAppPatientMedicineReminder(params: {
+  to: string;
+  clinicId?: string;
+  patientName: string;
+  clinicName: string;
+  medicineName: string;
+  dosageTiming: string;
+  instructions?: string;
+  clinicPhone: string;
+}): Promise<WhatsAppResponse> {
+  return sendWhatsAppNotificationViaAPI({
+    action: 'patient_medicine_reminder',
+    ...params,
+  });
+}
+
 // ── Clinic Subscriptions & B2B Admin Lifecycle Helpers ──────────────────────
 
 export async function sendWhatsAppClinicTrialActivated(params: {
