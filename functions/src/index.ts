@@ -776,7 +776,7 @@ export const onAppointmentCreated = onDocumentCreated(
     const clinicPhone = clinic.phone || '+91 73961 11081';
 
     // Determine template type
-    let confirmType: 'online' | 'followup' | 'report' | 'walkin' = 'walkin';
+    let confirmType: 'online' | 'followup' | 'report' | 'walkin' | 'new_visit' = 'new_visit';
     const vType = (data.visit_type || data.type || '').toLowerCase();
     const reasonLower = (data.reason || '').toLowerCase();
 
@@ -786,6 +786,10 @@ export const onAppointmentCreated = onDocumentCreated(
       confirmType = 'report';
     } else if (data.booked_via === 'patient_app' || data.online_booking === true || vType.includes('online')) {
       confirmType = 'online';
+    } else if (vType.includes('walkin') || vType.includes('walk-in') || data.is_walkin === true) {
+      confirmType = 'walkin';
+    } else {
+      confirmType = 'new_visit';
     }
 
     const tokenOrQueue = data.display_token || (data.token_number ? `Token ${data.token_number}` : 'Slot 1');

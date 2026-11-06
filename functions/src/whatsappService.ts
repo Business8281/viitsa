@@ -238,11 +238,30 @@ export async function sendWhatsAppTemplate(options: {
       for (const alias of aliases) {
         if (alias === options.templateName) continue;
         console.warn(`[WhatsAppService] Template '${options.templateName}' not found on Meta. Retrying with alias '${alias}'...`);
+        
+        let aliasComponents = payload.template.components;
+        // Adapt parameters if retrying viitsa_appt_confirm_new_visit (7 params) from viitsa_appt_confirm_online (8 params)
+        if (alias === 'viitsa_appt_confirm_new_visit' && Array.isArray(aliasComponents)) {
+          aliasComponents = aliasComponents.map((comp: any) => {
+            if (comp.type === 'body' && Array.isArray(comp.parameters) && comp.parameters.length === 8) {
+              return {
+                ...comp,
+                parameters: [
+                  ...comp.parameters.slice(0, 6),
+                  comp.parameters[7], // clinic phone
+                ],
+              };
+            }
+            return comp;
+          });
+        }
+
         const fallbackPayload = {
           ...payload,
           template: {
             ...payload.template,
             name: alias,
+            components: aliasComponents,
           },
         };
         const fallbackRes = await fetch(endpoint, {
@@ -504,13 +523,13 @@ export async function sendOtpWhatsApp(to: string, otpCode: string): Promise<What
 }
 
 // ============================================================================
-// 2. APPOINTMENT CONFIRMATIONS (Online, Follow-up, Report Review, Walk-in)
+// 2. APPOINTMENT CONFIRMATIONS (Online, Follow-up, Report Review, Walk-in, New Visit)
 // ============================================================================
 
 export interface AppointmentConfirmData {
   to: string;
   clinicId?: string;
-  type: 'online' | 'followup' | 'report' | 'walkin';
+  type: 'online' | 'followup' | 'report' | 'walkin' | 'new_visit';
   patientName: string;
   doctorName: string;
   clinicName: string;
@@ -531,6 +550,21 @@ export async function sendAppointmentConfirmation(data: AppointmentConfirmData):
   let bodyParams: { type: 'text'; text: string }[] = [];
 
   switch (data.type) {
+    case 'new_visit':
+      // Template: viitsa_appt_confirm_new_visit (7 params)
+      // {{1}}=patient, {{2}}=doctor, {{3}}=clinic, {{4}}=date, {{5}}=time, {{6}}=token, {{7}}=phone
+      templateName = process.env.WA_TEMPLATE_APPT_NEW_VISIT || 'viitsa_appt_confirm_new_visit';
+      bodyParams = [
+        { type: 'text', text: patient },
+        { type: 'text', text: docName },
+        { type: 'text', text: clinic },
+        { type: 'text', text: data.date || 'Scheduled Date' },
+        { type: 'text', text: data.timeOrSlot || 'Scheduled Time' },
+        { type: 'text', text: data.tokenOrQueue || 'Slot 1' },
+        { type: 'text', text: phone },
+      ];
+      break;
+
     case 'online':
       // Template: viitsa_appt_confirm_online (8 params)
       // {{1}}=patient, {{2}}=doctor, {{3}}=clinic, {{4}}=date, {{5}}=slot, {{6}}=token, {{7}}=visitType, {{8}}=phone

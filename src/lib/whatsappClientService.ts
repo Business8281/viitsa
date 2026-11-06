@@ -79,7 +79,7 @@ export async function sendWhatsAppAppointmentReminderViaAPI(params: {
 export async function sendWhatsAppAppointmentConfirmationViaAPI(params: {
   to: string;
   clinicId: string;
-  type: 'online' | 'followup' | 'report' | 'walkin';
+  type: 'online' | 'followup' | 'report' | 'walkin' | 'new_visit';
   patientName: string;
   doctorName: string;
   clinicName: string;
