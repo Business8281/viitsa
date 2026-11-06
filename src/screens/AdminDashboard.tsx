@@ -18,6 +18,13 @@ import { Avatar, SectionHeader, EmptyState, Loading, StatusBadge, RoleBadge, Dat
 import { Modal } from '../components/Modal';
 import { sendEmail } from '../lib/emailService';
 import { InvoiceView } from '../components/InvoiceView';
+import {
+  sendWhatsAppClinicVerificationApproved,
+  sendWhatsAppClinicVerificationRejected,
+  sendWhatsAppClinicDocsNeeded,
+  sendWhatsAppDoctorApprovedViaAPI,
+  sendWhatsAppDoctorVerificationRejected,
+} from '../lib/whatsappClientService';
 import AdminAISettings from './AdminAISettings';
 import AdminSubscriptionPlans from './AdminSubscriptionPlans';
 import AdminLiveSubscriptions from './AdminLiveSubscriptions';
@@ -1347,6 +1354,31 @@ export function AdminDashboard() {
       } catch (e) {
         console.error('Failed to send verification email', e);
       }
+
+      // Dual-trigger official Meta WhatsApp notification
+      if (c.phone) {
+        try {
+          if (approved) {
+            await sendWhatsAppClinicVerificationApproved({
+              to: c.phone,
+              clinicId,
+              adminName: c.owner_name || 'Doctor',
+              clinicName: c.name || 'Clinic',
+              approvedDate: new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }),
+            });
+          } else {
+            await sendWhatsAppClinicVerificationRejected({
+              to: c.phone,
+              clinicId,
+              adminName: c.owner_name || 'Doctor',
+              clinicName: c.name || 'Clinic',
+              reason: reason || 'Incomplete registration documents',
+            });
+          }
+        } catch (waErr) {
+          console.warn('Could not send WhatsApp verification notice:', waErr);
+        }
+      }
       
       alert(approved ? 'Clinic approved successfully!' : 'Clinic rejected.');
     } catch (err: any) {
@@ -1364,6 +1396,23 @@ export function AdminDashboard() {
         verification_status: 'docs_needed',
         missing_documents: missing,
       }, { merge: true });
+
+      const c = clinics.find(x => x.id === clinicId);
+      if (c?.phone) {
+        try {
+          await sendWhatsAppClinicDocsNeeded({
+            to: c.phone,
+            clinicId,
+            adminName: c.owner_name || 'Doctor',
+            clinicName: c.name || 'Clinic',
+            missingDocs: missing,
+            deadline: new Date(Date.now() + 7 * 86400000).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }),
+          });
+        } catch (waErr) {
+          console.warn('Could not send WhatsApp docs needed notice:', waErr);
+        }
+      }
+
       alert('Requested additional documents from clinic.');
     } catch (err) {
       console.error(err);
@@ -1379,6 +1428,37 @@ export function AdminDashboard() {
         verification_status: approved ? 'approved' : 'rejected',
         deactivation_reason: approved ? deleteField() : (reason || 'Credentials review required'),
       }, { merge: true });
+
+      const u = users.find(x => x.id === doctorId);
+      if (u?.phone) {
+        try {
+          const clinicObj = clinics.find(c => c.id === u.clinic_id);
+          if (approved) {
+            await sendWhatsAppDoctorApprovedViaAPI({
+              to: u.phone,
+              doctorName: u.name || 'Doctor',
+              clinicName: clinicObj?.name || 'Clinic',
+              email: u.email || '',
+              councilRegNo: (u as any).registration_number || 'Verified',
+              supportPhone: '+91 73961 11081',
+              clinicId: u.clinic_id,
+            });
+          } else {
+            await sendWhatsAppDoctorVerificationRejected({
+              to: u.phone,
+              adminName: clinicObj?.owner_name || 'Clinic Administrator',
+              doctorName: u.name || 'Doctor',
+              clinicName: clinicObj?.name || 'Clinic',
+              reason: reason || 'State Medical Council verification incomplete',
+              supportPhone: '+91 73961 11081',
+              clinicId: u.clinic_id,
+            });
+          }
+        } catch (waErr) {
+          console.warn('Could not send WhatsApp doctor verification notice:', waErr);
+        }
+      }
+
       alert(approved ? 'Doctor approved and activated!' : 'Doctor verification rejected.');
     } catch (err) {
       console.error(err);

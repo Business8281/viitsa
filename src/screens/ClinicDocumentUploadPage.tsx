@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { FileUp, Trash2, CheckCircle2, Loader2, AlertCircle, LogOut } from 'lucide-react';
 import { sendEmail } from '../lib/emailService';
+import { sendWhatsAppClinicPendingApproval } from '../lib/whatsappClientService';
 import { doc, setDoc, updateDoc } from 'firebase/firestore';
 import { ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
 import { db, storage } from '../lib/firebase';
@@ -91,7 +92,24 @@ export function ClinicDocumentUploadPage() {
         console.error('Failed to send pending verification email', err);
       }
 
-      // 5. Refresh session
+      // 5. Send instant WhatsApp confirmation to clinic admin
+      const targetPhone = clinic?.phone || user.phone;
+      if (targetPhone) {
+        try {
+          await sendWhatsAppClinicPendingApproval({
+            to: targetPhone,
+            clinicId,
+            adminName: user.name || (clinic as any)?.owner_name || 'Doctor',
+            clinicName: user.clinic_name || clinic?.name || 'Clinic',
+            submissionDate: new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }),
+            supportPhone: '+91 73961 11081',
+          });
+        } catch (waErr) {
+          console.warn('Failed to dispatch pending approval WhatsApp notice:', waErr);
+        }
+      }
+
+      // 6. Refresh session
       await refreshSession();
 
       navigate('/clinic/pending-approval', { replace: true });
