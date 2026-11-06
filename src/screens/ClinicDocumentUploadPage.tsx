@@ -93,8 +93,13 @@ export function ClinicDocumentUploadPage() {
       }
 
       // 5. Send instant WhatsApp confirmation to clinic admin
-      const targetPhone = clinic?.phone || user.phone;
-      if (targetPhone) {
+      const targetPhone = (
+        clinic?.phone || 
+        user.phone || 
+        (typeof window !== 'undefined' ? (sessionStorage.getItem('viitsa_reg_phone') || localStorage.getItem('viitsa_clinic_phone') || '') : '')
+      ).replace(/\D/g, '').slice(-10);
+
+      if (targetPhone && targetPhone.length === 10) {
         try {
           await sendWhatsAppClinicPendingApproval({
             to: targetPhone,

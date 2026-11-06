@@ -1356,11 +1356,12 @@ export function AdminDashboard() {
       }
 
       // Dual-trigger official Meta WhatsApp notification
-      if (c.phone) {
+      const clinicPhone = c.phone || users.find(u => u.id === c.owner_user_id || u.clinic_id === clinicId)?.phone;
+      if (clinicPhone) {
         try {
           if (approved) {
             await sendWhatsAppClinicVerificationApproved({
-              to: c.phone,
+              to: clinicPhone,
               clinicId,
               adminName: c.owner_name || 'Doctor',
               clinicName: c.name || 'Clinic',
@@ -1368,7 +1369,7 @@ export function AdminDashboard() {
             });
           } else {
             await sendWhatsAppClinicVerificationRejected({
-              to: c.phone,
+              to: clinicPhone,
               clinicId,
               adminName: c.owner_name || 'Doctor',
               clinicName: c.name || 'Clinic',
@@ -1398,10 +1399,11 @@ export function AdminDashboard() {
       }, { merge: true });
 
       const c = clinics.find(x => x.id === clinicId);
-      if (c?.phone) {
+      const clinicPhone = c?.phone || users.find(u => u.id === c?.owner_user_id || u.clinic_id === clinicId)?.phone;
+      if (clinicPhone) {
         try {
           await sendWhatsAppClinicDocsNeeded({
-            to: c.phone,
+            to: clinicPhone,
             clinicId,
             adminName: c.owner_name || 'Doctor',
             clinicName: c.name || 'Clinic',
