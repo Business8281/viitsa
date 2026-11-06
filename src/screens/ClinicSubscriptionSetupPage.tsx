@@ -211,8 +211,13 @@ export function ClinicSubscriptionSetupPage() {
       }
 
       // Send instant WhatsApp notification to clinic admin
-      const targetPhone = (clinic as any)?.phone || user?.phone || '';
-      if (targetPhone) {
+      const targetPhone = (
+        (clinic as any)?.phone || 
+        user?.phone || 
+        (typeof window !== 'undefined' ? (sessionStorage.getItem('viitsa_reg_phone') || localStorage.getItem('viitsa_clinic_phone') || '') : '')
+      ).replace(/\D/g, '').slice(-10);
+
+      if (targetPhone && targetPhone.length === 10) {
         try {
           if (isTrial) {
             await sendWhatsAppClinicTrialActivated({

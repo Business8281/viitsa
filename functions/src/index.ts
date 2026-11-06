@@ -958,7 +958,18 @@ export const onClinicVerificationStatusChanged = onDocumentUpdated(
     const beforeStatus = beforeData.verification_status || beforeData.status;
     const afterStatus = afterData.verification_status || afterData.status;
 
-    const clinicPhone = afterData.phone || afterData.contact_phone;
+    let clinicPhone = afterData.phone || afterData.contact_phone;
+    if (!clinicPhone && (afterData.owner_user_id || afterData.admin_user_id)) {
+      try {
+        if (!admin.apps.length) admin.initializeApp();
+        const uSnap = await admin.firestore().collection("users").doc(afterData.owner_user_id || afterData.admin_user_id).get();
+        if (uSnap.exists) {
+          clinicPhone = uSnap.data()?.phone;
+        }
+      } catch (uErr) {
+        console.warn('Fallback read user phone warning in onClinicVerificationStatusChanged:', uErr);
+      }
+    }
     if (!clinicPhone) return;
 
     const clinicName = afterData.name || 'Clinic Partner';
@@ -1036,7 +1047,18 @@ export const onClinicSubscriptionStatusChanged = onDocumentUpdated(
 
     if (beforeStatus === afterStatus) return;
 
-    const clinicPhone = afterData.phone || afterData.contact_phone;
+    let clinicPhone = afterData.phone || afterData.contact_phone;
+    if (!clinicPhone && (afterData.owner_user_id || afterData.admin_user_id)) {
+      try {
+        if (!admin.apps.length) admin.initializeApp();
+        const uSnap = await admin.firestore().collection("users").doc(afterData.owner_user_id || afterData.admin_user_id).get();
+        if (uSnap.exists) {
+          clinicPhone = uSnap.data()?.phone;
+        }
+      } catch (uErr) {
+        console.warn('Fallback read user phone warning in onClinicVerificationStatusChanged:', uErr);
+      }
+    }
     if (!clinicPhone) return;
 
     const clinicName = afterData.name || 'Clinic Partner';

@@ -453,12 +453,23 @@ async function handleExistingUser(
   }
 
   // Update phone/email if previously missing on the canonical record
-  const normPhone = normalizePhone(firebaseUser.phoneNumber);
-  if (!existingUser.phone && normPhone) {
-    updates.phone = normPhone;
+  const candidatePhone = normalizePhone(onboardingData?.phone || firebaseUser.phoneNumber);
+  if ((!existingUser.phone || existingUser.phone.length < 10) && candidatePhone) {
+    updates.phone = candidatePhone;
+    existingUser.phone = candidatePhone;
   }
-  if (!existingUser.email && firebaseUser.email) {
-    updates.email = firebaseUser.email.trim().toLowerCase();
+  const candidateEmail = (onboardingData?.email || firebaseUser.email || '').trim().toLowerCase();
+  if (!existingUser.email && candidateEmail) {
+    updates.email = candidateEmail;
+    existingUser.email = candidateEmail;
+  }
+  if (onboardingData?.phone_verified && !existingUser.phone_verified) {
+    updates.phone_verified = true;
+    existingUser.phone_verified = true;
+  }
+  if (onboardingData?.email_verified && !existingUser.email_verified) {
+    updates.email_verified = true;
+    existingUser.email_verified = true;
   }
 
   // STRICT PORTAL ISOLATION & CANONICAL ROLE PRESERVATION:
@@ -549,14 +560,32 @@ async function handleExistingUser(
     clinic = await getOrInitializeClinic(existingUser.clinic_id);
   }
 
-  if (clinic && existingUser.role !== 'patient' && existingUser.clinic_id !== clinic.clinic_id) {
-    existingUser.clinic_id = clinic.clinic_id;
-    try {
-      await updateDoc(doc(db, 'users', canonicalDocId), {
-        clinic_id: clinic.clinic_id,
-        updated_at: new Date().toISOString(),
-      });
-    } catch {}
+  if (clinic && existingUser.role !== 'patient') {
+    const candidateClinicPhone = existingUser.phone || candidatePhone || clinic.phone;
+    const candidateClinicEmail = existingUser.email || candidateEmail || clinic.email;
+    const clinicUpdates: Record<string, any> = {};
+    if (!clinic.phone && candidateClinicPhone) {
+      clinic.phone = candidateClinicPhone;
+      clinicUpdates.phone = candidateClinicPhone;
+    }
+    if (!clinic.email && candidateClinicEmail) {
+      clinic.email = candidateClinicEmail;
+      clinicUpdates.email = candidateClinicEmail;
+    }
+    if (Object.keys(clinicUpdates).length > 0) {
+      clinicUpdates.updated_at = new Date().toISOString();
+      updateDoc(doc(db, 'clinics', clinic.clinic_id), sanitizeForFirestore(clinicUpdates)).catch(() => {});
+    }
+
+    if (existingUser.clinic_id !== clinic.clinic_id) {
+      existingUser.clinic_id = clinic.clinic_id;
+      try {
+        await updateDoc(doc(db, 'users', canonicalDocId), {
+          clinic_id: clinic.clinic_id,
+          updated_at: new Date().toISOString(),
+        });
+      } catch {}
+    }
   }
 
   // Load Patient Account if patient or patient attendant

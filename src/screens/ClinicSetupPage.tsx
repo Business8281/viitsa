@@ -191,9 +191,13 @@ export function ClinicSetupPage() {
         }
       }
 
-      // 4. Update localStorage active clinic key
+      // 4. Update localStorage active clinic key & verified credentials
       try {
         localStorage.setItem('viitsa_active_clinic_id', clinicId);
+        sessionStorage.setItem('viitsa_reg_phone', finalPhone);
+        sessionStorage.setItem('viitsa_reg_email', finalEmail);
+        localStorage.setItem('viitsa_clinic_phone', finalPhone);
+        localStorage.setItem('viitsa_clinic_email', finalEmail);
       } catch {}
 
       // 5. Refresh session so auth context picks up the new state
