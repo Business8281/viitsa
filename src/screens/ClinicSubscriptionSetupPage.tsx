@@ -9,6 +9,7 @@ import { useAuth } from '../lib/auth';
 import { ViitsaLogo } from '../components/ViitsaLogo';
 import { RazorpaySubscriptionButton } from '../components/RazorpaySubscriptionButton';
 import { buildSubscriptionActivatedHtml } from '../lib/emailService';
+import { sendWhatsAppClinicTrialActivated, sendWhatsAppClinicSubActivated } from '../lib/whatsappClientService';
 
 export function ClinicSubscriptionSetupPage() {
   const { user, clinic } = useAuth();
@@ -18,20 +19,9 @@ export function ClinicSubscriptionSetupPage() {
   const mode = searchParams.get('mode');
   const isRetry = mode === 'retry' || mode === 'payment-failed' || clinic?.subscription_status === 'payment_failed' || clinic?.subscription_status === 'past_due' || clinic?.subscription_status === 'deactivated';
   
-  const isTrialActive = clinic?.subscription_status === 'trial';
-  const isPaidActive = clinic?.subscription_status === 'active' || clinic?.subscription_status === 'free_plan';
-  const isAlreadySubscribed = isTrialActive || isPaidActive;
-  const hasCompletedTrial = clinic?.trial_completed === true;
-  const isTrialEligible = !isTrialActive && !isPaidActive && !hasCompletedTrial && !invoiceId;
-
-  const [showSwitchPlans, setShowSwitchPlans] = useState(false);
-  const [success, setSuccess] = useState(false);
-  const [isProcessing, setIsProcessing] = useState(false);
-  const [selectedTier, setSelectedTier] = useState<'solo' | 'clinic' | 'multispecialty'>('clinic');
-  const [selectedCycle, setSelectedCycle] = useState<'monthly' | 'annual'>('monthly');
-
-  // Trial countdown info
+  // Trial countdown info & validity (strict 30-day persistence)
   const trialEndsAtDate = clinic?.trial_ends_at ? new Date(clinic.trial_ends_at) : null;
+  const isTrialPeriodStillRunning = Boolean(trialEndsAtDate && trialEndsAtDate.getTime() > Date.now());
   const trialDaysRemaining = trialEndsAtDate 
     ? Math.max(0, Math.ceil((trialEndsAtDate.getTime() - Date.now()) / (1000 * 60 * 60 * 24)))
     : 30;
@@ -39,12 +29,45 @@ export function ClinicSubscriptionSetupPage() {
     ? trialEndsAtDate.toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })
     : '30 Days from activation';
 
-  // Self-healing: If an aborted checkout previously left premature trial flags before payment was ever made,
-  // restore clean trial eligibility immediately.
+  const isTrialActive = clinic?.subscription_status === 'trial' || (isTrialPeriodStillRunning && clinic?.subscription_status !== 'active');
+  const isPaidActive = clinic?.subscription_status === 'active' || clinic?.subscription_status === 'free_plan';
+  const isAlreadySubscribed = isTrialActive || isPaidActive;
+
+  // A clinic has completed a trial ONLY IF trial_completed is true AND the 30-day trial period has elapsed
+  const hasActuallyCompletedTrial = Boolean(clinic?.trial_completed === true && !isTrialPeriodStillRunning);
+  const isTrialEligible = !isTrialActive && !isPaidActive && !hasActuallyCompletedTrial && !invoiceId;
+
+  const [showSwitchPlans, setShowSwitchPlans] = useState(false);
+  const [success, setSuccess] = useState(false);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [selectedTier, setSelectedTier] = useState<'solo' | 'clinic' | 'multispecialty'>('clinic');
+  const [selectedCycle, setSelectedCycle] = useState<'monthly' | 'annual'>('monthly');
+
+  // Self-healing:
+  // 1. If trial was activated and 30 days have not elapsed, guarantee status is 'trial' and trial_completed is false.
+  // 2. If an aborted checkout previously left premature trial flags before payment was ever made,
+  //    restore clean trial eligibility immediately.
   useEffect(() => {
     if (!clinic?.clinic_id) return;
+
+    // Healing 1: Ensure active trial stays in 'trial' state throughout the 30 days
+    if (isTrialPeriodStillRunning && (clinic.trial_completed === true || clinic.subscription_status === 'active')) {
+      updateDoc(doc(db, 'clinics', clinic.clinic_id), {
+        subscription_status: 'trial',
+        trial_completed: false,
+        trial_status: 'active_trial'
+      }).catch(() => {});
+      if (user?.user_id) {
+        updateDoc(doc(db, 'users', user.user_id), {
+          clinic_subscription_status: 'trial',
+          trial_completed: false
+        }).catch(() => {});
+      }
+    }
+
+    // Healing 2: If aborted checkout before payment, clear premature trial flags
     const isSubscribedOrTrial = clinic.subscription_status === 'trial' || clinic.subscription_status === 'active';
-    if (!isSubscribedOrTrial && !clinic.trial_completed) {
+    if (!isSubscribedOrTrial && !hasActuallyCompletedTrial) {
       if (clinic.trial_used || clinic.has_used_trial || clinic.trial_activated || clinic.trial_started_at) {
         updateDoc(doc(db, 'clinics', clinic.clinic_id), {
           trial_used: false,
@@ -63,7 +86,7 @@ export function ClinicSubscriptionSetupPage() {
         }).catch(() => {});
       }
     }
-  }, [clinic?.clinic_id, clinic?.subscription_status, clinic?.trial_completed, clinic?.trial_activated, clinic?.trial_used, user?.user_id]);
+  }, [clinic?.clinic_id, clinic?.subscription_status, clinic?.trial_completed, clinic?.trial_activated, clinic?.trial_used, clinic?.trial_ends_at, isTrialPeriodStillRunning, hasActuallyCompletedTrial, user?.user_id]);
 
 
   const handleSuccess = async (paymentData?: any, chosenTier?: 'solo' | 'clinic' | 'multispecialty') => {
@@ -106,13 +129,19 @@ export function ClinicSubscriptionSetupPage() {
         userUpdates.trial_used = true;
         userUpdates.has_used_trial = true;
         userUpdates.trial_activated = true;
+        userUpdates.trial_completed = false;
         userUpdates.trial_ends_at = trialEndsAt;
 
         clinicUpdates.trial_used = true;
         clinicUpdates.has_used_trial = true;
         clinicUpdates.trial_activated = true;
+        clinicUpdates.trial_completed = false;
+        clinicUpdates.trial_status = 'active_trial';
         clinicUpdates.trial_started_at = new Date().toISOString();
         clinicUpdates.trial_ends_at = trialEndsAt;
+        clinicUpdates.last_trial_wa_sent_at = new Date().toISOString();
+      } else {
+        clinicUpdates.last_sub_wa_sent_at = new Date().toISOString();
       }
 
       await updateDoc(doc(db, 'users', user.user_id), userUpdates);
@@ -133,16 +162,17 @@ export function ClinicSubscriptionSetupPage() {
 
       // Send instant confirmation email with attached invoice / trial confirmation PDF
       const recipientEmail = user.email || clinic.email;
+      const planPricing: Record<string, Record<string, number>> = {
+        solo: { monthly: 2999, annual: 29990 },
+        clinic: { monthly: 5999, annual: 59990 },
+        multispecialty: { monthly: 11999, annual: 119990 },
+      };
+      const planAmount = planPricing[activeTier]?.[selectedCycle] || 5999;
+
       if (recipientEmail) {
         try {
           const functions = getFunctions(undefined, 'asia-south1');
           const sendInstantEmail = httpsCallable(functions, 'sendInstantEmail');
-          const planPricing: Record<string, Record<string, number>> = {
-            solo: { monthly: 2999, annual: 29990 },
-            clinic: { monthly: 5999, annual: 59990 },
-            multispecialty: { monthly: 11999, annual: 119990 },
-          };
-          const planAmount = planPricing[activeTier]?.[selectedCycle] || 5999;
           const invNum = `VIITSA-${isTrial ? 'TRL' : 'SUB'}-${Date.now().toString().slice(-6)}`;
 
           await sendInstantEmail({
@@ -177,6 +207,38 @@ export function ClinicSubscriptionSetupPage() {
           });
         } catch (emailErr) {
           console.warn('Could not send setup confirmation email:', emailErr);
+        }
+      }
+
+      // Send instant WhatsApp notification to clinic admin
+      const targetPhone = (clinic as any)?.phone || user?.phone || '';
+      if (targetPhone) {
+        try {
+          if (isTrial) {
+            await sendWhatsAppClinicTrialActivated({
+              to: targetPhone,
+              clinicId: clinic.clinic_id,
+              adminName: user.name || (clinic as any)?.owner_name || 'Doctor',
+              clinicName: clinic.name || 'Clinic',
+              planTier: `${activeTier.toUpperCase()} Plan`,
+              trialValidUntil: new Date(trialEndsAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }),
+              supportPhone: '+91 73961 11081',
+            });
+          } else {
+            await sendWhatsAppClinicSubActivated({
+              to: targetPhone,
+              clinicId: clinic.clinic_id,
+              adminName: user.name || (clinic as any)?.owner_name || 'Doctor',
+              clinicName: clinic.name || 'Clinic',
+              planName: `${activeTier.toUpperCase()} Plan`,
+              billingCycle: selectedCycle.toUpperCase(),
+              amountPaid: planAmount,
+              nextRenewalDate: new Date(Date.now() + durationDays * 86400000).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }),
+              supportPhone: '+91 73961 11081',
+            });
+          }
+        } catch (waErr) {
+          console.warn('Could not dispatch WhatsApp subscription confirmation:', waErr);
         }
       }
 

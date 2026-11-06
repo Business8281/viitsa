@@ -6,6 +6,7 @@ import { collection, addDoc, doc, updateDoc, getDocs, query, where, serverTimest
 import { httpsCallable } from 'firebase/functions';
 import { useAuth } from '../lib/auth';
 import { buildSubscriptionActivatedHtml } from '../lib/emailService';
+import { sendWhatsAppClinicSubActivated } from '../lib/whatsappClientService';
 
 export function SubscriptionSuccessPage() {
   const [searchParams] = useSearchParams();
@@ -199,6 +200,34 @@ export function SubscriptionSuccessPage() {
             });
           } catch (emailErr) {
             console.warn('Could not send instant payment confirmation email:', emailErr);
+          }
+        }
+
+        // 5. Send instant WhatsApp confirmation to clinic admin
+        const targetPhone = (clinic as any)?.phone || (clinic as any)?.contact_phone || user?.phone;
+        if (targetPhone) {
+          try {
+            const planPricing: Record<string, Record<string, number>> = {
+              solo: { monthly: 2999, annual: 29990 },
+              clinic: { monthly: 5999, annual: 59990 },
+              multispecialty: { monthly: 11999, annual: 119990 },
+            };
+            const paidAmount = planPricing[detectedTier]?.[detectedCycle] || (detectedTier === 'multispecialty' ? 11999 : detectedTier === 'clinic' ? 5999 : 2999);
+            const durationDays = detectedCycle === 'annual' ? 365 : 30;
+
+            await sendWhatsAppClinicSubActivated({
+              to: targetPhone,
+              clinicId: targetClinicId,
+              adminName: user?.name || (clinic as any)?.owner_name || 'Doctor',
+              clinicName: clinic?.name || 'Clinic',
+              planName: `${detectedTier.toUpperCase()} Plan`,
+              billingCycle: detectedCycle.toUpperCase(),
+              amountPaid: paidAmount,
+              nextRenewalDate: new Date(Date.now() + durationDays * 86400000).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }),
+              supportPhone: '+91 73961 11081',
+            });
+          } catch (waErr) {
+            console.warn('Could not send WhatsApp subscription activation notification:', waErr);
           }
         }
 

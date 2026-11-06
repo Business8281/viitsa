@@ -452,6 +452,8 @@ export const razorpayWebhook = onRequest(async (req, res) => {
           clinicUpdates.trial_used = true;
           clinicUpdates.has_used_trial = true;
           clinicUpdates.trial_activated = true;
+          clinicUpdates.trial_completed = false;
+          clinicUpdates.trial_status = "active_trial";
           clinicUpdates.trial_started_at = new Date().toISOString();
           clinicUpdates.trial_ends_at = trialEndsAt;
 
@@ -486,6 +488,7 @@ export const razorpayWebhook = onRequest(async (req, res) => {
           if (isTrial) {
             userUpdates.trial_used = true;
             userUpdates.has_used_trial = true;
+            userUpdates.trial_completed = false;
             userUpdates.trial_ends_at = trialEndsAt;
           }
           await uDoc.ref.update(userUpdates).catch(() => {});
@@ -614,139 +617,219 @@ export const razorpayWebhook = onRequest(async (req, res) => {
       const clinicId = sub.notes?.clinic_id;
       const tier = sub.notes?.tier || "clinic";
       const cycle = sub.notes?.cycle || "monthly";
-      
+
+      // Detect if this is the initial free-trial token authentication charge (₹5 / ₹0) or if we are still within the 30-day trial window
+      const isTrialSub = sub.notes?.is_trial === "true" || (sub.start_at && (sub.start_at * 1000 > Date.now()));
+      const isTokenAmount = payment?.amount && payment.amount <= 500; // <= ₹5 token mandate charge
+      const isTrialCharge = Boolean(isTrialSub || isTokenAmount);
+      const trialEndsAt = sub.start_at 
+        ? new Date(sub.start_at * 1000).toISOString() 
+        : new Date(Date.now() + 30 * 86400000).toISOString();
+
       if (clinicId) {
-        await getDb().collection("subscriptions").add({
-          id: `renewal_${Date.now()}`,
-          clinic_id: clinicId,
-          plan_name: `${tier.toUpperCase()} Plan Renewal`,
-          tier,
-          billing_cycle: cycle,
-          status: "active",
-          created_at: new Date().toISOString(),
-          payment_id: payment?.id || null,
-          razorpay_subscription_id: sub.id,
-          amount: payment?.amount ? payment.amount / 100 : null
-        });
+        if (isTrialCharge) {
+          // ── 30-DAY FREE TRIAL MANDATE CHARGE (₹5 Token / Setup) ──
+          // The clinic is starting their 30-day trial period. Keep status as 'trial' and trial_completed as FALSE!
+          await getDb().collection("subscriptions").doc(sub.id).set({
+            id: sub.id,
+            clinic_id: clinicId,
+            plan_name: `${tier.toUpperCase()} Plan (30-Day Free Trial)`,
+            tier,
+            billing_cycle: cycle,
+            status: "trial",
+            is_trial: true,
+            trial_ends_at: trialEndsAt,
+            auto_renew: true,
+            created_at: new Date().toISOString(),
+            payment_id: payment?.id || null,
+            razorpay_subscription_id: sub.id,
+            amount: payment?.amount ? payment.amount / 100 : 5
+          }, { merge: true });
 
-        await getDb().collection("clinics").doc(clinicId).update({
-          subscription_status: "active",
-          subscription_plan: tier,
-          subscription_billing_cycle: cycle,
-          trial_status: "converted",
-          trial_completed: true,
-          last_renewal_at: new Date().toISOString(),
-          last_payment_id: payment?.id || null,
-          last_payment_status: "paid"
-        });
-
-        const clinicUsers = await getDb().collection("users").where("clinic_id", "==", clinicId).get();
-        for (const uDoc of clinicUsers.docs) {
-          await uDoc.ref.update({
-            clinic_subscription_status: "active",
+          await getDb().collection("clinics").doc(clinicId).update({
+            subscription_status: "trial",
             subscription_plan: tier,
             subscription_billing_cycle: cycle,
-            trial_completed: true
-          }).catch(() => {});
-        }
+            trial_status: "active_trial",
+            trial_completed: false,
+            trial_used: true,
+            trial_activated: true,
+            trial_started_at: new Date().toISOString(),
+            trial_ends_at: trialEndsAt,
+            razorpay_subscription_id: sub.id,
+            last_payment_id: payment?.id || null,
+            last_payment_status: "paid",
+            subscription_updated_at: new Date().toISOString()
+          });
 
-        const targetEmail = sub.customer_details?.email || clinicUsers.docs[0]?.data()?.email;
-        if (targetEmail) {
+          const clinicUsers = await getDb().collection("users").where("clinic_id", "==", clinicId).get();
+          for (const uDoc of clinicUsers.docs) {
+            await uDoc.ref.update({
+              clinic_subscription_status: "trial",
+              subscription_plan: tier,
+              subscription_billing_cycle: cycle,
+              trial_completed: false,
+              trial_used: true,
+              trial_ends_at: trialEndsAt
+            }).catch(() => {});
+          }
+
+          // Dispatch WhatsApp Trial Activated Notification to clinic
           try {
-            const planPricing: Record<string, Record<string, number>> = {
-              solo: { monthly: 2999, annual: 29990 },
-              clinic: { monthly: 5999, annual: 59990 },
-              multispecialty: { monthly: 11999, annual: 119990 },
-            };
-            const chargedAmount = payment?.amount ? (payment.amount / 100) : (planPricing[tier]?.[cycle] || 5999);
-            const invNum = `VIITSA-REN-${Date.now().toString().slice(-6)}`;
-
-            let renewalPdf: Buffer | null = null;
-            try {
-              renewalPdf = await generateSubscriptionInvoicePdf({
-                invoiceNumber: invNum,
-                invoiceDate: new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }),
-                status: "PAID",
-                clinicName: sub.customer_details?.name || clinicUsers.docs[0]?.data()?.name || 'Clinic Partner',
-                customerEmail: targetEmail,
-                planName: `${tier.toUpperCase()} Plan Renewal (${cycle.toUpperCase()})`,
-                tier,
-                cycle,
-                amount: chargedAmount,
-                paymentId: payment?.id || sub.id,
-                notes: 'Subscription renewal successful via auto-debit.',
+            const clinicDoc = await getDb().collection("clinics").doc(clinicId).get();
+            const clinicData = clinicDoc.data() || {};
+            const cPhone = clinicData.phone || clinicData.contact_phone || sub.customer_details?.contact || payment?.contact;
+            if (cPhone) {
+              await sendClinicTrialActivated({
+                to: cPhone,
+                adminName: clinicData.owner_name || 'Doctor',
+                clinicName: clinicData.name || 'Clinic',
+                planTier: `${tier.toUpperCase()} Plan`,
+                trialValidUntil: new Date(trialEndsAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }),
+                supportPhone: '+91 73961 11081',
+                clinicId,
               });
-            } catch (pdfErr) {
-              console.error("Error generating renewal PDF:", pdfErr);
             }
+          } catch (waErr) {
+            console.warn("Could not dispatch WhatsApp trial activated notification:", waErr);
+          }
+        } else {
+          // ── ACTUAL POST-TRIAL FULL PLAN RENEWAL CHARGE (e.g. ₹5,999) ──
+          // The 30-day trial has completed and the recurring monthly/annual plan debit occurred
+          await getDb().collection("subscriptions").add({
+            id: `renewal_${Date.now()}`,
+            clinic_id: clinicId,
+            plan_name: `${tier.toUpperCase()} Plan Renewal`,
+            tier,
+            billing_cycle: cycle,
+            status: "active",
+            created_at: new Date().toISOString(),
+            payment_id: payment?.id || null,
+            razorpay_subscription_id: sub.id,
+            amount: payment?.amount ? payment.amount / 100 : null
+          });
 
-            const mailOptions: any = {
-              from: `"Viitsa Healthcare" <${process.env.TITAN_EMAIL || "support@viitsa.com"}>`,
-              to: targetEmail,
-              subject: `Subscription Auto-Renewed: ${tier.toUpperCase()} Plan (${cycle.toUpperCase()}) | Viitsa Healthcare`,
-              html: buildRazorpayEmailHtml({
-                subtitle: "Subscription Auto-Renewed",
-                badgeIcon: "✓",
-                badgeBg: "#ecfdf5",
-                badgeColor: "#0F6E56",
-                heading: "Subscription Auto-Renewed",
-                recipientName: "Doctor / Clinic Administrator",
-                leadText: `Your subscription to the <strong>${tier.toUpperCase()} Plan (${cycle})</strong> has successfully auto-renewed. Your continuous clinical access is active and synced.`,
-                details: [
-                  { label: "Plan", value: `${tier.toUpperCase()} Plan` },
-                  { label: "Billing Cycle", value: cycle.toUpperCase() },
-                  { label: "Amount Debited", value: `₹${payment?.amount ? (payment.amount / 100).toFixed(2) : chargedAmount.toFixed(2)}` },
-                  { label: "Payment Reference", value: payment?.id || 'Auto-Debit' },
-                  { label: "Status", value: "Active & Synced" },
-                ],
-                subnote: "Your official tax invoice PDF has been attached to this email for your accounting records.",
-                buttonText: "Go to Clinic Dashboard",
-                buttonUrl: "https://viitsa.com/clinic/dashboard"
-              })
-            };
+          await getDb().collection("clinics").doc(clinicId).update({
+            subscription_status: "active",
+            subscription_plan: tier,
+            subscription_billing_cycle: cycle,
+            trial_status: "converted",
+            trial_completed: true,
+            last_renewal_at: new Date().toISOString(),
+            last_payment_id: payment?.id || null,
+            last_payment_status: "paid"
+          });
 
-            if (renewalPdf) {
-              mailOptions.attachments = [
-                {
-                  filename: `Viitsa_Renewal_Invoice_${invNum}.pdf`,
-                  content: renewalPdf,
-                  contentType: 'application/pdf',
-                }
-              ];
+          const clinicUsers = await getDb().collection("users").where("clinic_id", "==", clinicId).get();
+          for (const uDoc of clinicUsers.docs) {
+            await uDoc.ref.update({
+              clinic_subscription_status: "active",
+              subscription_plan: tier,
+              subscription_billing_cycle: cycle,
+              trial_completed: true
+            }).catch(() => {});
+          }
+
+          // Send payment confirmation email and WhatsApp
+          const targetEmail = sub.customer_details?.email || clinicUsers.docs[0]?.data()?.email;
+          if (targetEmail) {
+            try {
+              const planPricing: Record<string, Record<string, number>> = {
+                solo: { monthly: 2999, annual: 29990 },
+                clinic: { monthly: 5999, annual: 59990 },
+                multispecialty: { monthly: 11999, annual: 119990 },
+              };
+              const renewalAmount = payment?.amount ? (payment.amount / 100) : (planPricing[tier]?.[cycle] || 5999);
+              const invNum = `VIITSA-REN-${Date.now().toString().slice(-6)}`;
+
+              let renPdf: Buffer | null = null;
+              try {
+                renPdf = await generateSubscriptionInvoicePdf({
+                  invoiceNumber: invNum,
+                  invoiceDate: new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }),
+                  status: "PAID",
+                  clinicName: sub.customer_details?.name || clinicUsers.docs[0]?.data()?.name || 'Clinic Partner',
+                  customerEmail: targetEmail,
+                  planName: `${tier.toUpperCase()} Plan Renewal (${cycle.toUpperCase()})`,
+                  tier,
+                  cycle,
+                  amount: renewalAmount,
+                  paymentId: payment?.id || sub.id,
+                  isTrial: false,
+                  notes: 'Subscription renewal payment successfully processed via mandate.',
+                });
+              } catch (pdfErr) {
+                console.error("Error generating renewal PDF:", pdfErr);
+              }
+
+              const mailOptions: any = {
+                from: `"Viitsa Healthcare" <${process.env.TITAN_EMAIL || "support@viitsa.com"}>`,
+                to: targetEmail,
+                subject: `Subscription Renewed: ${tier.toUpperCase()} Plan (${cycle.toUpperCase()}) | Viitsa Healthcare`,
+                html: buildRazorpayEmailHtml({
+                  subtitle: "Subscription Renewed",
+                  badgeIcon: "✓",
+                  badgeBg: "#ecfdf5",
+                  badgeColor: "#0F6E56",
+                  heading: "Subscription Renewed Successfully",
+                  recipientName: "Doctor / Clinic Administrator",
+                  leadText: `Your recurring subscription payment for the <strong>${tier.toUpperCase()} Plan (${cycle.toUpperCase()})</strong> has been successfully processed.`,
+                  details: [
+                    { label: "Plan", value: `${tier.toUpperCase()} Plan` },
+                    { label: "Billing Cycle", value: cycle.toUpperCase() },
+                    { label: "Amount Paid", value: `₹${renewalAmount.toLocaleString('en-IN')}` },
+                    { label: "Payment ID", value: payment?.id || 'Autopay Mandate' },
+                    { label: "Next Renewal", value: new Date(Date.now() + (cycle === 'annual' ? 365 : 30) * 86400000).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' }) },
+                  ],
+                  subnote: "Your clinic subscription remains fully active with continuous access to all doctor seats and features. Your official tax invoice PDF has been attached to this email.",
+                  buttonText: "Go to Clinic Dashboard",
+                  buttonUrl: "https://viitsa.com/clinic/dashboard"
+                })
+              };
+
+              if (renPdf) {
+                mailOptions.attachments = [
+                  {
+                    filename: `Viitsa_Renewal_Invoice_${invNum}.pdf`,
+                    content: renPdf,
+                    contentType: 'application/pdf',
+                  }
+                ];
+              }
+
+              await getTransporter().sendMail(mailOptions);
+            } catch (e) {
+              console.warn("Could not send subscription renewal confirmation email:", e);
             }
-
-            await getTransporter().sendMail(mailOptions);
-          } catch (e) {
-            console.warn("Could not send renewal email:", e);
           }
-        }
 
-        // Dispatch WhatsApp renewal success
-        try {
-          const clinicDoc = await getDb().collection("clinics").doc(clinicId).get();
-          const clinicData = clinicDoc.data() || {};
-          const cPhone = clinicData.phone || clinicData.contact_phone || sub.customer_details?.contact;
-          if (cPhone) {
-            const planPricing: Record<string, Record<string, number>> = {
-              solo: { monthly: 2999, annual: 29990 },
-              clinic: { monthly: 5999, annual: 59990 },
-              multispecialty: { monthly: 11999, annual: 119990 },
-            };
-            const chargedAmount = payment?.amount ? (payment.amount / 100) : (planPricing[tier]?.[cycle] || 5999);
-            await sendClinicPaymentSuccess({
-              to: cPhone,
-              adminName: clinicData.owner_name || 'Doctor',
-              clinicName: clinicData.name || 'Clinic',
-              planName: `${tier.toUpperCase()} Plan Renewal`,
-              amount: chargedAmount,
-              transactionId: payment?.id || sub.id,
-              activeUntilDate: new Date(Date.now() + (cycle === 'annual' ? 365 : 30) * 86400000).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }),
-              supportPhone: '+91 73961 11081',
-              clinicId,
-            });
+          // Dispatch WhatsApp renewal notification
+          try {
+            const clinicDoc = await getDb().collection("clinics").doc(clinicId).get();
+            const clinicData = clinicDoc.data() || {};
+            const cPhone = clinicData.phone || clinicData.contact_phone || sub.customer_details?.contact || payment?.contact;
+            if (cPhone) {
+              const planPricing: Record<string, Record<string, number>> = {
+                solo: { monthly: 2999, annual: 29990 },
+                clinic: { monthly: 5999, annual: 59990 },
+                multispecialty: { monthly: 11999, annual: 119990 },
+              };
+              const paidAmt = payment?.amount ? (payment.amount / 100) : (planPricing[tier]?.[cycle] || 5999);
+              await sendClinicPaymentSuccess({
+                to: cPhone,
+                adminName: clinicData.owner_name || 'Doctor',
+                clinicName: clinicData.name || 'Clinic',
+                planName: `${tier.toUpperCase()} Plan`,
+                amount: paidAmt,
+                transactionId: payment?.id || sub.id,
+                nextRenewalDate: new Date(Date.now() + (cycle === 'annual' ? 365 : 30) * 86400000).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }),
+                supportPhone: '+91 73961 11081',
+                clinicId,
+              });
+            }
+          } catch (waErr) {
+            console.warn("Could not dispatch WhatsApp renewal notification:", waErr);
           }
-        } catch (waErr) {
-          console.warn("Could not dispatch WhatsApp renewal success:", waErr);
         }
       }
     } else if (event.event === "subscription.cancelled" || event.event === "subscription.halted") {

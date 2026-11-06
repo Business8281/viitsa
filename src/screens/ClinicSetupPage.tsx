@@ -30,6 +30,7 @@ export function ClinicSetupPage() {
   const sessionPhone = (
     user?.phone || 
     clinic?.phone || 
+    auth.currentUser?.phoneNumber ||
     (typeof window !== 'undefined' ? (sessionStorage.getItem('viitsa_reg_phone') || localStorage.getItem('viitsa_clinic_phone') || '') : '')
   ).replace(/\D/g, '').slice(-10);
 

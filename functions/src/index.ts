@@ -1016,6 +1016,115 @@ export const onClinicVerificationStatusChanged = onDocumentUpdated(
 );
 
 // ============================================================================
+// FIRESTORE TRIGGER: On Clinic Subscription Status Changed
+// Automatically dispatches WhatsApp template whenever subscription status updates in DB
+// ============================================================================
+export const onClinicSubscriptionStatusChanged = onDocumentUpdated(
+  {
+    document: "clinics/{clinicId}",
+    region: "asia-south1",
+    memory: "256MiB",
+  },
+  async (event) => {
+    const beforeData = event.data?.before.data();
+    const afterData = event.data?.after.data();
+
+    if (!beforeData || !afterData) return;
+
+    const beforeStatus = beforeData.subscription_status;
+    const afterStatus = afterData.subscription_status;
+
+    if (beforeStatus === afterStatus) return;
+
+    const clinicPhone = afterData.phone || afterData.contact_phone;
+    if (!clinicPhone) return;
+
+    const clinicName = afterData.name || 'Clinic Partner';
+    const adminName = afterData.owner_name || afterData.admin_name || 'Clinic Administrator';
+    const clinicId = event.params.clinicId || afterData.clinic_id || 'CLINIC';
+    const tier = afterData.subscription_plan || 'clinic';
+    const cycle = afterData.subscription_billing_cycle || 'monthly';
+    const now = Date.now();
+
+    // 1. Trial Activated (status became 'trial')
+    if (afterStatus === 'trial' && beforeStatus !== 'trial') {
+      const lastSent = afterData.last_trial_wa_sent_at ? new Date(afterData.last_trial_wa_sent_at).getTime() : 0;
+      if (now - lastSent > 60000) {
+        console.log(`[onClinicSubscription] Dispatching viitsa_clinic_trial_activated to ${clinicPhone}`);
+        await sendClinicTrialActivated({
+          to: clinicPhone,
+          adminName,
+          clinicName,
+          planTier: `${tier.toUpperCase()} Plan`,
+          trialValidUntil: afterData.trial_ends_at 
+            ? formatDisplayDate(afterData.trial_ends_at) 
+            : formatDisplayDate(new Date(now + 30 * 86400000)),
+          supportPhone: '+91 73961 11081',
+          clinicId,
+        });
+        await event.data?.after.ref.update({ last_trial_wa_sent_at: new Date().toISOString() }).catch(() => {});
+      }
+    }
+
+    // 2. Paid Subscription Activated (status became 'active')
+    else if (afterStatus === 'active' && beforeStatus !== 'active' && beforeStatus !== 'trial') {
+      const lastSent = afterData.last_sub_wa_sent_at ? new Date(afterData.last_sub_wa_sent_at).getTime() : 0;
+      if (now - lastSent > 60000) {
+        console.log(`[onClinicSubscription] Dispatching viitsa_clinic_sub_activated to ${clinicPhone}`);
+        const planPricing: Record<string, Record<string, number>> = {
+          solo: { monthly: 2999, annual: 29990 },
+          clinic: { monthly: 5999, annual: 59990 },
+          multispecialty: { monthly: 11999, annual: 119990 },
+        };
+        const planAmount = planPricing[tier]?.[cycle] || (tier === 'multispecialty' ? 11999 : tier === 'clinic' ? 5999 : 2999);
+        const durationDays = cycle === 'annual' ? 365 : 30;
+        await sendClinicSubActivated({
+          to: clinicPhone,
+          adminName,
+          clinicName,
+          planName: `${tier.toUpperCase()} Plan`,
+          billingCycle: cycle.toUpperCase(),
+          amountPaid: planAmount,
+          nextRenewalDate: formatDisplayDate(new Date(now + durationDays * 86400000)),
+          supportPhone: '+91 73961 11081',
+          clinicId,
+        });
+        await event.data?.after.ref.update({ last_sub_wa_sent_at: new Date().toISOString() }).catch(() => {});
+      }
+    }
+
+    // 3. Subscription Cancelled
+    else if (afterStatus === 'cancelled' && beforeStatus !== 'cancelled') {
+      console.log(`[onClinicSubscription] Dispatching viitsa_clinic_sub_cancelled to ${clinicPhone}`);
+      await sendClinicSubCancelled({
+        to: clinicPhone,
+        adminName,
+        clinicName,
+        cancelledPlan: `${tier.toUpperCase()} Plan`,
+        effectiveDate: formatDisplayDate(new Date()),
+        supportPhone: '+91 73961 11081',
+        clinicId,
+      });
+    }
+
+    // 4. Subscription Deactivated / Halted
+    else if (afterStatus === 'deactivated' && beforeStatus !== 'deactivated') {
+      console.log(`[onClinicSubscription] Dispatching viitsa_clinic_sub_deactivated to ${clinicPhone}`);
+      await sendClinicSubDeactivated({
+        to: clinicPhone,
+        adminName,
+        clinicName,
+        planName: `${tier.toUpperCase()} Plan`,
+        deactivationDate: formatDisplayDate(new Date()),
+        status: 'Deactivated - Overdue',
+        supportPhone: '+91 73961 11081',
+        clinicId,
+      });
+    }
+  }
+);
+
+// ============================================================================
 // FIRESTORE TRIGGER: On Doctor Verification Status Changed
 // ============================================================================
 export const onDoctorVerificationStatusChanged = onDocumentUpdated(
