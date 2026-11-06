@@ -430,7 +430,7 @@ export const razorpayWebhook = onRequest(async (req, res) => {
   const event = req.body;
 
   try {
-    if (event.event === "subscription.authenticated") {
+    if (event.event === "subscription.authenticated" || event.event === "subscription.activated") {
       const sub = event.payload.subscription.entity;
       const clinicId = sub.notes?.clinic_id;
       const tier = sub.notes?.tier || "clinic";
@@ -953,6 +953,16 @@ export const razorpayWebhook = onRequest(async (req, res) => {
         } catch (waErr) {
           console.warn("Could not dispatch WhatsApp payment failed template:", waErr);
         }
+      }
+    } else if (event.event === "payment.captured") {
+      const payment = event.payload.payment?.entity;
+      const clinicId = payment?.notes?.clinic_id;
+      if (clinicId && !payment?.subscription_id) {
+        await getDb().collection("clinics").doc(clinicId).update({
+          last_payment_id: payment.id,
+          last_payment_status: "paid",
+          subscription_updated_at: new Date().toISOString()
+        }).catch(() => {});
       }
     } else if (event.event === "payment_link.paid") {
       const plink = event.payload.payment_link?.entity;
