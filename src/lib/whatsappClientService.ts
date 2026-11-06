@@ -184,6 +184,7 @@ export async function sendWhatsAppPatientMedicineReminder(params: {
   dosageTiming: string;
   instructions?: string;
   clinicPhone: string;
+  doctorName?: string;
 }): Promise<WhatsAppResponse> {
   return sendWhatsAppNotificationViaAPI({
     action: 'patient_medicine_reminder',

@@ -401,6 +401,7 @@ export function PrescriptionView({
         clinicId: clinic?.clinic_id || '',
         patientName: patientInfo.name || 'Patient',
         clinicName: clinicInfo.name || 'Clinic',
+        doctorName: doctorInfo.name || 'Doctor',
         medicineName: allMedNames || primaryMed.name,
         dosageTiming: timing,
         instructions,
