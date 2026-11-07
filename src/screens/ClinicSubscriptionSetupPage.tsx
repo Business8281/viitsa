@@ -29,13 +29,22 @@ export function ClinicSubscriptionSetupPage() {
     ? trialEndsAtDate.toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })
     : '30 Days from activation';
 
-  const isTrialActive = clinic?.subscription_status === 'trial' || (isTrialPeriodStillRunning && clinic?.subscription_status !== 'active');
+  const hasActuallyCompletedTrial = Boolean(clinic?.trial_completed === true && !isTrialPeriodStillRunning);
   const isPaidActive = clinic?.subscription_status === 'active' || clinic?.subscription_status === 'free_plan';
+  
+  // A clinic has an active trial ONLY if they have authorized their subscription mandate (trial_activated === true)
+  // Merely being on the onboarding setup page does NOT mean trial is active yet!
+  const isTrialActive = Boolean(
+    (clinic?.subscription_status === 'trial' || isTrialPeriodStillRunning) &&
+    clinic?.trial_activated === true &&
+    (clinic as any)?.razorpay_subscription_id &&
+    !hasActuallyCompletedTrial &&
+    !isPaidActive
+  );
   const isAlreadySubscribed = isTrialActive || isPaidActive;
 
-  // A clinic has completed a trial ONLY IF trial_completed is true AND the 30-day trial period has elapsed
-  const hasActuallyCompletedTrial = Boolean(clinic?.trial_completed === true && !isTrialPeriodStillRunning);
-  const isTrialEligible = !isTrialActive && !isPaidActive && !hasActuallyCompletedTrial && !invoiceId;
+  // Eligible for 30-day free trial as long as not already a paid active subscriber, hasn't completed trial, and not paying an invoice
+  const isTrialEligible = !isPaidActive && !hasActuallyCompletedTrial && !invoiceId;
 
   const [showSwitchPlans, setShowSwitchPlans] = useState(false);
   const [success, setSuccess] = useState(false);
