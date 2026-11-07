@@ -1041,7 +1041,7 @@ export const onClinicSubscriptionStatusChanged = onDocumentUpdated(
   {
     document: "clinics/{clinicId}",
     region: "asia-south1",
-    memory: "256MiB",
+    memory: "512MiB",
   },
   async (event) => {
     const beforeData = event.data?.before.data();

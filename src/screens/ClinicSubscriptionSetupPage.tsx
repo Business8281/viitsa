@@ -222,7 +222,7 @@ export function ClinicSubscriptionSetupPage() {
         }
       }
 
-      // Send instant WhatsApp notification to clinic admin
+      // Send instant WhatsApp notification to clinic admin with 24-hour deduplication guard
       const targetPhone = (
         paymentData?.contact ||
         paymentData?.customer_contact ||
@@ -233,9 +233,14 @@ export function ClinicSubscriptionSetupPage() {
         (typeof window !== 'undefined' ? (sessionStorage.getItem('viitsa_reg_phone') || localStorage.getItem('viitsa_clinic_phone') || '') : '')
       ).replace(/\D/g, '').slice(-10);
 
+      const nowMs = Date.now();
+      const twentyFourHoursMs = 24 * 60 * 60 * 1000;
+      const lastTrialWa = (clinic as any)?.last_trial_wa_sent_at ? new Date((clinic as any).last_trial_wa_sent_at).getTime() : 0;
+      const lastSubWa = (clinic as any)?.last_sub_wa_sent_at ? new Date((clinic as any).last_sub_wa_sent_at).getTime() : 0;
+
       if (targetPhone && targetPhone.length === 10) {
         try {
-          if (isTrial) {
+          if (isTrial && (nowMs - lastTrialWa > twentyFourHoursMs)) {
             const waRes = await sendWhatsAppClinicTrialActivated({
               to: targetPhone,
               clinicId: clinic.clinic_id,
@@ -250,7 +255,7 @@ export function ClinicSubscriptionSetupPage() {
                 last_trial_wa_sent_at: new Date().toISOString()
               }).catch(() => {});
             }
-          } else {
+          } else if (!isTrial && (nowMs - lastSubWa > twentyFourHoursMs)) {
             const waRes = await sendWhatsAppClinicSubActivated({
               to: targetPhone,
               clinicId: clinic.clinic_id,
@@ -267,6 +272,8 @@ export function ClinicSubscriptionSetupPage() {
                 last_sub_wa_sent_at: new Date().toISOString()
               }).catch(() => {});
             }
+          } else {
+            console.log('[ClinicSubscriptionSetup] Skipping WhatsApp dispatch: cooldown active (< 24 hours).');
           }
         } catch (waErr) {
           console.warn('Could not dispatch WhatsApp subscription confirmation:', waErr);

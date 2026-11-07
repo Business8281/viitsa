@@ -1319,6 +1319,7 @@ export const razorpayWebhook = onRequest(async (req, res) => {
     res.status(200).send("OK");
   } catch (error) {
     console.error("Error processing webhook:", error);
-    res.status(500).send("Internal Server Error");
+    // Acknowledge Razorpay with 200 OK so downstream notification errors do not trigger retry storms
+    res.status(200).send("Handled with errors");
   }
 });

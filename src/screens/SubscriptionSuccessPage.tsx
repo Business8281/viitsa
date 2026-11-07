@@ -315,7 +315,7 @@ export function SubscriptionSuccessPage() {
                 }).catch(() => {});
               }
             } else {
-              console.log('[SubscriptionSuccess] Skipping WhatsApp dispatch: cooldown active (< 6 hours).');
+              console.log('[SubscriptionSuccess] Skipping WhatsApp dispatch: cooldown active (< 24 hours).');
             }
           } catch (waErr) {
             console.warn('Could not send WhatsApp subscription activation notification:', waErr);
