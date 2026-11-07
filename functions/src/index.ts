@@ -14,8 +14,8 @@ if (!admin.apps.length) {
 
 setGlobalOptions({
   region: "asia-south1",
-  memory: "256MiB",
-  cpu: "gcf_gen1",
+  memory: "512MiB",
+  cpu: 1,
   maxInstances: 5,
 });
 
@@ -1082,7 +1082,7 @@ export const onClinicSubscriptionStatusChanged = onDocumentUpdated(
       (afterStatus === 'trial' && Boolean(afterData.last_payment_id) && afterData.last_payment_id !== beforeData.last_payment_id)
     );
 
-    const DEDUP_COOLDOWN_MS = 6 * 60 * 60 * 1000; // 6-hour lock across subscription lifecycle events
+    const DEDUP_COOLDOWN_MS = 24 * 60 * 60 * 1000; // 24-hour lock across subscription lifecycle events
 
     if (isNewTrialActivation) {
       const lastSent = afterData.last_trial_wa_sent_at ? new Date(afterData.last_trial_wa_sent_at).getTime() : 0;

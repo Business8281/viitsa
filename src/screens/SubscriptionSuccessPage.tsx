@@ -268,13 +268,13 @@ export function SubscriptionSuccessPage() {
         ).replace(/\D/g, '').slice(-10);
 
         const nowMs = Date.now();
-        const sixHoursMs = 6 * 60 * 60 * 1000;
+        const twentyFourHoursMs = 24 * 60 * 60 * 1000;
         const lastTrialWa = (clinic as any)?.last_trial_wa_sent_at ? new Date((clinic as any).last_trial_wa_sent_at).getTime() : 0;
         const lastSubWa = (clinic as any)?.last_sub_wa_sent_at ? new Date((clinic as any).last_sub_wa_sent_at).getTime() : 0;
 
         if (targetPhone && targetPhone.length === 10) {
           try {
-            if (isTrial && (nowMs - lastTrialWa > sixHoursMs)) {
+            if (isTrial && (nowMs - lastTrialWa > twentyFourHoursMs)) {
               const waRes = await sendWhatsAppClinicTrialActivated({
                 to: targetPhone,
                 clinicId: targetClinicId,
@@ -289,7 +289,7 @@ export function SubscriptionSuccessPage() {
                   last_trial_wa_sent_at: new Date().toISOString()
                 }).catch(() => {});
               }
-            } else if (!isTrial && (nowMs - lastSubWa > sixHoursMs)) {
+            } else if (!isTrial && (nowMs - lastSubWa > twentyFourHoursMs)) {
               const planPricing: Record<string, Record<string, number>> = {
                 solo: { monthly: 2999, annual: 29990 },
                 clinic: { monthly: 5999, annual: 59990 },

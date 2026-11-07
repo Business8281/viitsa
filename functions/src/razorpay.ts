@@ -428,8 +428,37 @@ export const razorpayWebhook = onRequest(async (req, res) => {
   }
 
   const event = req.body;
+  if (!event || !event.event) {
+    res.status(400).send("Invalid payload");
+    return;
+  }
+
+  // Deterministic Idempotency Key across all webhook deliveries and retries
+  const entityId = event.payload?.subscription?.entity?.id || 
+                   event.payload?.payment?.entity?.id || 
+                   event.payload?.payment_link?.entity?.id || 
+                   event.payload?.invoice?.entity?.id || 
+                   event.id || 
+                   "generic";
+  const eventKey = `${event.event}_${entityId}`;
 
   try {
+    const eventRef = getDb().collection("processed_webhook_events").doc(eventKey);
+    const eventSnap = await eventRef.get();
+    if (eventSnap.exists) {
+      console.log(`[RazorpayWebhook] Idempotency: Webhook event '${eventKey}' was already processed. Acknowledging immediately with 200 OK.`);
+      res.status(200).send("OK: already processed");
+      return;
+    }
+
+    // Mark event as processed immediately to lock out concurrent / retried requests
+    await eventRef.set({
+      event: event.event,
+      entity_id: entityId,
+      created_at: new Date().toISOString(),
+      raw_created_at: event.created_at || null,
+    });
+
     if (event.event === "subscription.authenticated" || event.event === "subscription.activated") {
       const sub = event.payload.subscription.entity;
       const clinicId = sub.notes?.clinic_id;
@@ -441,6 +470,15 @@ export const razorpayWebhook = onRequest(async (req, res) => {
         : null;
 
       if (clinicId) {
+        // Guard against reviving a cancelled subscription:
+        // If user already cancelled/revoked autopay, an incoming authenticated/activated webhook MUST NOT revert status back to trial/active
+        const existingClinicDoc = await getDb().collection("clinics").doc(clinicId).get();
+        const existingClinicData = existingClinicDoc.data() || {};
+        if (existingClinicData.subscription_status === "cancelled" || existingClinicData.subscription_status === "deactivated") {
+          console.warn(`[RazorpayWebhook] Clinic ${clinicId} is currently '${existingClinicData.subscription_status}'. Suppressing re-activation from event ${event.event}.`);
+          res.status(200).send("OK: clinic already cancelled");
+          return;
+        }
         await getDb().collection("subscriptions").doc(sub.id).set({
           id: sub.id,
           clinic_id: clinicId,

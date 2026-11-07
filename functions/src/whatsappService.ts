@@ -173,7 +173,7 @@ export async function sendWhatsAppTemplate(options: {
   }
 
   // Deduplication Guard: Enforce strict deduplication window.
-  // Lifecycle/subscription templates get a 6-hour lock to completely eliminate duplicate storms across webhooks and reloads.
+  // Lifecycle/subscription templates get a 24-hour lock to completely eliminate duplicate storms across webhooks and reloads.
   // Transactional / appointment / OTP templates get standard 45-second lock.
   const isOtp = options.templateName.includes('otp');
   const isLifecycleTemplate = [
@@ -191,7 +191,7 @@ export async function sendWhatsAppTemplate(options: {
 
   const dedupKey = `${normalizedPhone}_${options.templateName}`;
   const nowMs = Date.now();
-  const DEDUP_WINDOW_MS = isLifecycleTemplate ? (6 * 60 * 60 * 1000) : 45000;
+  const DEDUP_WINDOW_MS = isLifecycleTemplate ? (24 * 60 * 60 * 1000) : 45000;
 
   // Tier 1: Instant in-memory check (< 1ms)
   const memLast = recentDispatches.get(dedupKey);
