@@ -173,7 +173,8 @@ export async function sendWhatsAppTemplate(options: {
   }
 
   // Deduplication Guard: Enforce strict deduplication window.
-  // Lifecycle/subscription templates get a 24-hour lock to completely eliminate duplicate storms across webhooks and reloads.
+  // Lifecycle/subscription templates get a 2-minute (120s) lock to eliminate duplicate storms across webhooks and reloads,
+  // while allowing legitimate re-subscriptions, plan switches, or retries after a few minutes or hours.
   // Transactional / appointment / OTP templates get standard 45-second lock.
   const isOtp = options.templateName.includes('otp');
   const isLifecycleTemplate = [
@@ -189,9 +190,11 @@ export async function sendWhatsAppTemplate(options: {
     'viitsa_clinic_sub_ren',
   ].includes(options.templateName);
 
-  const dedupKey = `${normalizedPhone}_${options.templateName}`;
+  const dedupKey = options.clinicId 
+    ? `${normalizedPhone}_${options.templateName}_${options.clinicId}` 
+    : `${normalizedPhone}_${options.templateName}`;
   const nowMs = Date.now();
-  const DEDUP_WINDOW_MS = isLifecycleTemplate ? (24 * 60 * 60 * 1000) : 45000;
+  const DEDUP_WINDOW_MS = isLifecycleTemplate ? (120 * 1000) : 45000;
 
   // Tier 1: Instant in-memory check (< 1ms)
   const memLast = recentDispatches.get(dedupKey);

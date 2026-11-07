@@ -1410,12 +1410,14 @@ export function SettingsScreen() {
               },
             };
 
+            const isClinicActive = activeClinic?.subscription_status === 'active' || activeClinic?.subscription_status === 'trial';
+
             const handleExecutePlanAction = (targetTier: string, targetCycle: 'monthly' | 'annual') => {
               const TIER_ORDER: Record<string, number> = { solo: 1, clinic: 2, multispecialty: 3, hospital: 4 };
               const currentPlanCode = ((activeClinic?.subscription_plan as string) || 'solo').toLowerCase();
               const currentBillingCycle = (((activeClinic as any)?.subscription_billing_cycle as string) || 'monthly').toLowerCase();
               
-              if (currentPlanCode === targetTier.toLowerCase() && currentBillingCycle === targetCycle.toLowerCase()) {
+              if (isClinicActive && currentPlanCode === targetTier.toLowerCase() && currentBillingCycle === targetCycle.toLowerCase()) {
                 return;
               }
 
@@ -1450,7 +1452,7 @@ export function SettingsScreen() {
             const currentRank = TIER_ORDER[currentPlanCode] || 1;
             const targetRank = TIER_ORDER[upgradeTier.toLowerCase()] || 1;
             const isDowngrade = targetRank < currentRank;
-            const isSamePlan = currentPlanCode === upgradeTier.toLowerCase() && currentBillingCycle === upgradeCycle.toLowerCase();
+            const isSamePlan = isClinicActive && currentPlanCode === upgradeTier.toLowerCase() && currentBillingCycle === upgradeCycle.toLowerCase();
 
             const planPrices: Record<string, { monthly: string; annual: string }> = {
               solo: { monthly: '₹2,999', annual: '₹29,990' },
@@ -1742,7 +1744,7 @@ export function SettingsScreen() {
                           ) : (
                             <>
                               <ArrowUpRight size={15} />
-                              <span>Upgrade to {upgradeTier.toUpperCase()} ({currentSelectedPriceStr})</span>
+                              <span>{activeClinic?.subscription_status === 'cancelled' || activeClinic?.subscription_status === 'deactivated' ? 'Reactivate' : 'Upgrade to'} {upgradeTier.toUpperCase()} ({currentSelectedPriceStr})</span>
                             </>
                           )}
                         </button>

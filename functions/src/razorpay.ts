@@ -470,13 +470,18 @@ export const razorpayWebhook = onRequest(async (req, res) => {
         : null;
 
       if (clinicId) {
-        // Guard against reviving a cancelled subscription:
-        // If user already cancelled/revoked autopay, an incoming authenticated/activated webhook MUST NOT revert status back to trial/active
+        // Guard against delayed webhook retries reviving an already-cancelled subscription:
+        // If the incoming event is for the SAME subscription ID that is already cancelled or deactivated on this clinic,
+        // do not let delayed retries revert the clinic back to trial/active.
+        // BUT if this is a NEW subscription (different ID), the clinic admin has re-subscribed: allow it to activate!
         const existingClinicDoc = await getDb().collection("clinics").doc(clinicId).get();
         const existingClinicData = existingClinicDoc.data() || {};
-        if (existingClinicData.subscription_status === "cancelled" || existingClinicData.subscription_status === "deactivated") {
-          console.warn(`[RazorpayWebhook] Clinic ${clinicId} is currently '${existingClinicData.subscription_status}'. Suppressing re-activation from event ${event.event}.`);
-          res.status(200).send("OK: clinic already cancelled");
+        if (
+          existingClinicData.razorpay_subscription_id === sub.id &&
+          (existingClinicData.subscription_status === "cancelled" || existingClinicData.subscription_status === "deactivated")
+        ) {
+          console.warn(`[RazorpayWebhook] Subscription ${sub.id} on clinic ${clinicId} is already marked '${existingClinicData.subscription_status}'. Suppressing delayed retry.`);
+          res.status(200).send("OK: subscription already cancelled");
           return;
         }
         await getDb().collection("subscriptions").doc(sub.id).set({
@@ -500,6 +505,12 @@ export const razorpayWebhook = onRequest(async (req, res) => {
           subscription_billing_cycle: cycle,
           razorpay_subscription_id: sub.id,
           subscription_auto_renew: true,
+          cancel_at_period_end: false,
+          cancel_effective_date: null,
+          cancellation_reason: null,
+          cancellation_feedback: null,
+          subscription_cancelled_at: null,
+          subscription_deactivated_at: null,
           subscription_activated_at: new Date().toISOString(),
           subscription_updated_at: new Date().toISOString()
         };
@@ -906,45 +917,52 @@ export const razorpayWebhook = onRequest(async (req, res) => {
         });
         await batch.commit();
 
-        const nowIso = new Date().toISOString();
-        await getDb().collection("clinics").doc(clinicId).update({
-          subscription_status: isHalted ? "deactivated" : "cancelled",
-          subscription_cancelled_at: isHalted ? null : nowIso,
-          subscription_deactivated_at: isHalted ? nowIso : null,
-          last_sub_cancelled_wa_sent_at: isHalted ? null : nowIso,
-        });
+        const clinicDoc = await getDb().collection("clinics").doc(clinicId).get();
+        const clinicData = clinicDoc.data() || {};
 
-        // Dispatch WhatsApp template
-        try {
-          const clinicDoc = await getDb().collection("clinics").doc(clinicId).get();
-          const clinicData = clinicDoc.data() || {};
-          const cPhone = clinicData.phone || clinicData.contact_phone || sub.customer_details?.contact;
-          if (cPhone) {
-            if (isHalted) {
-              await sendClinicSubDeactivated({
-                to: cPhone,
-                adminName: clinicData.owner_name || 'Doctor',
-                clinicName: clinicData.name || 'Clinic',
-                planName: `${(clinicData.subscription_plan || 'Clinic').toUpperCase()} Plan`,
-                deactivationDate: new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }),
-                status: 'Deactivated - Overdue',
-                supportPhone: '+91 73961 11081',
-                clinicId,
-              });
-            } else {
-              await sendClinicSubCancelled({
-                to: cPhone,
-                adminName: clinicData.owner_name || 'Doctor',
-                clinicName: clinicData.name || 'Clinic',
-                cancelledPlan: `${(clinicData.subscription_plan || 'Clinic').toUpperCase()} Plan`,
-                effectiveDate: new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }),
-                supportPhone: '+91 73961 11081',
-                clinicId,
-              });
+        // Only mark clinic as cancelled/deactivated if this webhook is for the clinic's CURRENT subscription.
+        // Prevents delayed cancellation webhooks for an older subscription from cancelling a newly re-subscribed plan!
+        if (!clinicData.razorpay_subscription_id || clinicData.razorpay_subscription_id === sub.id) {
+          const nowIso = new Date().toISOString();
+          await getDb().collection("clinics").doc(clinicId).update({
+            subscription_status: isHalted ? "deactivated" : "cancelled",
+            subscription_cancelled_at: isHalted ? null : nowIso,
+            subscription_deactivated_at: isHalted ? nowIso : null,
+            last_sub_cancelled_wa_sent_at: isHalted ? null : nowIso,
+          });
+
+          // Dispatch WhatsApp template
+          try {
+            const cPhone = clinicData.phone || clinicData.contact_phone || sub.customer_details?.contact;
+            if (cPhone) {
+              if (isHalted) {
+                await sendClinicSubDeactivated({
+                  to: cPhone,
+                  adminName: clinicData.owner_name || 'Doctor',
+                  clinicName: clinicData.name || 'Clinic',
+                  planName: `${(clinicData.subscription_plan || 'Clinic').toUpperCase()} Plan`,
+                  deactivationDate: new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }),
+                  status: 'Deactivated - Overdue',
+                  supportPhone: '+91 73961 11081',
+                  clinicId,
+                });
+              } else {
+                await sendClinicSubCancelled({
+                  to: cPhone,
+                  adminName: clinicData.owner_name || 'Doctor',
+                  clinicName: clinicData.name || 'Clinic',
+                  cancelledPlan: `${(clinicData.subscription_plan || 'Clinic').toUpperCase()} Plan`,
+                  effectiveDate: new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }),
+                  supportPhone: '+91 73961 11081',
+                  clinicId,
+                });
+              }
             }
+          } catch (waErr) {
+            console.warn("Could not dispatch WhatsApp cancellation/deactivation template:", waErr);
           }
-        } catch (waErr) {
-          console.warn("Could not dispatch WhatsApp cancellation/deactivation template:", waErr);
+        } else {
+          console.log(`[RazorpayWebhook] Clinic ${clinicId} has already moved to newer subscription ${clinicData.razorpay_subscription_id}. Ignoring cancellation for old subscription ${sub.id}.`);
         }
       }
     } else if (event.event === "payment.failed") {

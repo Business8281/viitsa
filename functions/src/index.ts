@@ -14,8 +14,8 @@ if (!admin.apps.length) {
 
 setGlobalOptions({
   region: "asia-south1",
-  memory: "512MiB",
-  cpu: 1,
+  memory: "256MiB",
+  cpu: "gcf_gen1",
   maxInstances: 5,
 });
 
@@ -1040,8 +1040,6 @@ export const onClinicVerificationStatusChanged = onDocumentUpdated(
 export const onClinicSubscriptionStatusChanged = onDocumentUpdated(
   {
     document: "clinics/{clinicId}",
-    region: "asia-south1",
-    memory: "512MiB",
   },
   async (event) => {
     const beforeData = event.data?.before.data();
@@ -1082,7 +1080,7 @@ export const onClinicSubscriptionStatusChanged = onDocumentUpdated(
       (afterStatus === 'trial' && Boolean(afterData.last_payment_id) && afterData.last_payment_id !== beforeData.last_payment_id)
     );
 
-    const DEDUP_COOLDOWN_MS = 24 * 60 * 60 * 1000; // 24-hour lock across subscription lifecycle events
+    const DEDUP_COOLDOWN_MS = 2 * 60 * 1000; // 2-minute cooldown across rapid database triggers
 
     if (isNewTrialActivation) {
       const lastSent = afterData.last_trial_wa_sent_at ? new Date(afterData.last_trial_wa_sent_at).getTime() : 0;
@@ -1101,12 +1099,12 @@ export const onClinicSubscriptionStatusChanged = onDocumentUpdated(
         });
         await event.data?.after.ref.update({ last_trial_wa_sent_at: new Date().toISOString() }).catch(() => {});
       } else {
-        console.log(`[onClinicSubscription] Suppressed duplicate trial activation WhatsApp; already sent within 6h cooldown.`);
+        console.log(`[onClinicSubscription] Suppressed duplicate trial activation WhatsApp; already sent within 2m cooldown.`);
       }
     }
 
     // 2. Paid Subscription Activated (status became 'active')
-    else if (afterStatus === 'active' && beforeStatus !== 'active' && beforeStatus !== 'trial') {
+    else if (afterStatus === 'active' && beforeStatus !== 'active') {
       const lastSent = afterData.last_sub_wa_sent_at ? new Date(afterData.last_sub_wa_sent_at).getTime() : 0;
       if (now - lastSent > DEDUP_COOLDOWN_MS) {
         console.log(`[onClinicSubscription] Dispatching viitsa_clinic_sub_activated to ${clinicPhone}`);
@@ -1130,7 +1128,7 @@ export const onClinicSubscriptionStatusChanged = onDocumentUpdated(
         });
         await event.data?.after.ref.update({ last_sub_wa_sent_at: new Date().toISOString() }).catch(() => {});
       } else {
-        console.log(`[onClinicSubscription] Suppressed duplicate subscription activation WhatsApp; already sent within 6h cooldown.`);
+        console.log(`[onClinicSubscription] Suppressed duplicate subscription activation WhatsApp; already sent within 2m cooldown.`);
       }
     }
 

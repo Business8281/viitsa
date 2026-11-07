@@ -234,13 +234,13 @@ export function ClinicSubscriptionSetupPage() {
       ).replace(/\D/g, '').slice(-10);
 
       const nowMs = Date.now();
-      const twentyFourHoursMs = 24 * 60 * 60 * 1000;
+      const cooldownMs = 2 * 60 * 1000; // 2-minute deduplication cooldown
       const lastTrialWa = (clinic as any)?.last_trial_wa_sent_at ? new Date((clinic as any).last_trial_wa_sent_at).getTime() : 0;
       const lastSubWa = (clinic as any)?.last_sub_wa_sent_at ? new Date((clinic as any).last_sub_wa_sent_at).getTime() : 0;
 
       if (targetPhone && targetPhone.length === 10) {
         try {
-          if (isTrial && (nowMs - lastTrialWa > twentyFourHoursMs)) {
+          if (isTrial && (nowMs - lastTrialWa > cooldownMs)) {
             const waRes = await sendWhatsAppClinicTrialActivated({
               to: targetPhone,
               clinicId: clinic.clinic_id,
@@ -255,7 +255,7 @@ export function ClinicSubscriptionSetupPage() {
                 last_trial_wa_sent_at: new Date().toISOString()
               }).catch(() => {});
             }
-          } else if (!isTrial && (nowMs - lastSubWa > twentyFourHoursMs)) {
+          } else if (!isTrial && (nowMs - lastSubWa > cooldownMs)) {
             const waRes = await sendWhatsAppClinicSubActivated({
               to: targetPhone,
               clinicId: clinic.clinic_id,
@@ -273,7 +273,7 @@ export function ClinicSubscriptionSetupPage() {
               }).catch(() => {});
             }
           } else {
-            console.log('[ClinicSubscriptionSetup] Skipping WhatsApp dispatch: cooldown active (< 24 hours).');
+            console.log('[ClinicSubscriptionSetup] Skipping WhatsApp dispatch: cooldown active (< 2 minutes).');
           }
         } catch (waErr) {
           console.warn('Could not dispatch WhatsApp subscription confirmation:', waErr);

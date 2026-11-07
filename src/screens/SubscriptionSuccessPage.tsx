@@ -105,9 +105,9 @@ export function SubscriptionSuccessPage() {
       try {
         setSaving(true);
 
-        // Guard 1: If subscription is currently cancelled or deactivated (e.g. user revoked UPI mandate), NEVER overwrite it back
-        if (clinic?.subscription_status === 'cancelled' || clinic?.subscription_status === 'deactivated') {
-          console.warn('[SubscriptionSuccess] Clinic subscription is already cancelled/deactivated. Suppressing re-activation.');
+        // Guard 1: If this payment ID was already processed and recorded on this clinic, skip duplicate activation & notifications
+        if (paymentId && clinic?.last_payment_id === paymentId) {
+          console.log('[SubscriptionSuccess] Payment ID already recorded on clinic doc. Suppressing duplicate activation.');
           setSaving(false);
           if (typeof window !== 'undefined' && window.history?.replaceState) {
             window.history.replaceState({}, document.title, window.location.pathname);
@@ -115,9 +115,9 @@ export function SubscriptionSuccessPage() {
           return;
         }
 
-        // Guard 2: If this payment ID was already processed and recorded on this clinic, skip duplicate activation & notifications
-        if (paymentId && clinic?.last_payment_id === paymentId) {
-          console.log('[SubscriptionSuccess] Payment ID already recorded on clinic doc. Suppressing duplicate activation.');
+        // Guard 2: If the clinic was cancelled/deactivated and NO valid payment ID is present in the URL, do not activate on accidental direct URL visits
+        if (!paymentId && (clinic?.subscription_status === 'cancelled' || clinic?.subscription_status === 'deactivated')) {
+          console.warn('[SubscriptionSuccess] Clinic is cancelled and no valid paymentId was supplied. Suppressing re-activation.');
           setSaving(false);
           if (typeof window !== 'undefined' && window.history?.replaceState) {
             window.history.replaceState({}, document.title, window.location.pathname);
@@ -268,13 +268,13 @@ export function SubscriptionSuccessPage() {
         ).replace(/\D/g, '').slice(-10);
 
         const nowMs = Date.now();
-        const twentyFourHoursMs = 24 * 60 * 60 * 1000;
+        const cooldownMs = 2 * 60 * 1000; // 2-minute deduplication cooldown
         const lastTrialWa = (clinic as any)?.last_trial_wa_sent_at ? new Date((clinic as any).last_trial_wa_sent_at).getTime() : 0;
         const lastSubWa = (clinic as any)?.last_sub_wa_sent_at ? new Date((clinic as any).last_sub_wa_sent_at).getTime() : 0;
 
         if (targetPhone && targetPhone.length === 10) {
           try {
-            if (isTrial && (nowMs - lastTrialWa > twentyFourHoursMs)) {
+            if (isTrial && (nowMs - lastTrialWa > cooldownMs)) {
               const waRes = await sendWhatsAppClinicTrialActivated({
                 to: targetPhone,
                 clinicId: targetClinicId,
@@ -289,7 +289,7 @@ export function SubscriptionSuccessPage() {
                   last_trial_wa_sent_at: new Date().toISOString()
                 }).catch(() => {});
               }
-            } else if (!isTrial && (nowMs - lastSubWa > twentyFourHoursMs)) {
+            } else if (!isTrial && (nowMs - lastSubWa > cooldownMs)) {
               const planPricing: Record<string, Record<string, number>> = {
                 solo: { monthly: 2999, annual: 29990 },
                 clinic: { monthly: 5999, annual: 59990 },
@@ -315,7 +315,7 @@ export function SubscriptionSuccessPage() {
                 }).catch(() => {});
               }
             } else {
-              console.log('[SubscriptionSuccess] Skipping WhatsApp dispatch: cooldown active (< 24 hours).');
+              console.log('[SubscriptionSuccess] Skipping WhatsApp dispatch: cooldown active (< 2 minutes).');
             }
           } catch (waErr) {
             console.warn('Could not send WhatsApp subscription activation notification:', waErr);
