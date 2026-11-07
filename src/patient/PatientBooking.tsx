@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef } from 'react';
 import { ChevronLeft, ChevronRight, Check, MessageCircle, Calendar, CalendarPlus, Search, MapPin, Star, Clock, Navigation, SlidersHorizontal, X, Brain, Building2, Stethoscope } from 'lucide-react';
 import { db } from '../lib/firebase';
-import { collection, query, where, getDocs, addDoc, doc, getDoc, updateDoc, orderBy, limit } from 'firebase/firestore';
+import { collection, query, where, getDocs, addDoc, doc, getDoc, updateDoc, setDoc, orderBy, limit } from 'firebase/firestore';
 import { usePatientAuth } from '../lib/patientAuth';
 import { sendInstantAppointmentEmail } from '../lib/emailService';
 import { fetchClinicDoctors } from '../lib/doctorService';
@@ -231,7 +231,8 @@ export function PatientBooking({ onTab, clinic: initialClinic, patientId, aiSumm
         return;
       }
       
-      const apptRef = await addDoc(collection(db, 'appointments'), {
+      const apptRef = doc(collection(db, 'appointments'));
+      await setDoc(apptRef, {
         clinic_id: clinic.clinic_id,
         patient_id: effectivePatientId,
         patient_phone: account?.phone || null,
@@ -249,13 +250,10 @@ export function PatientBooking({ onTab, clinic: initialClinic, patientId, aiSumm
         visit_type: visitType,
         online_booking: true,
         ai_summary: aiSummary ?? null,
-        created_at: nowIso,
-        updated_at: nowIso,
-      });
-      // also update the id to match firestore structure
-      await updateDoc(apptRef, { 
         appt_id: apptRef.id,
         appointment_id: apptRef.id,
+        created_at: nowIso,
+        updated_at: nowIso,
       });
 
       sendInstantAppointmentEmail(apptRef.id, 'appointment_confirmed');

@@ -7,7 +7,7 @@ import {
   PhoneCall, ShieldAlert, Sparkles, FileUp
 } from 'lucide-react';
 import { db, storage } from '../lib/firebase';
-import { collection, query, where, addDoc, updateDoc, deleteDoc, doc, onSnapshot } from 'firebase/firestore';
+import { collection, query, where, addDoc, setDoc, updateDoc, deleteDoc, doc, onSnapshot } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { usePatientAuth } from '../lib/patientAuth';
 import { useAuth } from '../lib/auth';
@@ -388,11 +388,12 @@ export function FamilyVault({ patientId: propsPatientId, onTab }: Props) {
         setMembers(prev => prev.map(m => m.id === editingMember.id ? { ...m, ...memberPayload } : m));
         setSuccessMsg(`Updated ${form.name.trim()} successfully!`);
       } else {
-        const docRef = await addDoc(collection(db, 'family_members'), {
+        const docRef = doc(collection(db, 'family_members'));
+        await setDoc(docRef, {
           ...memberPayload,
+          id: docRef.id,
           created_at: now,
         });
-        await updateDoc(docRef, { id: docRef.id });
         setMembers(prev => {
           if (prev.some(m => m.id === docRef.id)) return prev;
           return [{ id: docRef.id, ...memberPayload, created_at: now }, ...prev];

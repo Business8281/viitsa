@@ -111,9 +111,22 @@ export const onAppointmentUpdated = onDocumentUpdated(
     const finalPatientName = patientName || 'Patient';
     const clinicName = clinic.name || 'Clinic';
     const clinicPhone = clinic.phone || '+91 73961 11081';
+    const appointmentId = event.params.appointmentId;
 
     // Case A: Appointment Cancelled
     if (afterData.status === 'cancelled' && beforeData.status !== 'cancelled') {
+      const cancelLockRef = db.collection("whatsapp_dispatch_locks").doc(`appt_${appointmentId}_cancelled`);
+      try {
+        await cancelLockRef.create({
+          appointment_id: appointmentId,
+          dispatched_at_ms: Date.now(),
+          created_at: admin.firestore.FieldValue.serverTimestamp(),
+        });
+      } catch (lockErr) {
+        console.log(`[onAppointmentUpdated] Suppressed duplicate cancellation WhatsApp for appointment ${appointmentId}`);
+        return;
+      }
+
       console.log(`[onAppointmentUpdated] Sending WhatsApp cancellation to ${patientPhone}`);
       const cancelReason =
         afterData.cancellation_reason ||
@@ -140,6 +153,21 @@ export const onAppointmentUpdated = onDocumentUpdated(
     const timeChanged = beforeData.time_slot !== afterData.time_slot;
 
     if ((dateChanged || timeChanged) && afterData.status !== 'cancelled') {
+      const reschedKey = `appt_${appointmentId}_resched_${afterData.date}_${afterData.time_slot}`;
+      const reschedLockRef = db.collection("whatsapp_dispatch_locks").doc(reschedKey);
+      try {
+        await reschedLockRef.create({
+          appointment_id: appointmentId,
+          new_date: afterData.date,
+          new_time: afterData.time_slot,
+          dispatched_at_ms: Date.now(),
+          created_at: admin.firestore.FieldValue.serverTimestamp(),
+        });
+      } catch (lockErr) {
+        console.log(`[onAppointmentUpdated] Suppressed duplicate reschedule WhatsApp for appointment ${appointmentId}`);
+        return;
+      }
+
       console.log(`[onAppointmentUpdated] Sending WhatsApp reschedule to ${patientPhone}`);
       const tokenSlot = afterData.display_token || (afterData.token_number ? `Token ${afterData.token_number}` : 'Confirmed');
       const rescheduleReason =

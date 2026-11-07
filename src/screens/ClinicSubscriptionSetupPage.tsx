@@ -9,7 +9,7 @@ import { useAuth } from '../lib/auth';
 import { ViitsaLogo } from '../components/ViitsaLogo';
 import { RazorpaySubscriptionButton } from '../components/RazorpaySubscriptionButton';
 import { buildSubscriptionActivatedHtml } from '../lib/emailService';
-import { sendWhatsAppClinicTrialActivated, sendWhatsAppClinicSubActivated } from '../lib/whatsappClientService';
+// WhatsApp subscription notifications are dispatched by the backend onClinicSubscriptionStatusChanged trigger.
 
 export function ClinicSubscriptionSetupPage() {
   const { user, clinic } = useAuth();
@@ -18,20 +18,20 @@ export function ClinicSubscriptionSetupPage() {
   const invoiceId = searchParams.get('invoice');
   const mode = searchParams.get('mode');
   const isRetry = mode === 'retry' || mode === 'payment-failed' || clinic?.subscription_status === 'payment_failed' || clinic?.subscription_status === 'past_due' || clinic?.subscription_status === 'deactivated';
-  
+
   // Trial countdown info & validity (strict 30-day persistence)
   const trialEndsAtDate = clinic?.trial_ends_at ? new Date(clinic.trial_ends_at) : null;
   const isTrialPeriodStillRunning = Boolean(trialEndsAtDate && trialEndsAtDate.getTime() > Date.now());
-  const trialDaysRemaining = trialEndsAtDate 
+  const trialDaysRemaining = trialEndsAtDate
     ? Math.max(0, Math.ceil((trialEndsAtDate.getTime() - Date.now()) / (1000 * 60 * 60 * 24)))
     : 30;
-  const formattedTrialEnd = trialEndsAtDate 
+  const formattedTrialEnd = trialEndsAtDate
     ? trialEndsAtDate.toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })
     : '30 Days from activation';
 
   const hasActuallyCompletedTrial = Boolean(clinic?.trial_completed === true && !isTrialPeriodStillRunning);
   const isPaidActive = clinic?.subscription_status === 'active' || clinic?.subscription_status === 'free_plan';
-  
+
   // A clinic has an active trial ONLY if they have authorized their subscription mandate (trial_activated === true)
   // Merely being on the onboarding setup page does NOT mean trial is active yet!
   const isTrialActive = Boolean(
@@ -59,18 +59,16 @@ export function ClinicSubscriptionSetupPage() {
   useEffect(() => {
     if (!clinic?.clinic_id) return;
 
-    // Healing 1: Ensure active trial stays in 'trial' state throughout the 30 days
-    if (isTrialPeriodStillRunning && (clinic.trial_completed === true || clinic.subscription_status === 'active')) {
+    // Healing 1: Ensure active trial stays uncompleted throughout the 30 days (never revert paid active clinics!)
+    if (!isPaidActive && clinic.subscription_status === 'trial' && isTrialPeriodStillRunning && clinic.trial_completed === true) {
       updateDoc(doc(db, 'clinics', clinic.clinic_id), {
-        subscription_status: 'trial',
         trial_completed: false,
         trial_status: 'active_trial'
-      }).catch(() => {});
+      }).catch(() => { });
       if (user?.user_id) {
         updateDoc(doc(db, 'users', user.user_id), {
-          clinic_subscription_status: 'trial',
           trial_completed: false
-        }).catch(() => {});
+        }).catch(() => { });
       }
     }
 
@@ -84,7 +82,7 @@ export function ClinicSubscriptionSetupPage() {
           trial_activated: false,
           trial_started_at: null,
           trial_ends_at: null
-        }).catch(() => {});
+        }).catch(() => { });
       }
       if (user?.user_id && ((user as any).trial_used || (user as any).has_used_trial || (user as any).trial_activated)) {
         updateDoc(doc(db, 'users', user.user_id), {
@@ -92,7 +90,7 @@ export function ClinicSubscriptionSetupPage() {
           has_used_trial: false,
           trial_activated: false,
           trial_ends_at: null
-        }).catch(() => {});
+        }).catch(() => { });
       }
     }
   }, [clinic?.clinic_id, clinic?.subscription_status, clinic?.trial_completed, clinic?.trial_activated, clinic?.trial_used, clinic?.trial_ends_at, isTrialPeriodStillRunning, hasActuallyCompletedTrial, user?.user_id]);
@@ -105,8 +103,8 @@ export function ClinicSubscriptionSetupPage() {
     const activeTier = chosenTier || selectedTier;
     // Resilient trial detection: if payment response confirms trial, OR user was eligible for trial, OR monthly plan chosen while not already active
     const isTrial = Boolean(
-      paymentData?.is_trial || 
-      isTrialEligible || 
+      paymentData?.is_trial ||
+      isTrialEligible ||
       (selectedCycle === 'monthly' && clinic?.subscription_status !== 'active' && clinic?.trial_completed !== true)
     );
     const trialEndsAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
@@ -364,7 +362,7 @@ export function ClinicSubscriptionSetupPage() {
                 Manage Mandate & Billing
               </button>
             </div>
-            
+
             <div className="mt-6 pt-5 border-t border-slate-100">
               <button
                 type="button"
@@ -433,8 +431,8 @@ export function ClinicSubscriptionSetupPage() {
                   ? isRetry
                     ? 'Select your tier below to update your payment method and complete your pending subscription renewal.'
                     : isTrialEligible
-                    ? 'Your clinic is approved! Choose your preferred plan below. All plans include a 30-Day Free Trial with automatic renewal via UPI Autopay / Card. Cancel anytime before Day 30 at ₹0.'
-                    : 'Select your subscription tier below to activate or manage your recurring subscription.'
+                      ? 'Your clinic is approved! Choose your preferred plan below. All plans include a 30-Day Free Trial with automatic renewal via UPI Autopay / Card. Cancel anytime before Day 30 at ₹0.'
+                      : 'Select your subscription tier below to activate or manage your recurring subscription.'
                   : 'Your clinic subscription is inactive. Please wait for your administrator to renew it.'}
               </p>
 
@@ -444,8 +442,8 @@ export function ClinicSubscriptionSetupPage() {
                   type="button"
                   onClick={() => setSelectedCycle('monthly')}
                   className={`px-4 py-1.5 text-xs font-semibold rounded-lg transition-all ${selectedCycle === 'monthly'
-                      ? 'bg-white text-ink shadow-sm'
-                      : 'text-ink-subtle hover:text-ink'
+                    ? 'bg-white text-ink shadow-sm'
+                    : 'text-ink-subtle hover:text-ink'
                     }`}
                 >
                   Monthly Billing
@@ -454,8 +452,8 @@ export function ClinicSubscriptionSetupPage() {
                   type="button"
                   onClick={() => setSelectedCycle('annual')}
                   className={`px-4 py-1.5 text-xs font-semibold rounded-lg transition-all flex items-center gap-1.5 ${selectedCycle === 'annual'
-                      ? 'bg-primary text-white shadow-sm'
-                      : 'text-ink-subtle hover:text-ink'
+                    ? 'bg-primary text-white shadow-sm'
+                    : 'text-ink-subtle hover:text-ink'
                     }`}
                 >
                   <span>Annual Billing</span>
@@ -467,148 +465,148 @@ export function ClinicSubscriptionSetupPage() {
               </div>
             </div>
 
-        {/* Tier Cards Grid */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-          {[
-            {
-              id: 'solo' as const,
-              name: 'Solo Plan',
-              desc: 'Single-doctor practices and consultants.',
-              priceMonthly: '₹2,999',
-              priceAnnual: '₹29,990',
-              limits: ['1 Doctor included', '3 Staff seats', '1 Location', '300 AI Intakes / mo', '800 WhatsApp / mo', 'Unlimited document storage'],
-              planId: import.meta.env.VITE_RAZORPAY_PLAN_ID_SOLO || 'plan_solo_default'
-            },
-            {
-              id: 'clinic' as const,
-              name: 'Clinic Plan',
-              desc: 'Growing multi-doctor clinics with high volume.',
-              priceMonthly: '₹5,999',
-              priceAnnual: '₹59,990',
-              popular: true,
-              limits: ['Up to 3 Doctors', '6 Staff seats', '1 Location', '1,000 AI Intakes / mo', '2,500 WhatsApp / mo', 'Unlimited document storage'],
-              planId: import.meta.env.VITE_RAZORPAY_PLAN_ID_CLINIC || import.meta.env.VITE_RAZORPAY_PLAN_ID_PRO || 'plan_TkvpQ2LluCpPIu'
-            },
-            {
-              id: 'multispecialty' as const,
-              name: 'Multi-Specialty',
-              desc: 'Polyclinics and busy specialty centres.',
-              priceMonthly: '₹11,999',
-              priceAnnual: '₹1,19,990',
-              limits: ['Up to 8 Doctors', '20 Staff seats', '1 Location', '2,000 AI Intakes / mo', '5,000 WhatsApp / mo', 'Unlimited document storage'],
-              planId: import.meta.env.VITE_RAZORPAY_PLAN_ID_MULTI || 'plan_multi_default'
-            }
-          ].map((tier) => {
-            const isSelected = selectedTier === tier.id;
+            {/* Tier Cards Grid */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+              {[
+                {
+                  id: 'solo' as const,
+                  name: 'Solo Plan',
+                  desc: 'Single-doctor practices and consultants.',
+                  priceMonthly: '₹2,999',
+                  priceAnnual: '₹29,990',
+                  limits: ['1 Doctor included', '3 Staff seats', '1 Location', '300 AI Intakes / mo', '800 WhatsApp / mo', 'Unlimited document storage'],
+                  planId: import.meta.env.VITE_RAZORPAY_PLAN_ID_SOLO || 'plan_solo_default'
+                },
+                {
+                  id: 'clinic' as const,
+                  name: 'Clinic Plan',
+                  desc: 'Growing multi-doctor clinics with high volume.',
+                  priceMonthly: '₹5,999',
+                  priceAnnual: '₹59,990',
+                  popular: true,
+                  limits: ['Up to 3 Doctors', '6 Staff seats', '1 Location', '1,000 AI Intakes / mo', '2,500 WhatsApp / mo', 'Unlimited document storage'],
+                  planId: import.meta.env.VITE_RAZORPAY_PLAN_ID_CLINIC || import.meta.env.VITE_RAZORPAY_PLAN_ID_PRO || 'plan_TkvpQ2LluCpPIu'
+                },
+                {
+                  id: 'multispecialty' as const,
+                  name: 'Multi-Specialty',
+                  desc: 'Polyclinics and busy specialty centres.',
+                  priceMonthly: '₹11,999',
+                  priceAnnual: '₹1,19,990',
+                  limits: ['Up to 8 Doctors', '20 Staff seats', '1 Location', '2,000 AI Intakes / mo', '5,000 WhatsApp / mo', 'Unlimited document storage'],
+                  planId: import.meta.env.VITE_RAZORPAY_PLAN_ID_MULTI || 'plan_multi_default'
+                }
+              ].map((tier) => {
+                const isSelected = selectedTier === tier.id;
 
-            return (
-              <div
-                key={tier.id}
-                onClick={() => setSelectedTier(tier.id)}
-                className={`bg-white border rounded-2xl p-6 shadow-sm relative overflow-hidden flex flex-col justify-between transition-all ${isSelected
-                    ? 'border-primary ring-2 ring-primary/20 shadow-md'
-                    : 'border-black/5 hover:border-black/20'
-                  }`}
-              >
-                {tier.popular && (
-                  <div className="absolute top-0 right-0 bg-accent text-white text-[10px] font-bold uppercase tracking-wider px-3 py-1 rounded-bl-xl">
-                    Most Popular
-                  </div>
-                )}
-
-                <div>
-                  <div className="flex items-center gap-2 mb-2">
-                    <Crown size={18} className={tier.popular ? "text-accent" : "text-primary"} />
-                    <h3 className="text-lg font-bold text-ink">{tier.name}</h3>
-                  </div>
-                  <p className="text-ink-subtle text-xs mb-4">{tier.desc}</p>
-
-                  <div className="mb-4 pb-4 border-b border-black/5">
-                    <div className="flex items-baseline gap-1">
-                      <span className="text-3xl font-extrabold text-ink">
-                        {selectedCycle === 'annual' ? tier.priceAnnual : tier.priceMonthly}
-                      </span>
-                      <span className="text-ink-subtle text-xs font-semibold">
-                        {selectedCycle === 'annual' ? '/ year' : '/ month'}
-                      </span>
-                    </div>
-                    {isTrialEligible ? (
-                      <div className="mt-2 space-y-1">
-                        <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-800 text-[11px] font-bold">
-                          <Sparkles size={12} className="text-emerald-600 shrink-0" />
-                          <span>Includes 30-Day Free Trial</span>
-                        </div>
-                        <p className="text-[11px] text-emerald-700 font-medium">
-                          ₹0 charged today • Auto-debit of {selectedCycle === 'annual' ? tier.priceAnnual : tier.priceMonthly} starts on Day 31
-                        </p>
-                      </div>
-                    ) : (
-                      <div className="mt-2 space-y-1">
-                        <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-primary-50 border border-primary/20 text-primary text-[11px] font-bold">
-                          <CreditCard size={12} className="text-primary shrink-0" />
-                          <span>Instant Activation via UPI / Card</span>
-                        </div>
-                        <p className="text-[11px] text-ink-muted font-medium">
-                          Auto-debited {selectedCycle === 'annual' ? tier.priceAnnual : tier.priceMonthly} ({selectedCycle})
-                        </p>
+                return (
+                  <div
+                    key={tier.id}
+                    onClick={() => setSelectedTier(tier.id)}
+                    className={`bg-white border rounded-2xl p-6 shadow-sm relative overflow-hidden flex flex-col justify-between transition-all ${isSelected
+                      ? 'border-primary ring-2 ring-primary/20 shadow-md'
+                      : 'border-black/5 hover:border-black/20'
+                      }`}
+                  >
+                    {tier.popular && (
+                      <div className="absolute top-0 right-0 bg-accent text-white text-[10px] font-bold uppercase tracking-wider px-3 py-1 rounded-bl-xl">
+                        Most Popular
                       </div>
                     )}
+
+                    <div>
+                      <div className="flex items-center gap-2 mb-2">
+                        <Crown size={18} className={tier.popular ? "text-accent" : "text-primary"} />
+                        <h3 className="text-lg font-bold text-ink">{tier.name}</h3>
+                      </div>
+                      <p className="text-ink-subtle text-xs mb-4">{tier.desc}</p>
+
+                      <div className="mb-4 pb-4 border-b border-black/5">
+                        <div className="flex items-baseline gap-1">
+                          <span className="text-3xl font-extrabold text-ink">
+                            {selectedCycle === 'annual' ? tier.priceAnnual : tier.priceMonthly}
+                          </span>
+                          <span className="text-ink-subtle text-xs font-semibold">
+                            {selectedCycle === 'annual' ? '/ year' : '/ month'}
+                          </span>
+                        </div>
+                        {isTrialEligible ? (
+                          <div className="mt-2 space-y-1">
+                            <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-800 text-[11px] font-bold">
+                              <Sparkles size={12} className="text-emerald-600 shrink-0" />
+                              <span>Includes 30-Day Free Trial</span>
+                            </div>
+                            <p className="text-[11px] text-emerald-700 font-medium">
+                              ₹0 charged today • Auto-debit of {selectedCycle === 'annual' ? tier.priceAnnual : tier.priceMonthly} starts on Day 31
+                            </p>
+                          </div>
+                        ) : (
+                          <div className="mt-2 space-y-1">
+                            <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-primary-50 border border-primary/20 text-primary text-[11px] font-bold">
+                              <CreditCard size={12} className="text-primary shrink-0" />
+                              <span>Instant Activation via UPI / Card</span>
+                            </div>
+                            <p className="text-[11px] text-ink-muted font-medium">
+                              Auto-debited {selectedCycle === 'annual' ? tier.priceAnnual : tier.priceMonthly} ({selectedCycle})
+                            </p>
+                          </div>
+                        )}
+                      </div>
+
+                      <ul className="space-y-2.5 mb-6 text-xs">
+                        {tier.limits.map((lim, idx) => (
+                          <li key={idx} className="flex items-center gap-2 text-ink">
+                            <CheckCircle2 size={14} className="text-primary shrink-0" />
+                            <span>{lim}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+
+                    <div className="pt-2" onClick={(e) => { e.stopPropagation(); setSelectedTier(tier.id); }}>
+                      {user?.role === 'clinic_admin' ? (
+                        <RazorpaySubscriptionButton
+                          clinicId={clinic?.clinic_id || ''}
+                          tier={tier.id}
+                          cycle={selectedCycle}
+                          skipTrial={!isTrialEligible}
+                          prefillEmail={clinic?.email || user?.email}
+                          prefillName={clinic?.name || user?.name}
+                          prefillContact={clinic?.phone || user?.phone}
+                          buttonText={
+                            isTrialEligible
+                              ? "Start Free Trial of 30 Days"
+                              : isRetry
+                                ? "Update Payment Method & Retry"
+                                : "Pay & Activate Subscription"
+                          }
+                          className={`w-full py-3 px-3 rounded-xl text-xs font-bold transition-all shadow-sm flex items-center justify-center text-center cursor-pointer ${isSelected
+                            ? 'btn-primary shadow-md'
+                            : 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                            }`}
+                          onSuccess={(paymentData) => handleSuccess(paymentData, tier.id)}
+                        />
+                      ) : (
+                        <button
+                          type="button"
+                          disabled
+                          className="w-full py-2.5 rounded-xl text-xs font-bold bg-slate-100 text-slate-400 cursor-not-allowed"
+                        >
+                          Admin Access Required
+                        </button>
+                      )}
+                    </div>
                   </div>
+                );
+              })}
+            </div>
 
-                  <ul className="space-y-2.5 mb-6 text-xs">
-                    {tier.limits.map((lim, idx) => (
-                      <li key={idx} className="flex items-center gap-2 text-ink">
-                        <CheckCircle2 size={14} className="text-primary shrink-0" />
-                        <span>{lim}</span>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-
-                <div className="pt-2" onClick={(e) => { e.stopPropagation(); setSelectedTier(tier.id); }}>
-                  {user?.role === 'clinic_admin' ? (
-                    <RazorpaySubscriptionButton
-                      clinicId={clinic?.clinic_id || ''}
-                      tier={tier.id}
-                      cycle={selectedCycle}
-                      skipTrial={!isTrialEligible}
-                      prefillEmail={clinic?.email || user?.email}
-                      prefillName={clinic?.name || user?.name}
-                      prefillContact={clinic?.phone || user?.phone}
-                      buttonText={
-                        isTrialEligible
-                          ? "Start Free Trial of 30 Days"
-                          : isRetry
-                          ? "Update Payment Method & Retry"
-                          : "Pay & Activate Subscription"
-                      }
-                      className={`w-full py-3 px-3 rounded-xl text-xs font-bold transition-all shadow-sm flex items-center justify-center text-center cursor-pointer ${isSelected
-                          ? 'btn-primary shadow-md'
-                          : 'bg-emerald-600 hover:bg-emerald-700 text-white'
-                        }`}
-                      onSuccess={(paymentData) => handleSuccess(paymentData, tier.id)}
-                    />
-                  ) : (
-                    <button
-                      type="button"
-                      disabled
-                      className="w-full py-2.5 rounded-xl text-xs font-bold bg-slate-100 text-slate-400 cursor-not-allowed"
-                    >
-                      Admin Access Required
-                    </button>
-                  )}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-
-        {/* Security & Reassurance note below the 3 cards */}
-        <p className="text-center text-xs text-ink-subtle">
-          🔒 Secured by Razorpay Subscriptions • 30-Day Free Trial (₹0 charged today) • Auto-debits chosen plan on Day 31 • Cancel anytime before Day 30 at zero charge
-        </p>
-      </>
-    )}
+            {/* Security & Reassurance note below the 3 cards */}
+            <p className="text-center text-xs text-ink-subtle">
+              🔒 Secured by Razorpay Subscriptions • 30-Day Free Trial (₹0 charged today) • Auto-debits chosen plan on Day 31 • Cancel anytime before Day 30 at zero charge
+            </p>
+          </>
+        )}
 
         {user?.role !== 'clinic_admin' && (
           <div className="max-w-md mx-auto mt-6 bg-red-50 text-red-600 p-4 rounded-xl text-center text-sm font-medium border border-red-100">

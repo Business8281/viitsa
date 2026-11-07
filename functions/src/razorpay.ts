@@ -6,7 +6,6 @@ import * as nodemailer from "nodemailer";
 import PDFDocument from "pdfkit";
 import { generateSubscriptionInvoicePdf } from "./invoicePdf";
 import {
-  sendClinicSubActivated,
   sendClinicPaymentSuccess,
   sendClinicPaymentFailed,
   sendClinicSubCancelled,
@@ -442,20 +441,18 @@ export const razorpayWebhook = onRequest(async (req, res) => {
 
   try {
     const eventRef = getDb().collection("processed_webhook_events").doc(eventKey);
-    const eventSnap = await eventRef.get();
-    if (eventSnap.exists) {
+    try {
+      await eventRef.create({
+        event: event.event,
+        entity_id: entityId,
+        created_at: new Date().toISOString(),
+        raw_created_at: event.created_at || null,
+      });
+    } catch (createErr) {
       console.log(`[RazorpayWebhook] Idempotency: Webhook event '${eventKey}' was already processed. Acknowledging immediately with 200 OK.`);
       res.status(200).send("OK: already processed");
       return;
     }
-
-    // Mark event as processed immediately to lock out concurrent / retried requests
-    await eventRef.set({
-      event: event.event,
-      entity_id: entityId,
-      created_at: new Date().toISOString(),
-      raw_created_at: event.created_at || null,
-    });
 
     if (event.event === "subscription.authenticated" || event.event === "subscription.activated") {
       const sub = event.payload.subscription.entity;
@@ -721,6 +718,11 @@ export const razorpayWebhook = onRequest(async (req, res) => {
             amount: payment?.amount ? payment.amount / 100 : null
           });
 
+          // Check if clinic was already active prior to this charge
+          const prevClinicDoc = await getDb().collection("clinics").doc(clinicId).get();
+          const prevClinicData = prevClinicDoc.data() || {};
+          const wasAlreadyActive = prevClinicData.subscription_status === 'active';
+
           await getDb().collection("clinics").doc(clinicId).update({
             subscription_status: "active",
             subscription_plan: tier,
@@ -829,7 +831,11 @@ export const razorpayWebhook = onRequest(async (req, res) => {
                 cPhone = uSnap.data()?.phone;
               }
             }
-            if (cPhone) {
+            // If the clinic was transitioning from trial/deactivated to active, onClinicSubscriptionStatusChanged
+            // already canonically dispatches viitsa_clinic_sub_activated.
+            // Only send standalone payment success receipt if clinic was already active (routine renewal charge),
+            // preventing the clinic admin from receiving 2 messages at once!
+            if (wasAlreadyActive && cPhone) {
               const planPricing: Record<string, Record<string, number>> = {
                 solo: { monthly: 2999, annual: 29990 },
                 clinic: { monthly: 5999, annual: 59990 },
@@ -877,7 +883,6 @@ export const razorpayWebhook = onRequest(async (req, res) => {
             subscription_status: isHalted ? "deactivated" : "cancelled",
             subscription_cancelled_at: isHalted ? null : nowIso,
             subscription_deactivated_at: isHalted ? nowIso : null,
-            last_sub_cancelled_wa_sent_at: isHalted ? null : nowIso,
           });
 
           // WhatsApp cancellation/deactivation is canonically dispatched by onClinicSubscriptionStatusChanged trigger
@@ -1065,44 +1070,9 @@ export const razorpayWebhook = onRequest(async (req, res) => {
           }
         }
 
-        // Dispatch WhatsApp notification to clinic
-        try {
-          const clinicDoc = await getDb().collection("clinics").doc(clinicId).get();
-          const clinicData = clinicDoc.data() || {};
-          let cPhone = clinicData.phone || clinicData.contact_phone || plink?.customer?.contact || payment?.contact;
-          if (!cPhone && clinicUsers.docs.length > 0) {
-            cPhone = clinicUsers.docs[0].data()?.phone;
-          }
-          if (!cPhone && (clinicData.owner_user_id || clinicData.admin_user_id)) {
-            const uSnap = await getDb().collection("users").doc(clinicData.owner_user_id || clinicData.admin_user_id).get();
-            if (uSnap.exists) {
-              cPhone = uSnap.data()?.phone;
-            }
-          }
-          if (cPhone) {
-            const planPricing: Record<string, Record<string, number>> = {
-              solo: { monthly: 2999, annual: 29990 },
-              clinic: { monthly: 5999, annual: 59990 },
-              multispecialty: { monthly: 11999, annual: 119990 },
-            };
-            const paidAmt = payment?.amount ? (payment.amount / 100) : (plink?.amount ? plink.amount / 100 : (planPricing[tier]?.[cycle] || 5999));
-            const durationDays = cycle === 'annual' ? 365 : 30;
-
-            await sendClinicSubActivated({
-              to: cPhone,
-              adminName: clinicData.owner_name || plink?.customer?.name || 'Doctor',
-              clinicName: clinicData.name || 'Clinic',
-              planName: `${tier.toUpperCase()} Plan`,
-              billingCycle: cycle.toUpperCase(),
-              amountPaid: paidAmt,
-              nextRenewalDate: new Date(Date.now() + durationDays * 86400000).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }),
-              supportPhone: '+91 73961 11081',
-              clinicId,
-            });
-          }
-        } catch (waErr) {
-          console.warn("Could not dispatch WhatsApp payment link confirmation:", waErr);
-        }
+        // WhatsApp lifecycle notification is canonically handled by onClinicSubscriptionStatusChanged
+        // trigger upon Firestore clinic subscription_status update to 'active'.
+        console.log(`[RazorpayWebhook] Clinic ${clinicId} subscription updated to 'active' via payment link. WhatsApp notification canonically dispatched by onClinicSubscriptionStatusChanged.`);
       }
     } else if (event.event === "invoice.paid") {
       const invoice = event.payload.invoice.entity;

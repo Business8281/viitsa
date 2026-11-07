@@ -2142,7 +2142,8 @@ function BookingModal({ open, onClose, onSaved, patients, doctors, clinicId, def
       const docName = selectedDoc?.name || (currentUser?.name ? currentUser.name : 'Doctor');
       const cleanDoc = docName.replace(/^(Dr\.?|Doctor)\s+/i, '').trim();
 
-      const apptRef = await addDoc(collection(db, 'appointments'), {
+      const apptRef = doc(collection(db, 'appointments'));
+      await setDoc(apptRef, {
         clinic_id: clinicId,
         patient_id: patientId,
         patient_phone: patObj?.phone || null,
@@ -2159,9 +2160,10 @@ function BookingModal({ open, onClose, onSaved, patients, doctors, clinicId, def
         display_token: 'MN-' + String(nextToken).padStart(3, '0'),
         booked_via: 'manual',
         triage_level: 'normal',
+        appt_id: apptRef.id,
+        appointment_id: apptRef.id,
         created_at: serverTimestamp()
       });
-      await updateDoc(apptRef, { appt_id: apptRef.id, appointment_id: apptRef.id });
       sendInstantAppointmentEmail(apptRef.id, 'appointment_confirmed');
 
       toast('Appointment booked.', 'success');
@@ -2516,7 +2518,8 @@ function WalkInModal({ open, onClose, onSaved, patients, clinicId, doctors, curr
       const docName = selectedDoc?.name || (currentUser?.name ? currentUser.name : 'Doctor');
       const cleanDoc = docName.replace(/^(Dr\.?|Doctor)\s+/i, '').trim();
 
-      const apptRef = await addDoc(collection(db, 'appointments'), {
+      const apptRef = doc(collection(db, 'appointments'));
+      await setDoc(apptRef, {
         clinic_id: clinicId,
         patient_id: finalPatientId,
         patient_phone: patientPhone.trim(),
@@ -2541,9 +2544,10 @@ function WalkInModal({ open, onClose, onSaved, patients, clinicId, doctors, curr
         display_token: 'WN-' + String(nextToken).padStart(3, '0'),
         booked_via: 'walk-in',
         triage_level: 'normal',
+        appt_id: apptRef.id,
+        appointment_id: apptRef.id,
         created_at: new Date().toISOString(),
       });
-      await updateDoc(apptRef, { appt_id: apptRef.id, appointment_id: apptRef.id });
       sendInstantAppointmentEmail(apptRef.id, 'appointment_confirmed');
 
       toast(`Walk-in added to queue for Dr. ${cleanDoc || 'Doctor'}!`, 'success');

@@ -714,6 +714,25 @@ export const onAppointmentCreated = onDocumentCreated(
     if (!admin.apps.length) admin.initializeApp();
     const db = admin.firestore();
 
+    const apptId = event.params.appointmentId;
+    if (data.whatsapp_confirmed_sent_at) {
+      console.log(`[onAppointmentCreated] Suppressed duplicate confirmation WhatsApp for appointment ${apptId} (already flagged)`);
+      return;
+    }
+
+    // Distributed idempotency lock per appointment ID (Atomic create prevents concurrent duplicate execution)
+    const apptLockRef = db.collection("whatsapp_dispatch_locks").doc(`appt_${apptId}_confirm`);
+    try {
+      await apptLockRef.create({
+        appointment_id: apptId,
+        dispatched_at_ms: Date.now(),
+        created_at: admin.firestore.FieldValue.serverTimestamp(),
+      });
+    } catch (lockErr) {
+      console.log(`[onAppointmentCreated] Suppressed duplicate confirmation WhatsApp for appointment ${apptId} (lock already acquired)`);
+      return;
+    }
+
     // 1. Fetch clinic
     const clinicDoc = await db.collection("clinics").doc(clinicId).get();
     const clinic = clinicDoc.data() || {};
@@ -830,6 +849,24 @@ export const onLabReportCreated = onDocumentCreated(
 
     if (!admin.apps.length) admin.initializeApp();
     const db = admin.firestore();
+
+    const reportId = event.params.reportId;
+    if (data.whatsapp_sent_at) {
+      console.log(`[onLabReportCreated] Suppressed duplicate lab report WhatsApp for report ${reportId} (already flagged)`);
+      return;
+    }
+
+    const labLockRef = db.collection("whatsapp_dispatch_locks").doc(`lab_${reportId}_ready`);
+    try {
+      await labLockRef.create({
+        report_id: reportId,
+        dispatched_at_ms: Date.now(),
+        created_at: admin.firestore.FieldValue.serverTimestamp(),
+      });
+    } catch (lockErr) {
+      console.log(`[onLabReportCreated] Suppressed duplicate lab report WhatsApp for report ${reportId} (lock already acquired)`);
+      return;
+    }
 
     // 1. Fetch clinic
     const clinicDoc = await db.collection("clinics").doc(clinicId).get();
@@ -985,6 +1022,18 @@ export const onClinicVerificationStatusChanged = onDocumentUpdated(
 
     // 1. Clinic submitted documents -> pending approval confirmation
     if (afterData.documents_uploaded === true && beforeData.documents_uploaded !== true) {
+      const pendingLockRef = admin.firestore().collection("whatsapp_dispatch_locks").doc(`clinic_pending_${clinicId}`);
+      try {
+        await pendingLockRef.create({
+          clinic_id: clinicId,
+          dispatched_at_ms: Date.now(),
+          created_at: admin.firestore.FieldValue.serverTimestamp(),
+        });
+      } catch (lockErr) {
+        console.log(`[onClinicVerification] Suppressed duplicate pending approval notice for clinic ${clinicId}`);
+        return;
+      }
+
       console.log(`[onClinicVerification] Sending WhatsApp pending approval notice to ${clinicPhone}`);
       await sendClinicPendingApproval({
         to: clinicPhone,
@@ -997,6 +1046,20 @@ export const onClinicVerificationStatusChanged = onDocumentUpdated(
     }
 
     if (beforeStatus === afterStatus) return;
+
+    // Distributed idempotency lock for clinic verification decisions
+    const verifLockRef = admin.firestore().collection("whatsapp_dispatch_locks").doc(`clinic_verif_${clinicId}_${afterStatus}`);
+    try {
+      await verifLockRef.create({
+        clinic_id: clinicId,
+        status: afterStatus,
+        dispatched_at_ms: Date.now(),
+        created_at: admin.firestore.FieldValue.serverTimestamp(),
+      });
+    } catch (lockErr) {
+      console.log(`[onClinicVerification] Suppressed duplicate verification notice for clinic ${clinicId} (${afterStatus})`);
+      return;
+    }
 
     // 2. Clinic approved
     if (afterStatus === 'verified' || afterStatus === 'approved') {
@@ -1050,14 +1113,26 @@ export const onClinicSubscriptionStatusChanged = onDocumentUpdated(
     const beforeStatus = beforeData.subscription_status;
     const afterStatus = afterData.subscription_status;
 
-    // Detect if this is a genuine new trial activation (status change OR newly authenticated mandate)
+    // Detect if this is a genuine new trial activation (status became trial OR trial mandate newly authorized)
     const isNewTrialActivation = (
       (afterStatus === 'trial' && beforeStatus !== 'trial') ||
-      (afterStatus === 'trial' && Boolean(afterData.trial_activated) && !Boolean(beforeData.trial_activated)) ||
-      (afterStatus === 'trial' && Boolean(afterData.last_payment_id) && afterData.last_payment_id !== beforeData.last_payment_id)
+      (afterStatus === 'trial' && Boolean(afterData.trial_activated) && !Boolean(beforeData.trial_activated))
     );
 
     if (beforeStatus === afterStatus && !isNewTrialActivation) return;
+
+    // Skip WhatsApp if this was an admin override (AdminLiveSubscriptions already dispatches admin-specific template)
+    const lastAdminOverrideAt = afterData.last_admin_override_at ? new Date(afterData.last_admin_override_at).getTime() : 0;
+    const isAdminOverride = (Date.now() - lastAdminOverrideAt) < (2 * 60 * 1000);
+
+    // Skip WhatsApp if this was a scheduled plan change resolving (WhatsApp was already sent when user scheduled the change)
+    const lastScheduleResolvedAt = afterData.last_schedule_resolved_at ? new Date(afterData.last_schedule_resolved_at).getTime() : 0;
+    const isScheduleResolution = (Date.now() - lastScheduleResolvedAt) < (2 * 60 * 1000);
+
+    if ((isAdminOverride || isScheduleResolution) && !isNewTrialActivation) {
+      console.log(`[onClinicSubscription] Skipping generic WhatsApp — ${isAdminOverride ? 'admin override' : 'scheduled plan change resolution'} already handled.`);
+      return;
+    }
 
     let clinicPhone = afterData.phone || afterData.contact_phone;
     if (!clinicPhone && (afterData.owner_user_id || afterData.admin_user_id)) {
@@ -1068,7 +1143,7 @@ export const onClinicSubscriptionStatusChanged = onDocumentUpdated(
           clinicPhone = uSnap.data()?.phone;
         }
       } catch (uErr) {
-        console.warn('Fallback read user phone warning in onClinicVerificationStatusChanged:', uErr);
+        console.warn('Fallback read user phone warning in onClinicSubscriptionStatusChanged:', uErr);
       }
     }
     if (!clinicPhone) return;
@@ -1080,77 +1155,76 @@ export const onClinicSubscriptionStatusChanged = onDocumentUpdated(
     const cycle = afterData.subscription_billing_cycle || 'monthly';
     const now = Date.now();
 
-    const DEDUP_COOLDOWN_MS = 2 * 60 * 1000; // 2-minute cooldown across rapid database triggers
+    // Distributed idempotency lock per subscription status change event
+    const subLockKey = `clinic_sub_${clinicId}_${afterStatus}_${isNewTrialActivation ? 'trial_init' : (afterData.subscription_activated_at || '')}`;
+    const subLockRef = admin.firestore().collection("whatsapp_dispatch_locks").doc(subLockKey);
+    try {
+      await subLockRef.create({
+        clinic_id: clinicId,
+        status: afterStatus,
+        dispatched_at_ms: now,
+        created_at: admin.firestore.FieldValue.serverTimestamp(),
+      });
+    } catch (lockErr) {
+      console.log(`[onClinicSubscription] Suppressed duplicate subscription WhatsApp for clinic ${clinicId} (${afterStatus})`);
+      return;
+    }
 
-    // 1. Trial Activated (status became 'trial' OR trial mandate was newly activated / authenticated)
+    // 1. Trial Activated (status became 'trial' OR trial mandate was newly activated)
     if (isNewTrialActivation) {
-      const lastSent = afterData.last_trial_wa_sent_at ? new Date(afterData.last_trial_wa_sent_at).getTime() : 0;
-      if (now - lastSent > DEDUP_COOLDOWN_MS) {
-        console.log(`[onClinicSubscription] Dispatching viitsa_clinic_trial_activated to ${clinicPhone}`);
-        await sendClinicTrialActivated({
-          to: clinicPhone,
-          adminName,
-          clinicName,
-          planTier: `${tier.toUpperCase()} Plan`,
-          trialValidUntil: afterData.trial_ends_at 
-            ? formatDisplayDate(afterData.trial_ends_at) 
-            : formatDisplayDate(new Date(now + 30 * 86400000)),
-          supportPhone: '+91 73961 11081',
-          clinicId,
-        });
-        await event.data?.after.ref.update({ last_trial_wa_sent_at: new Date().toISOString() }).catch(() => {});
-      } else {
-        console.log(`[onClinicSubscription] Suppressed duplicate trial activation WhatsApp; already sent within 2m cooldown.`);
-      }
+      console.log(`[onClinicSubscription] Dispatching viitsa_clinic_trial_activated to ${clinicPhone}`);
+      await sendClinicTrialActivated({
+        to: clinicPhone,
+        adminName,
+        clinicName,
+        planTier: `${tier.toUpperCase()} Plan`,
+        trialValidUntil: afterData.trial_ends_at 
+          ? formatDisplayDate(afterData.trial_ends_at) 
+          : formatDisplayDate(new Date(now + 30 * 86400000)),
+        supportPhone: '+91 73961 11081',
+        clinicId,
+      });
     }
 
     // 2. Paid Subscription Activated (status became 'active')
     else if (afterStatus === 'active' && beforeStatus !== 'active') {
-      const lastSent = afterData.last_sub_wa_sent_at ? new Date(afterData.last_sub_wa_sent_at).getTime() : 0;
-      if (now - lastSent > DEDUP_COOLDOWN_MS) {
-        console.log(`[onClinicSubscription] Dispatching viitsa_clinic_sub_activated to ${clinicPhone}`);
-        const planPricing: Record<string, Record<string, number>> = {
-          solo: { monthly: 2999, annual: 29990 },
-          clinic: { monthly: 5999, annual: 59990 },
-          multispecialty: { monthly: 11999, annual: 119990 },
-        };
-        const planAmount = planPricing[tier]?.[cycle] || (tier === 'multispecialty' ? 11999 : tier === 'clinic' ? 5999 : 2999);
-        const durationDays = cycle === 'annual' ? 365 : 30;
-        await sendClinicSubActivated({
-          to: clinicPhone,
-          adminName,
-          clinicName,
-          planName: `${tier.toUpperCase()} Plan`,
-          billingCycle: cycle.toUpperCase(),
-          amountPaid: planAmount,
-          nextRenewalDate: formatDisplayDate(new Date(now + durationDays * 86400000)),
-          supportPhone: '+91 73961 11081',
-          clinicId,
-        });
-        await event.data?.after.ref.update({ last_sub_wa_sent_at: new Date().toISOString() }).catch(() => {});
-      } else {
-        console.log(`[onClinicSubscription] Suppressed duplicate subscription activation WhatsApp; already sent within 2m cooldown.`);
-      }
+      console.log(`[onClinicSubscription] Dispatching viitsa_clinic_sub_activated to ${clinicPhone}`);
+      const planPricing: Record<string, Record<string, number>> = {
+        solo: { monthly: 2999, annual: 29990 },
+        clinic: { monthly: 5999, annual: 59990 },
+        multispecialty: { monthly: 11999, annual: 119990 },
+      };
+      const planAmount = planPricing[tier]?.[cycle] || (tier === 'multispecialty' ? 11999 : tier === 'clinic' ? 5999 : 2999);
+      const durationDays = cycle === 'annual' ? 365 : 30;
+      await sendClinicSubActivated({
+        to: clinicPhone,
+        adminName,
+        clinicName,
+        planName: `${tier.toUpperCase()} Plan`,
+        billingCycle: cycle.toUpperCase(),
+        amountPaid: planAmount,
+        nextRenewalDate: formatDisplayDate(new Date(now + durationDays * 86400000)),
+        supportPhone: '+91 73961 11081',
+        clinicId,
+      });
     }
 
     // 3. Subscription Cancelled
     else if (afterStatus === 'cancelled' && beforeStatus !== 'cancelled') {
-      const lastCancelledSent = afterData.last_sub_cancelled_wa_sent_at ? new Date(afterData.last_sub_cancelled_wa_sent_at).getTime() : 0;
-      if (now - lastCancelledSent > DEDUP_COOLDOWN_MS) {
-        console.log(`[onClinicSubscription] Dispatching viitsa_clinic_sub_cancelled to ${clinicPhone}`);
-        await sendClinicSubCancelled({
-          to: clinicPhone,
-          adminName,
-          clinicName,
-          cancelledPlan: `${tier.toUpperCase()} Plan`,
-          effectiveDate: formatDisplayDate(new Date()),
-          supportPhone: '+91 73961 11081',
-          clinicId,
-        });
-        await event.data?.after.ref.update({ last_sub_cancelled_wa_sent_at: new Date().toISOString() }).catch(() => {});
-      } else {
-        console.log(`[onClinicSubscription] Suppressed duplicate cancellation WhatsApp; already dispatched via webhook within cooldown.`);
+      if (beforeData.cancel_at_period_end || afterData.cancel_at_period_end) {
+        console.log(`[onClinicSubscription] Skipping duplicate cancellation WhatsApp for clinic ${clinicId} (cancellation notice already dispatched upon scheduling).`);
+        return;
       }
+      console.log(`[onClinicSubscription] Dispatching viitsa_clinic_sub_cancelled to ${clinicPhone}`);
+      await sendClinicSubCancelled({
+        to: clinicPhone,
+        adminName,
+        clinicName,
+        cancelledPlan: `${tier.toUpperCase()} Plan`,
+        effectiveDate: formatDisplayDate(new Date()),
+        supportPhone: '+91 73961 11081',
+        clinicId,
+      });
     }
 
     // 4. Subscription Deactivated / Halted
@@ -1199,6 +1273,20 @@ export const onDoctorVerificationStatusChanged = onDocumentUpdated(
     const doctorName = afterData.name || afterData.full_name || 'Doctor';
     const clinicName = afterData.clinic_name || 'Clinic';
     const councilRegNo = afterData.registration_number || afterData.council_reg_no || 'Verified';
+
+    const docLockRef = admin.firestore().collection("whatsapp_dispatch_locks").doc(`doc_verif_${event.params.userId}_${afterVerif}_${afterActive}`);
+    try {
+      await docLockRef.create({
+        user_id: event.params.userId,
+        verif: afterVerif,
+        active: afterActive,
+        dispatched_at_ms: Date.now(),
+        created_at: admin.firestore.FieldValue.serverTimestamp(),
+      });
+    } catch (lockErr) {
+      console.log(`[onDoctorVerification] Suppressed duplicate doctor verification notice for user ${event.params.userId}`);
+      return;
+    }
 
     if ((afterActive === true && beforeActive === false) || (afterVerif === 'approved' && beforeVerif !== 'approved')) {
       console.log(`[onDoctorVerification] Sending WhatsApp doctor approved notice to ${doctorPhone}`);

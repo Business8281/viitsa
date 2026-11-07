@@ -6,7 +6,7 @@ import { collection, addDoc, doc, updateDoc, getDocs, query, where, serverTimest
 import { httpsCallable } from 'firebase/functions';
 import { useAuth } from '../lib/auth';
 import { buildSubscriptionActivatedHtml } from '../lib/emailService';
-import { sendWhatsAppClinicSubActivated, sendWhatsAppClinicTrialActivated } from '../lib/whatsappClientService';
+// WhatsApp subscription notifications are dispatched by the backend onClinicSubscriptionStatusChanged trigger.
 
 export function SubscriptionSuccessPage() {
   const [searchParams] = useSearchParams();

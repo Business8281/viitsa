@@ -57,7 +57,7 @@ export function PatientLanding({ clinic, onBook, onAI, onLogin }: Props) {
 
   const handleSendOtp = async (e: React.FormEvent) => {
     e.preventDefault();
-    const clean = phoneNumber.replace(/\D/g, '');
+    const clean = phoneNumber.replace(/\D/g, '').slice(-10);
     if (clean.length < 10) return;
     setLoading(true);
     setOtpError('');

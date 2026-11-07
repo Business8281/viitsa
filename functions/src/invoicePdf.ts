@@ -1,4 +1,5 @@
 import PDFDocument from "pdfkit";
+import * as admin from "firebase-admin";
 
 export interface InvoiceDetails {
   invoiceNumber: string;
@@ -406,9 +407,6 @@ export async function generatePatientInvoicePdf(data: PatientInvoicePdfDetails):
   });
 }
 
-
-import * as admin from 'firebase-admin';
-
 export async function ensurePatientInvoicePdfUrl(data: PatientInvoicePdfDetails, clinicId?: string): Promise<string> {
   // If caller already uploaded a real, live HTTPS invoice URL (from client pdf.ts), use it
   if (
@@ -448,6 +446,38 @@ export async function ensurePatientInvoicePdfUrl(data: PatientInvoicePdfDetails,
     return signedUrl;
   } catch (err) {
     console.warn('[ensurePatientInvoicePdfUrl] getSignedUrl fallback to direct media URL:', err);
+    return `https://firebasestorage.googleapis.com/v0/b/${bucket.name}/o/${encodeURIComponent(filePath)}?alt=media`;
+  }
+}
+
+export async function ensureSubscriptionInvoicePdfUrl(data: InvoiceDetails, clinicId?: string): Promise<string> {
+  const buffer = await generateSubscriptionInvoicePdf(data);
+
+  if (!admin.apps.length) admin.initializeApp();
+  const bucket = admin.storage().bucket();
+  const cleanInv = (data.invoiceNumber || `SUB-${Date.now()}`).replace(/[^\w-]/g, '_');
+  const filePath = `invoices/${clinicId || 'subscriptions'}/Sub_Invoice_${cleanInv}_${Date.now()}.pdf`;
+  const file = bucket.file(filePath);
+
+  await file.save(buffer, {
+    metadata: {
+      contentType: 'application/pdf',
+      metadata: {
+        invoiceNumber: data.invoiceNumber,
+        clinicName: data.clinicName,
+        planName: data.planName,
+      },
+    },
+  });
+
+  try {
+    const [signedUrl] = await file.getSignedUrl({
+      action: 'read',
+      expires: '01-01-2035',
+    });
+    return signedUrl;
+  } catch (err) {
+    console.warn('[ensureSubscriptionInvoicePdfUrl] getSignedUrl fallback to direct media URL:', err);
     return `https://firebasestorage.googleapis.com/v0/b/${bucket.name}/o/${encodeURIComponent(filePath)}?alt=media`;
   }
 }

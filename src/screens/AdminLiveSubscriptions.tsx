@@ -64,6 +64,9 @@ export default function AdminLiveSubscriptions({ clinics, subscriptions = [], in
       const updates: any = {
         subscription_status: newStatus,
         subscription_updated_at: now,
+        // Flag used by onClinicSubscriptionStatusChanged to suppress its generic WhatsApp message
+        // when an admin explicitly manages this status. Admin-specific template is sent below.
+        last_admin_override_at: new Date().toISOString(),
       };
       
       if (newStatus === 'active') updates.subscription_activated_at = now;

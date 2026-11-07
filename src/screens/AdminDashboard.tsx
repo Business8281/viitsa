@@ -18,13 +18,6 @@ import { Avatar, SectionHeader, EmptyState, Loading, StatusBadge, RoleBadge, Dat
 import { Modal } from '../components/Modal';
 import { sendEmail } from '../lib/emailService';
 import { InvoiceView } from '../components/InvoiceView';
-import {
-  sendWhatsAppClinicVerificationApproved,
-  sendWhatsAppClinicVerificationRejected,
-  sendWhatsAppClinicDocsNeeded,
-  sendWhatsAppDoctorApprovedViaAPI,
-  sendWhatsAppDoctorVerificationRejected,
-} from '../lib/whatsappClientService';
 import AdminAISettings from './AdminAISettings';
 import AdminSubscriptionPlans from './AdminSubscriptionPlans';
 import AdminLiveSubscriptions from './AdminLiveSubscriptions';
@@ -1355,31 +1348,8 @@ export function AdminDashboard() {
         console.error('Failed to send verification email', e);
       }
 
-      // Dual-trigger official Meta WhatsApp notification
-      const clinicPhone = c.phone || users.find(u => u.id === c.owner_user_id || u.clinic_id === clinicId)?.phone;
-      if (clinicPhone) {
-        try {
-          if (approved) {
-            await sendWhatsAppClinicVerificationApproved({
-              to: clinicPhone,
-              clinicId,
-              adminName: c.owner_name || 'Doctor',
-              clinicName: c.name || 'Clinic',
-              approvedDate: new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }),
-            });
-          } else {
-            await sendWhatsAppClinicVerificationRejected({
-              to: clinicPhone,
-              clinicId,
-              adminName: c.owner_name || 'Doctor',
-              clinicName: c.name || 'Clinic',
-              reason: reason || 'Incomplete registration documents',
-            });
-          }
-        } catch (waErr) {
-          console.warn('Could not send WhatsApp verification notice:', waErr);
-        }
-      }
+      // WhatsApp notification dispatched automatically by backend onClinicVerificationStatusChanged trigger.
+      // No frontend call here — avoids duplicate Meta billing.
       
       alert(approved ? 'Clinic approved successfully!' : 'Clinic rejected.');
     } catch (err: any) {
@@ -1398,22 +1368,8 @@ export function AdminDashboard() {
         missing_documents: missing,
       }, { merge: true });
 
-      const c = clinics.find(x => x.id === clinicId);
-      const clinicPhone = c?.phone || users.find(u => u.id === c?.owner_user_id || u.clinic_id === clinicId)?.phone;
-      if (clinicPhone) {
-        try {
-          await sendWhatsAppClinicDocsNeeded({
-            to: clinicPhone,
-            clinicId,
-            adminName: c.owner_name || 'Doctor',
-            clinicName: c.name || 'Clinic',
-            missingDocs: missing,
-            deadline: new Date(Date.now() + 7 * 86400000).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }),
-          });
-        } catch (waErr) {
-          console.warn('Could not send WhatsApp docs needed notice:', waErr);
-        }
-      }
+      // WhatsApp notification dispatched automatically by backend onClinicVerificationStatusChanged trigger.
+      // No frontend call here — avoids duplicate Meta billing.
 
       alert('Requested additional documents from clinic.');
     } catch (err) {
@@ -1431,35 +1387,8 @@ export function AdminDashboard() {
         deactivation_reason: approved ? deleteField() : (reason || 'Credentials review required'),
       }, { merge: true });
 
-      const u = users.find(x => x.id === doctorId);
-      if (u?.phone) {
-        try {
-          const clinicObj = clinics.find(c => c.id === u.clinic_id);
-          if (approved) {
-            await sendWhatsAppDoctorApprovedViaAPI({
-              to: u.phone,
-              doctorName: u.name || 'Doctor',
-              clinicName: clinicObj?.name || 'Clinic',
-              email: u.email || '',
-              councilRegNo: (u as any).registration_number || 'Verified',
-              supportPhone: '+91 73961 11081',
-              clinicId: u.clinic_id,
-            });
-          } else {
-            await sendWhatsAppDoctorVerificationRejected({
-              to: u.phone,
-              adminName: clinicObj?.owner_name || 'Clinic Administrator',
-              doctorName: u.name || 'Doctor',
-              clinicName: clinicObj?.name || 'Clinic',
-              reason: reason || 'State Medical Council verification incomplete',
-              supportPhone: '+91 73961 11081',
-              clinicId: u.clinic_id,
-            });
-          }
-        } catch (waErr) {
-          console.warn('Could not send WhatsApp doctor verification notice:', waErr);
-        }
-      }
+      // WhatsApp notification dispatched automatically by backend onDoctorVerificationStatusChanged trigger.
+      // No frontend call here — avoids duplicate Meta billing.
 
       alert(approved ? 'Doctor approved and activated!' : 'Doctor verification rejected.');
     } catch (err) {

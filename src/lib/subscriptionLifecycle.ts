@@ -152,7 +152,10 @@ export async function checkAndResolveSubscriptionPeriod(clinic: Clinic, userId?:
           scheduled_plan: null,
           scheduled_billing_cycle: null,
           scheduled_effective_date: null,
-          scheduled_change_type: null
+          scheduled_change_type: null,
+          // Prevents onClinicSubscriptionStatusChanged from sending a generic sub_activated message
+          // since the plan-change WhatsApp was already dispatched when the user scheduled the change.
+          last_schedule_resolved_at: nowIso,
         });
 
         if (userId) {

@@ -19,7 +19,7 @@ import {
   Stethoscope,
 } from 'lucide-react';
 import { db } from '../lib/firebase';
-import { collection, query, where, getDocs, getDoc, doc, addDoc, updateDoc } from 'firebase/firestore';
+import { collection, query, where, getDocs, getDoc, doc, addDoc, setDoc, updateDoc } from 'firebase/firestore';
 import { usePatientAuth } from '../lib/patientAuth';
 import {
   buildSystemPrompt,
@@ -179,7 +179,9 @@ export function PatientAINavigator({ onTab, clinicId, patientId, onBookWithSumma
     if (clinicId && patientId) {
       const allMessages = aiHistory.current.map((m) => ({ role: m.role, content: m.content }));
       if (!conversationId) {
-        const docRef = await addDoc(collection(db, 'ai_conversations'), {
+        const docRef = doc(collection(db, 'ai_conversations'));
+        await setDoc(docRef, {
+          conversation_id: docRef.id,
           clinic_id: clinicId,
           patient_id: patientId,
           account_id: account?.account_id ?? null,
@@ -188,7 +190,6 @@ export function PatientAINavigator({ onTab, clinicId, patientId, onBookWithSumma
           triage_level: response.rawLevel,
           triage_summary: response.summary ?? null,
         });
-        await updateDoc(docRef, { conversation_id: docRef.id });
         setConversationId(docRef.id);
       } else {
         await updateDoc(doc(db, 'ai_conversations', conversationId), {

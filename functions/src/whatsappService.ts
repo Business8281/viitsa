@@ -1,6 +1,6 @@
 import * as admin from 'firebase-admin';
 import * as dotenv from 'dotenv';
-import { ensurePatientInvoicePdfUrl } from './invoicePdf';
+import { ensurePatientInvoicePdfUrl, ensureSubscriptionInvoicePdfUrl } from './invoicePdf';
 
 dotenv.config();
 
@@ -53,6 +53,29 @@ const TEMPLATE_ALIASES: Record<string, string[]> = {
   // Plan Downgraded
   'viitsa_clinic_plan_do': ['viitsa_clinic_plan_downgraded'],
   'viitsa_clinic_plan_downgraded': ['viitsa_clinic_plan_do'],
+
+  // Clinic Verification Approved
+  'viitsa_clinic_verification_approved': ['viitsa_admin_clinic_verified'],
+  'viitsa_admin_clinic_verified': ['viitsa_clinic_verification_approved'],
+
+  // Clinic Verification Rejected
+  'viitsa_clinic_verification_rejected': ['viitsa_admin_clinic_rejected'],
+  'viitsa_admin_clinic_rejected': ['viitsa_clinic_verification_rejected'],
+
+  // Clinic Docs Needed
+  'viitsa_clinic_docs_needed': ['viitsa_admin_clinic_docs_needed'],
+  'viitsa_admin_clinic_docs_needed': ['viitsa_clinic_docs_needed'],
+
+  // Doctor Verification Approved
+  'viitsa_doctor_verification_approved': ['viitsa_admin_doctor_verified'],
+  'viitsa_admin_doctor_verified': ['viitsa_doctor_verification_approved'],
+
+  // Doctor Verification Rejected
+  'viitsa_doctor_verification_rejected': ['viitsa_admin_doctor_rejected'],
+  'viitsa_admin_doctor_rejected': ['viitsa_doctor_verification_rejected'],
+
+  // Legacy Appointment Confirmation
+  'viitsa_appointment_booking_confirmation': ['viitsa_appt_confirm_new_visit', 'viitsa_appt_confirm_online'],
 };
 
 export interface WhatsAppSendResult {
@@ -111,7 +134,7 @@ export function formatProperName(name?: string | null): string {
  */
 export function cleanDoctorName(name?: string | null): string {
   if (!name || !name.trim()) return 'Doctor';
-  let cleaned = name.trim().replace(/^(Dr\.?|Doctor)\s+/i, '').trim();
+  const cleaned = name.trim().replace(/^(Dr\.?|Doctor)\s+/i, '').trim();
   if (!cleaned || cleaned.toLowerCase() === 'doctor') return 'Doctor';
   return cleaned
     .split(/\s+/)
@@ -136,6 +159,125 @@ export function formatAmount(amt: number | string | undefined | null): string {
 
 // In-memory cache for fast deduplication across simultaneous requests
 const recentDispatches = new Map<string, number>();
+const inFlightDispatches = new Set<string>();
+
+/**
+ * Maps any template name or alias into its canonical event category and deduplication window.
+ * This guarantees that even if different code paths, webhooks, or alias fallbacks use
+ * different template names for the same event, they map to the exact same deduplication key!
+ */
+export function getEventCategory(templateName: string): { category: string; windowMs: number } {
+  const name = (templateName || '').toLowerCase().trim();
+
+  // 1. Authentication OTP (15-second cooldown to avoid double clicks)
+  if (name.includes('otp')) {
+    return { category: 'auth_otp', windowMs: 15 * 1000 };
+  }
+
+  // 2. Appointment Confirmations (All 5 approved variants + legacy aliases map to the same category)
+  if (name.startsWith('viitsa_appt_confirm') || name === 'viitsa_appointment_booking_confirmation') {
+    return { category: 'appt_confirm', windowMs: 60 * 1000 };
+  }
+
+  // 3. Appointment Updates (Reschedule, Reminder, Cancellation)
+  if (name.includes('rescheduled')) {
+    return { category: 'appt_rescheduled', windowMs: 60 * 1000 };
+  }
+  if (name.includes('reminder') && (name.includes('appt') || name.includes('appointment'))) {
+    return { category: 'appt_reminder', windowMs: 60 * 1000 };
+  }
+  if (name.includes('cancelled') && (name.includes('appt') || name.includes('appointment'))) {
+    return { category: 'appt_cancelled', windowMs: 60 * 1000 };
+  }
+
+  // 4. Patient Billing & Care Reminders
+  if (name === 'viitsa_patient_invoice') {
+    return { category: 'patient_invoice', windowMs: 60 * 1000 };
+  }
+  if (name === 'viitsa_patient_payment_reminder') {
+    return { category: 'patient_payment_reminder', windowMs: 60 * 1000 };
+  }
+  if (name === 'viitsa_patient_followup_due') {
+    return { category: 'patient_followup_due', windowMs: 60 * 1000 };
+  }
+  if (name === 'viitsa_patient_lab_report_ready') {
+    return { category: 'patient_lab_report_ready', windowMs: 60 * 1000 };
+  }
+  if (name === 'viitsa_patient_medicine_reminder') {
+    return { category: 'patient_medicine_reminder', windowMs: 60 * 1000 };
+  }
+
+  // 5. Clinic Onboarding & Verification Lifecycle (180-second / 3-minute lock window)
+  if (name === 'viitsa_clinic_pending_approval') {
+    return { category: 'clinic_pending_approval', windowMs: 180 * 1000 };
+  }
+  if (name === 'viitsa_clinic_verification_approved' || name === 'viitsa_admin_clinic_verified') {
+    return { category: 'clinic_approved', windowMs: 180 * 1000 };
+  }
+  if (name === 'viitsa_clinic_verification_rejected' || name === 'viitsa_admin_clinic_rejected') {
+    return { category: 'clinic_rejected', windowMs: 180 * 1000 };
+  }
+  if (name === 'viitsa_clinic_docs_needed' || name === 'viitsa_admin_clinic_docs_needed') {
+    return { category: 'clinic_docs_needed', windowMs: 180 * 1000 };
+  }
+
+  // 6. Doctor Onboarding & Verification Lifecycle (180-second / 3-minute lock window)
+  if (name === 'viitsa_doctor_verification_approved' || name === 'viitsa_admin_doctor_verified') {
+    return { category: 'doctor_approved', windowMs: 180 * 1000 };
+  }
+  if (name === 'viitsa_doctor_verification_rejected' || name === 'viitsa_admin_doctor_rejected') {
+    return { category: 'doctor_rejected', windowMs: 180 * 1000 };
+  }
+  if (name === 'viitsa_doctor_added_by_clinic') {
+    return { category: 'doctor_added', windowMs: 180 * 1000 };
+  }
+
+  // 7. Clinic Subscription Lifecycle (180-second / 3-minute lock window)
+  if (name === 'viitsa_clinic_trial_activated') {
+    return { category: 'clinic_trial_activated', windowMs: 180 * 1000 };
+  }
+  if (name === 'viitsa_clinic_sub_activated') {
+    return { category: 'clinic_sub_activated', windowMs: 180 * 1000 };
+  }
+  if (name === 'viitsa_clinic_sub_cancelled' || name === 'viitsa_clinic_sub_can') {
+    return { category: 'clinic_sub_cancelled', windowMs: 180 * 1000 };
+  }
+  if (name === 'viitsa_clinic_sub_deactivated' || name === 'viitsa_clinic_sub_dea') {
+    return { category: 'clinic_sub_deactivated', windowMs: 180 * 1000 };
+  }
+  if (name === 'viitsa_clinic_plan_upgraded') {
+    return { category: 'clinic_plan_upgraded', windowMs: 180 * 1000 };
+  }
+  if (name === 'viitsa_clinic_plan_downgraded' || name === 'viitsa_clinic_plan_do') {
+    return { category: 'clinic_plan_downgraded', windowMs: 180 * 1000 };
+  }
+  if (name === 'viitsa_clinic_payment_success' || name.startsWith('viitsa_clinic_payment_succ')) {
+    return { category: 'clinic_payment_success', windowMs: 180 * 1000 };
+  }
+  if (name === 'viitsa_clinic_payment_failed' || name.startsWith('viitsa_clinic_payment_fail')) {
+    return { category: 'clinic_payment_failed', windowMs: 180 * 1000 };
+  }
+  if (name === 'viitsa_clinic_sub_renewal_reminder' || name === 'viitsa_clinic_sub_ren') {
+    return { category: 'clinic_sub_renewal_reminder', windowMs: 180 * 1000 };
+  }
+  if (name === 'viitsa_clinic_sub_invoice' || name === 'viitsa_clinic_sub_invc') {
+    return { category: 'clinic_sub_invoice', windowMs: 180 * 1000 };
+  }
+  if (name === 'viitsa_clinic_quota_alert' || name === 'viitsa_clinic_quota_al') {
+    return { category: 'clinic_quota_alert', windowMs: 180 * 1000 };
+  }
+
+  // 8. Admin Plan Overrides (180-second / 3-minute lock window)
+  if (name.startsWith('viitsa_admin_plan_')) {
+    return { category: name, windowMs: 180 * 1000 };
+  }
+  if (name === 'viitsa_admin_payment_request') {
+    return { category: 'admin_payment_request', windowMs: 180 * 1000 };
+  }
+
+  // Default fallback
+  return { category: name, windowMs: 60 * 1000 };
+}
 
 /**
  * Low-level sender for Meta WhatsApp Cloud API templates
@@ -172,54 +314,69 @@ export async function sendWhatsAppTemplate(options: {
     };
   }
 
-  // Deduplication Guard: Enforce strict deduplication window.
-  // Lifecycle/subscription templates get a 2-minute (120s) lock to eliminate duplicate storms across webhooks and reloads,
-  // while allowing legitimate re-subscriptions, plan switches, or retries after a few minutes or hours.
-  // Transactional / appointment / OTP templates get standard 45-second lock.
-  const isOtp = options.templateName.includes('otp');
-  const isLifecycleTemplate = [
-    'viitsa_clinic_trial_activated',
-    'viitsa_clinic_sub_activated',
-    'viitsa_clinic_sub_cancelled',
-    'viitsa_clinic_sub_deactivated',
-    'viitsa_clinic_plan_upgraded',
-    'viitsa_clinic_plan_downgraded',
-    'viitsa_clinic_payment_success',
-    'viitsa_clinic_payment_failed',
-    'viitsa_clinic_sub_renewal_reminder',
-    'viitsa_clinic_sub_ren',
-  ].includes(options.templateName);
-
-  const dedupKey = options.clinicId 
-    ? `${normalizedPhone}_${options.templateName}_${options.clinicId}` 
-    : `${normalizedPhone}_${options.templateName}`;
+  // Resolve event category and lock window
+  const { category, windowMs } = getEventCategory(options.templateName);
+  const dedupKey = `${normalizedPhone}_${category}`;
   const nowMs = Date.now();
-  const DEDUP_WINDOW_MS = isLifecycleTemplate ? (120 * 1000) : 45000;
 
-  // Tier 1: Instant in-memory check (< 1ms)
+  // Tier 1: In-Flight and In-Memory Check (< 1ms)
+  if (inFlightDispatches.has(dedupKey)) {
+    console.warn(`[WhatsAppService] Deduplication Guard: Suppressed concurrent in-flight dispatch of category '${category}' (${options.templateName}) to ${normalizedPhone}`);
+    return { success: true, messageId: 'dedup_suppressed_inflight' };
+  }
   const memLast = recentDispatches.get(dedupKey);
-  if (!isOtp && memLast && nowMs - memLast < DEDUP_WINDOW_MS) {
-    console.warn(`[WhatsAppService] Deduplication Guard: Suppressed in-memory duplicate of '${options.templateName}' to ${normalizedPhone} (${Math.round((nowMs - memLast) / 1000)}s ago)`);
+  if (memLast && (nowMs - memLast < windowMs)) {
+    console.warn(`[WhatsAppService] Deduplication Guard: Suppressed in-memory duplicate of category '${category}' (${options.templateName}) to ${normalizedPhone} (${Math.round((nowMs - memLast) / 1000)}s ago)`);
     return { success: true, messageId: 'dedup_suppressed_memory' };
   }
 
-  // Tier 2: Distributed Firestore lock check (cross-instance deduplication)
+  // Tier 2: Distributed Firestore Lock Check (Atomic Cross-Instance Guard via Transaction)
+  if (!admin.apps.length) admin.initializeApp();
+  const db = admin.firestore();
+  const lockRef = db.collection('whatsapp_dispatch_locks').doc(dedupKey);
+
   try {
-    if (!admin.apps.length) admin.initializeApp();
-    const db = admin.firestore();
-    const lockDoc = await db.collection('whatsapp_dispatch_locks').doc(dedupKey).get();
-    if (!isOtp && lockDoc.exists) {
-      const lockData = lockDoc.data() || {};
-      const fsLast = lockData.dispatched_at_ms || 0;
-      if (nowMs - fsLast < DEDUP_WINDOW_MS) {
-        console.warn(`[WhatsAppService] Deduplication Guard: Suppressed cross-instance duplicate of '${options.templateName}' to ${normalizedPhone} (${Math.round((nowMs - fsLast) / 1000)}s ago)`);
-        recentDispatches.set(dedupKey, fsLast);
-        return { success: true, messageId: lockData.message_id || 'dedup_suppressed_firestore' };
+    let alreadyHandled = false;
+    let existingMessageId: string | undefined;
+
+    await db.runTransaction(async (transaction) => {
+      const lockDoc = await transaction.get(lockRef);
+      if (lockDoc.exists) {
+        const lockData = lockDoc.data() || {};
+        const fsLast = lockData.dispatched_at_ms || 0;
+        const isPending = lockData.status === 'in_progress' && (nowMs - fsLast < 30000);
+        if (isPending || (nowMs - fsLast < windowMs)) {
+          alreadyHandled = true;
+          existingMessageId = lockData.message_id;
+          return;
+        }
       }
+      transaction.set(lockRef, {
+        phone: normalizedPhone,
+        category,
+        template: options.templateName,
+        status: 'in_progress',
+        dispatched_at_ms: nowMs,
+        created_at: admin.firestore.FieldValue.serverTimestamp(),
+      }, { merge: true });
+    });
+
+    if (alreadyHandled) {
+      console.warn(`[WhatsAppService] Deduplication Guard: Suppressed cross-instance duplicate of category '${category}' (${options.templateName}) to ${normalizedPhone}`);
+      recentDispatches.set(dedupKey, nowMs);
+      return { success: true, messageId: existingMessageId || 'dedup_suppressed_firestore' };
     }
+
+    inFlightDispatches.add(dedupKey);
+    recentDispatches.set(dedupKey, nowMs);
   } catch (lockErr) {
     console.warn('[WhatsAppService] Deduplication lock check notice:', lockErr);
   }
+
+  // PRE-EMPTIVE IN-MEMORY LOCK RESERVATION:
+  // Set in-memory markers before making the external HTTP fetch to Meta!
+  inFlightDispatches.add(dedupKey);
+  recentDispatches.set(dedupKey, nowMs);
 
   const endpoint = `${GRAPH_API_BASE}/${apiVersion}/${phoneNumberId}/messages`;
 
@@ -312,9 +469,11 @@ export async function sendWhatsAppTemplate(options: {
       }
     }
 
-    // If still failing and error mentions header mismatch while header was sent, retry body-only
-    if (!response.ok && data?.error?.message?.toLowerCase().includes('header') && options.components?.some((c: any) => c.type === 'header')) {
-      console.warn(`[WhatsAppService] Header component rejected (${data?.error?.message}). Retrying body-only fallback...`);
+    // If still failing and error mentions header or media mismatch while header was sent, retry body-only
+    const errMsg = (data?.error?.message || '').toLowerCase();
+    const isHeaderOrMediaError = errMsg.includes('header') || errMsg.includes('media') || errMsg.includes('download') || errMsg.includes('document');
+    if (!response.ok && isHeaderOrMediaError && options.components?.some((c: any) => c.type === 'header')) {
+      console.warn(`[WhatsAppService] Header/Media component rejected (${data?.error?.message}). Retrying body-only fallback...`);
       const bodyOnlyComponents = options.components.filter((c: any) => c.type !== 'header');
       const bodyOnlyPayload = {
         ...payload,
@@ -338,9 +497,43 @@ export async function sendWhatsAppTemplate(options: {
       }
     }
 
+    // If still failing and error mentions button mismatch while button was sent, retry without button component
+    if (!response.ok && (data?.error?.message?.toLowerCase().includes('button') || data?.error?.error_user_msg?.toLowerCase().includes('button')) && options.components?.some((c: any) => c.type === 'button')) {
+      console.warn(`[WhatsAppService] Button component rejected (${data?.error?.message}). Retrying without button fallback...`);
+      const withoutButtonComponents = options.components.filter((c: any) => c.type !== 'button');
+      const withoutButtonPayload = {
+        ...payload,
+        template: {
+          ...payload.template,
+          components: withoutButtonComponents,
+        },
+      };
+      const retryRes = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(withoutButtonPayload),
+      });
+      const retryData: any = await retryRes.json();
+      if (retryRes.ok) {
+        response = retryRes;
+        data = retryData;
+      }
+    }
+
     if (!response.ok) {
       console.error(`[WhatsAppService] Meta API Error (${response.status}):`, JSON.stringify(data));
       const errorMessage = data?.error?.message || `Meta API error (${response.status})`;
+
+      // Clean up in-flight and allow legitimate user retries if needed
+      recentDispatches.delete(dedupKey);
+      await lockRef.set({
+        status: 'failed',
+        error: errorMessage,
+        failed_at_ms: Date.now(),
+      }, { merge: true }).catch(() => {});
 
       // Log failure in Firestore
       await logWhatsAppActivity({
@@ -362,21 +555,13 @@ export async function sendWhatsAppTemplate(options: {
 
     const messageId = data?.messages?.[0]?.id;
 
-    // Record deduplication lock to guarantee single-delivery across all instances
+    // Finalize the deduplication lock with confirmed Meta message ID and timestamp
     recentDispatches.set(dedupKey, nowMs);
-    try {
-      if (!admin.apps.length) admin.initializeApp();
-      const db = admin.firestore();
-      await db.collection('whatsapp_dispatch_locks').doc(dedupKey).set({
-        phone: normalizedPhone,
-        template: options.templateName,
-        dispatched_at_ms: nowMs,
-        message_id: messageId || 'ok',
-        created_at: admin.firestore.FieldValue.serverTimestamp(),
-      }, { merge: true });
-    } catch (lockSaveErr) {
-      // Non-blocking
-    }
+    await lockRef.set({
+      status: 'sent',
+      message_id: messageId || 'ok',
+      completed_at_ms: Date.now(),
+    }, { merge: true }).catch(() => {});
 
     // Log success in Firestore
     await logWhatsAppActivity({
@@ -400,10 +585,18 @@ export async function sendWhatsAppTemplate(options: {
     };
   } catch (error: any) {
     console.error('[WhatsAppService] Network or unexpected error sending message:', error);
+    recentDispatches.delete(dedupKey);
+    await lockRef.set({
+      status: 'network_error',
+      error: error?.message || 'Network error',
+      failed_at_ms: Date.now(),
+    }, { merge: true }).catch(() => {});
     return {
       success: false,
       error: error?.message || 'Network error communicating with WhatsApp Cloud API',
     };
+  } finally {
+    inFlightDispatches.delete(dedupKey);
   }
 }
 
@@ -518,9 +711,10 @@ async function incrementClinicUsage(clinicId: string) {
 // ============================================================================
 
 /**
- * Template: phone_login_otps
+ * Template: phone_login_otps (alias: viitsa_login_otp)
+ * Category: AUTHENTICATION
  * Variables: {{1}} = otp_code
- * Button: copy code url
+ * Button: Copy code (sub_type: copy_code)
  */
 export async function sendOtpWhatsApp(to: string, otpCode: string): Promise<WhatsAppSendResult> {
   const templateName = process.env.WA_TEMPLATE_OTP || 'phone_login_otps';
@@ -534,10 +728,10 @@ export async function sendOtpWhatsApp(to: string, otpCode: string): Promise<What
     },
     {
       type: 'button',
-      sub_type: 'url',
+      sub_type: 'copy_code',
       index: '0',
       parameters: [
-        { type: 'text', text: otpCode },
+        { type: 'coupon_code', coupon_code: otpCode },
       ],
     },
   ];
@@ -594,8 +788,8 @@ export async function sendAppointmentConfirmation(data: AppointmentConfirmData):
       break;
 
     case 'online':
-      // Template: viitsa_appt_confirm_online (8 params)
-      // {{1}}=patient, {{2}}=doctor, {{3}}=clinic, {{4}}=date, {{5}}=slot, {{6}}=token, {{7}}=visitType, {{8}}=phone
+      // Template: viitsa_appt_confirm_online (alias: viitsa_appt_confirm_new_visit) (7 params)
+      // {{1}}=patient, {{2}}=doctor, {{3}}=clinic, {{4}}=date, {{5}}=timeOrSlot, {{6}}=token, {{7}}=phone
       templateName = process.env.WA_TEMPLATE_APPT_ONLINE || 'viitsa_appt_confirm_online';
       bodyParams = [
         { type: 'text', text: patient },
@@ -604,7 +798,6 @@ export async function sendAppointmentConfirmation(data: AppointmentConfirmData):
         { type: 'text', text: data.date || 'Scheduled Date' },
         { type: 'text', text: data.timeOrSlot || 'Scheduled Time' },
         { type: 'text', text: data.tokenOrQueue || 'Slot 1' },
-        { type: 'text', text: data.visitType || 'Online Consultation' },
         { type: 'text', text: phone },
       ];
       break;
@@ -1048,18 +1241,7 @@ export async function sendPatientMedicineReminder(data: PatientMedicineReminderD
     ],
   });
 
-  if (res.success) return res;
-
-  // Graceful fallback to viitsa_patient_followup_due if medicine reminder template is not yet approved on Meta
-  return sendPatientFollowupDue({
-    to: data.to,
-    clinicId: data.clinicId,
-    patientName: data.patientName,
-    doctorName: data.doctorName || 'Doctor',
-    clinicName: data.clinicName,
-    dueDate: `${data.medicineName || 'Medication'} (${data.dosageTiming || 'Active Course'})`,
-    clinicPhone: data.clinicPhone,
-  });
+  return res;
 }
 
 // ============================================================================
@@ -1415,16 +1597,38 @@ export async function sendClinicSubInvoice(data: {
   supportPhone?: string;
   clinicId?: string;
 }): Promise<WhatsAppSendResult> {
+  let pdfLink = data.pdfUrl;
+  if (!pdfLink) {
+    try {
+      const numAmt = typeof data.totalAmount === 'number'
+        ? data.totalAmount
+        : parseFloat(String(data.totalAmount).replace(/[^\d.]/g, '')) || 5999;
+      pdfLink = await ensureSubscriptionInvoicePdfUrl({
+        invoiceNumber: data.invoiceNo || 'INV-001',
+        invoiceDate: data.invoiceDate || new Date().toLocaleDateString('en-IN'),
+        status: 'PAID',
+        clinicName: data.clinicName || 'Clinic Partner',
+        customerEmail: '',
+        planName: data.planName || 'Clinic Plan',
+        tier: 'clinic',
+        cycle: 'monthly',
+        amount: numAmt,
+      }, data.clinicId);
+    } catch (pdfErr) {
+      console.warn('[sendClinicSubInvoice] Notice generating PDF attachment:', pdfErr);
+    }
+  }
+
   const components: any[] = [];
-  const pdfLink = data.pdfUrl || `https://viitsa.com/api/invoice/${data.invoiceNo}.pdf`;
+  const finalPdfUrl = pdfLink || `https://viitsa.com/api/invoice/${data.invoiceNo || 'INV'}.pdf`;
   components.push({
     type: 'header',
     parameters: [
       {
         type: 'document',
         document: {
-          link: pdfLink,
-          filename: `Viitsa_Invoice_${data.invoiceNo}.pdf`,
+          link: finalPdfUrl,
+          filename: `Viitsa_Invoice_${data.invoiceNo || 'INV'}.pdf`,
         },
       },
     ],
@@ -1731,42 +1935,23 @@ export async function sendAdminPlanActivated(data: {
   supportPhone?: string;
   clinicId?: string;
 }): Promise<WhatsAppSendResult> {
-  try {
-    const res = await sendWhatsAppTemplate({
-      to: data.to,
-      clinicId: data.clinicId,
-      templateName: 'viitsa_admin_plan_activated',
-      components: [
-        {
-          type: 'body',
-          parameters: [
-            { type: 'text', text: data.adminName || 'Doctor' },
-            { type: 'text', text: data.clinicName || 'Clinic' },
-            { type: 'text', text: data.planName || 'Clinic Plan' },
-            { type: 'text', text: data.validThrough || 'Active' },
-            { type: 'text', text: data.adminRemarks || 'Platform administrator approval' },
-            { type: 'text', text: data.supportPhone || '+91 73961 11081' },
-          ],
-        },
-      ],
-    });
-    if (res.success) return res;
-  } catch (err) {
-    console.warn('[sendAdminPlanActivated] direct template error, trying fallback:', err);
-  }
-
-  // Graceful fallback to viitsa_clinic_sub_activated
-  return sendClinicSubActivated({
+  return sendWhatsAppTemplate({
     to: data.to,
-    adminName: data.adminName,
-    clinicName: data.clinicName,
-    planName: data.planName,
-    billingCycle: 'Annual Partner Grant',
-    amountPaid: '0.00',
-    validUntil: data.validThrough || 'Active',
-    nextRenewalDate: data.validThrough || 'Annual',
-    supportPhone: data.supportPhone,
     clinicId: data.clinicId,
+    templateName: 'viitsa_admin_plan_activated',
+    components: [
+      {
+        type: 'body',
+        parameters: [
+          { type: 'text', text: formatProperName(data.adminName || 'Doctor') },
+          { type: 'text', text: data.clinicName || 'Clinic' },
+          { type: 'text', text: data.planName || 'Clinic Plan' },
+          { type: 'text', text: data.validThrough || 'Active' },
+          { type: 'text', text: data.adminRemarks || 'Platform administrator approval' },
+          { type: 'text', text: data.supportPhone || '+91 73961 11081' },
+        ],
+      },
+    ],
   });
 }
 
@@ -1783,38 +1968,22 @@ export async function sendAdminPlanFreeGranted(data: {
   supportPhone?: string;
   clinicId?: string;
 }): Promise<WhatsAppSendResult> {
-  try {
-    const res = await sendWhatsAppTemplate({
-      to: data.to,
-      clinicId: data.clinicId,
-      templateName: 'viitsa_admin_plan_free_granted',
-      components: [
-        {
-          type: 'body',
-          parameters: [
-            { type: 'text', text: data.adminName || 'Doctor' },
-            { type: 'text', text: data.clinicName || 'Clinic' },
-            { type: 'text', text: data.planTier || 'Promotional Tier' },
-            { type: 'text', text: data.activePeriod || '30-Day Sponsorship' },
-            { type: 'text', text: data.supportPhone || '+91 73961 11081' },
-          ],
-        },
-      ],
-    });
-    if (res.success) return res;
-  } catch (err) {
-    console.warn('[sendAdminPlanFreeGranted] direct template error, trying fallback:', err);
-  }
-
-  // Graceful fallback to viitsa_clinic_trial_activated
-  return sendClinicTrialActivated({
+  return sendWhatsAppTemplate({
     to: data.to,
-    adminName: data.adminName,
-    clinicName: data.clinicName,
-    planName: data.planTier || 'Promotional Access',
-    expiryDate: data.activePeriod || 'Lifetime / Partner Grant',
-    supportPhone: data.supportPhone,
     clinicId: data.clinicId,
+    templateName: 'viitsa_admin_plan_free_granted',
+    components: [
+      {
+        type: 'body',
+        parameters: [
+          { type: 'text', text: formatProperName(data.adminName || 'Doctor') },
+          { type: 'text', text: data.clinicName || 'Clinic' },
+          { type: 'text', text: data.planTier || 'Promotional Tier' },
+          { type: 'text', text: data.activePeriod || '30-Day Sponsorship' },
+          { type: 'text', text: data.supportPhone || '+91 73961 11081' },
+        ],
+      },
+    ],
   });
 }
 
@@ -1832,40 +2001,23 @@ export async function sendAdminPlanDeactivated(data: {
   supportPhone?: string;
   clinicId?: string;
 }): Promise<WhatsAppSendResult> {
-  try {
-    const res = await sendWhatsAppTemplate({
-      to: data.to,
-      clinicId: data.clinicId,
-      templateName: 'viitsa_admin_plan_deactivated',
-      components: [
-        {
-          type: 'body',
-          parameters: [
-            { type: 'text', text: data.adminName || 'Doctor' },
-            { type: 'text', text: data.clinicName || 'Clinic' },
-            { type: 'text', text: data.planName || 'Clinic Plan' },
-            { type: 'text', text: data.deactivationDate || new Date().toLocaleDateString('en-IN') },
-            { type: 'text', text: data.reason || 'Administrative Review' },
-            { type: 'text', text: data.supportPhone || '+91 73961 11081' },
-          ],
-        },
-      ],
-    });
-    if (res.success) return res;
-  } catch (err) {
-    console.warn('[sendAdminPlanDeactivated] direct template error, trying fallback:', err);
-  }
-
-  // Graceful fallback to viitsa_clinic_sub_deactivated
-  return sendClinicSubDeactivated({
+  return sendWhatsAppTemplate({
     to: data.to,
-    adminName: data.adminName,
-    clinicName: data.clinicName,
-    planName: data.planName || 'Clinic Suite',
-    deactivationDate: data.deactivationDate || new Date().toLocaleDateString('en-IN'),
-    status: data.reason || 'Administrative Review',
-    supportPhone: data.supportPhone,
     clinicId: data.clinicId,
+    templateName: 'viitsa_admin_plan_deactivated',
+    components: [
+      {
+        type: 'body',
+        parameters: [
+          { type: 'text', text: formatProperName(data.adminName || 'Doctor') },
+          { type: 'text', text: data.clinicName || 'Clinic' },
+          { type: 'text', text: data.planName || 'Clinic Plan' },
+          { type: 'text', text: data.deactivationDate || new Date().toLocaleDateString('en-IN') },
+          { type: 'text', text: data.reason || 'Administrative Review' },
+          { type: 'text', text: data.supportPhone || '+91 73961 11081' },
+        ],
+      },
+    ],
   });
 }
 
@@ -1882,39 +2034,22 @@ export async function sendAdminPlanSuspended(data: {
   compliancePhone?: string;
   clinicId?: string;
 }): Promise<WhatsAppSendResult> {
-  try {
-    const res = await sendWhatsAppTemplate({
-      to: data.to,
-      clinicId: data.clinicId,
-      templateName: 'viitsa_admin_plan_suspended',
-      components: [
-        {
-          type: 'body',
-          parameters: [
-            { type: 'text', text: data.adminName || 'Doctor' },
-            { type: 'text', text: data.clinicName || 'Clinic' },
-            { type: 'text', text: data.reason || 'Compliance Review' },
-            { type: 'text', text: data.suspensionDate || new Date().toLocaleDateString('en-IN') },
-            { type: 'text', text: data.compliancePhone || '+91 73961 11081' },
-          ],
-        },
-      ],
-    });
-    if (res.success) return res;
-  } catch (err) {
-    console.warn('[sendAdminPlanSuspended] direct template error, trying fallback:', err);
-  }
-
-  // Graceful fallback to viitsa_clinic_sub_deactivated
-  return sendClinicSubDeactivated({
+  return sendWhatsAppTemplate({
     to: data.to,
-    adminName: data.adminName,
-    clinicName: data.clinicName,
-    planName: 'Suspended Account',
-    deactivationDate: data.suspensionDate || new Date().toLocaleDateString('en-IN'),
-    status: `Temporary Compliance Suspension: ${data.reason}`,
-    supportPhone: data.compliancePhone,
     clinicId: data.clinicId,
+    templateName: 'viitsa_admin_plan_suspended',
+    components: [
+      {
+        type: 'body',
+        parameters: [
+          { type: 'text', text: formatProperName(data.adminName || 'Doctor') },
+          { type: 'text', text: data.clinicName || 'Clinic' },
+          { type: 'text', text: data.reason || 'Compliance Review' },
+          { type: 'text', text: data.suspensionDate || new Date().toLocaleDateString('en-IN') },
+          { type: 'text', text: data.compliancePhone || '+91 73961 11081' },
+        ],
+      },
+    ],
   });
 }
 
@@ -1931,41 +2066,22 @@ export async function sendAdminPlanReactivated(data: {
   supportPhone?: string;
   clinicId?: string;
 }): Promise<WhatsAppSendResult> {
-  try {
-    const res = await sendWhatsAppTemplate({
-      to: data.to,
-      clinicId: data.clinicId,
-      templateName: 'viitsa_admin_plan_reactivated',
-      components: [
-        {
-          type: 'body',
-          parameters: [
-            { type: 'text', text: data.adminName || 'Doctor' },
-            { type: 'text', text: data.clinicName || 'Clinic' },
-            { type: 'text', text: data.planName || 'Clinic Plan' },
-            { type: 'text', text: data.reactivationDate || new Date().toLocaleDateString('en-IN') },
-            { type: 'text', text: data.supportPhone || '+91 73961 11081' },
-          ],
-        },
-      ],
-    });
-    if (res.success) return res;
-  } catch (err) {
-    console.warn('[sendAdminPlanReactivated] direct template error, trying fallback:', err);
-  }
-
-  // Graceful fallback to viitsa_clinic_sub_activated
-  return sendClinicSubActivated({
+  return sendWhatsAppTemplate({
     to: data.to,
-    adminName: data.adminName,
-    clinicName: data.clinicName,
-    planName: data.planName || 'Active Suite',
-    billingCycle: 'Restored Active Plan',
-    amountPaid: '0.00',
-    validUntil: data.reactivationDate || new Date().toLocaleDateString('en-IN'),
-    nextRenewalDate: 'Active',
-    supportPhone: data.supportPhone,
     clinicId: data.clinicId,
+    templateName: 'viitsa_admin_plan_reactivated',
+    components: [
+      {
+        type: 'body',
+        parameters: [
+          { type: 'text', text: formatProperName(data.adminName || 'Doctor') },
+          { type: 'text', text: data.clinicName || 'Clinic' },
+          { type: 'text', text: data.planName || 'Clinic Plan' },
+          { type: 'text', text: data.reactivationDate || new Date().toLocaleDateString('en-IN') },
+          { type: 'text', text: data.supportPhone || '+91 73961 11081' },
+        ],
+      },
+    ],
   });
 }
 
@@ -1984,42 +2100,24 @@ export async function sendAdminPaymentRequest(data: {
   accountsPhone?: string;
   clinicId?: string;
 }): Promise<WhatsAppSendResult> {
-  try {
-    const cleanAmount = data.amount?.toString().replace(/[^\d.]/g, '') || '5999';
-    const res = await sendWhatsAppTemplate({
-      to: data.to,
-      clinicId: data.clinicId,
-      templateName: 'viitsa_admin_payment_request',
-      components: [
-        {
-          type: 'body',
-          parameters: [
-            { type: 'text', text: data.adminName || 'Doctor' },
-            { type: 'text', text: data.clinicName || 'Clinic' },
-            { type: 'text', text: data.serviceName || 'Clinic Subscription' },
-            { type: 'text', text: cleanAmount },
-            { type: 'text', text: data.dueDate || new Date().toLocaleDateString('en-IN') },
-            { type: 'text', text: data.invoiceRef || 'VIITSA-INV' },
-            { type: 'text', text: data.accountsPhone || '+91 73961 11081' },
-          ],
-        },
-      ],
-    });
-    if (res.success) return res;
-  } catch (err) {
-    console.warn('[sendAdminPaymentRequest] direct template error, trying fallback:', err);
-  }
-
-  // Graceful fallback to viitsa_clinic_sub_renewal_reminder
-  return sendClinicSubRenewalReminder({
+  const cleanAmount = formatAmount(data.amount);
+  return sendWhatsAppTemplate({
     to: data.to,
-    adminName: data.adminName,
-    clinicName: data.clinicName,
-    planName: `${data.serviceName} (Ref: ${data.invoiceRef})`,
-    renewalAmount: data.amount,
-    dueDate: data.dueDate,
-    autoDebitStatus: 'Invoice Due',
-    supportPhone: data.accountsPhone,
     clinicId: data.clinicId,
+    templateName: 'viitsa_admin_payment_request',
+    components: [
+      {
+        type: 'body',
+        parameters: [
+          { type: 'text', text: formatProperName(data.adminName || 'Doctor') },
+          { type: 'text', text: data.clinicName || 'Clinic' },
+          { type: 'text', text: data.serviceName || 'Clinic Subscription' },
+          { type: 'text', text: cleanAmount },
+          { type: 'text', text: data.dueDate || new Date().toLocaleDateString('en-IN') },
+          { type: 'text', text: data.invoiceRef || 'VIITSA-INV' },
+          { type: 'text', text: data.accountsPhone || '+91 73961 11081' },
+        ],
+      },
+    ],
   });
 }

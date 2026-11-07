@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo } from 'react';
 import { db } from '../lib/firebase';
-import { collection, query, where, getDocs, addDoc, doc, getDoc, updateDoc } from 'firebase/firestore';
+import { collection, query, where, getDocs, addDoc, doc, getDoc, updateDoc, setDoc } from 'firebase/firestore';
 import { 
   Check, UserCircle, Phone, Mail, FileText, User, Calendar, 
   Stethoscope, Clock, ShieldCheck, ArrowRight, AlertCircle, HeartPulse, Sparkles
@@ -325,12 +325,12 @@ export function QRWalkinPage({ clinicIdOverride, onSuccess }: QRWalkinPageProps)
         apptPayload.unclaimed_phone = cleanPhone;
       }
 
-      const apptRef = await addDoc(collection(db, 'appointments'), apptPayload);
-
-      await updateDoc(apptRef, { 
+      const apptRef = doc(collection(db, 'appointments'));
+      await setDoc(apptRef, {
+        ...apptPayload,
         appt_id: apptRef.id,
         appointment_id: apptRef.id,
-      }).catch(console.warn);
+      });
 
       // Trigger instant confirmation email
       sendInstantAppointmentEmail(apptRef.id, 'appointment_confirmed');

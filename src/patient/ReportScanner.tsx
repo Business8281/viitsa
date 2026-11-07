@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { Camera, Upload, FileText, Loader2, CheckCircle, ChevronLeft, Save, Plus, Trash2, X } from 'lucide-react';
 import { db, storage } from '../lib/firebase';
-import { collection, addDoc, updateDoc, getDocs, query, where } from 'firebase/firestore';
+import { collection, addDoc, setDoc, doc, updateDoc, getDocs, query, where } from 'firebase/firestore';
 import { ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
 import { localDateISO } from '../lib/format';
 import type { User } from '../lib/types';
@@ -194,8 +194,11 @@ export function ReportScanner({ patientId, patientName, accountId, clinicId, onB
                 const docName = doctorObj?.name || null;
                 const reportTitle = item.name || 'Medical Report';
 
-                // Save report doc to Firestore
-                const docRef = await addDoc(collection(db, 'health_reports'), {
+                // Save report doc to Firestore atomically
+                const docRef = doc(collection(db, 'health_reports'));
+                await setDoc(docRef, {
+                  report_id: docRef.id,
+                  id: docRef.id,
                   patient_id: patientId,
                   account_id: accountId,
                   clinic_id: selectedClinic || clinicId || null,
@@ -216,8 +219,6 @@ export function ReportScanner({ patientId, patientName, accountId, clinicId, onB
                   ai_processed: false,
                   created_at: new Date().toISOString()
                 });
-
-                await updateDoc(docRef, { report_id: docRef.id });
                 resolve();
               } catch (err) {
                 reject(err);

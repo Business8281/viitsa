@@ -1754,7 +1754,10 @@ function UploadPatientReportsModal({
                 const finalDoctorName = (prescribedDoctor || patient?.doctor_name || user?.name || clinic?.doctor_name || '').trim();
                 const reportTitle = item.name.trim() || 'Medical Diagnostic Report';
 
-                const docRef = await addDoc(collection(db, 'health_reports'), {
+                const docRef = doc(collection(db, 'health_reports'));
+                await setDoc(docRef, {
+                  report_id: docRef.id,
+                  id: docRef.id,
                   patient_id: patientId || patient?.patient_id || patient?.id,
                   account_id: patient?.account_id || null,
                   clinic_id: clinic?.clinic_id || null,
@@ -1778,8 +1781,6 @@ function UploadPatientReportsModal({
                   created_at: new Date().toISOString(),
                   uploaded_by_role: 'clinic_doctor_staff'
                 });
-
-                await updateDoc(docRef, { report_id: docRef.id });
                 logClinicalRecordCreated(
                   clinic?.clinic_id || 'system',
                   'clinic_staff',
