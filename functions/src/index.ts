@@ -1119,7 +1119,16 @@ export const onClinicSubscriptionStatusChanged = onDocumentUpdated(
       (afterStatus === 'trial' && Boolean(afterData.trial_activated) && !Boolean(beforeData.trial_activated))
     );
 
-    if (beforeStatus === afterStatus && !isNewTrialActivation) return;
+    // Detect if this is a paid plan purchase, plan upgrade, or renewal payment
+    const isNewPaymentOrPlanChange = (
+      afterStatus === 'active' && (
+        beforeStatus !== 'active' ||
+        afterData.subscription_plan !== beforeData.subscription_plan ||
+        (afterData.last_payment_id && afterData.last_payment_id !== beforeData.last_payment_id)
+      )
+    );
+
+    if (beforeStatus === afterStatus && !isNewTrialActivation && !isNewPaymentOrPlanChange) return;
 
     // Skip WhatsApp if this was an admin override (AdminLiveSubscriptions already dispatches admin-specific template)
     const lastAdminOverrideAt = afterData.last_admin_override_at ? new Date(afterData.last_admin_override_at).getTime() : 0;
@@ -1156,7 +1165,12 @@ export const onClinicSubscriptionStatusChanged = onDocumentUpdated(
     const now = Date.now();
 
     // Distributed idempotency lock per subscription status change event
-    const subLockKey = `clinic_sub_${clinicId}_${afterStatus}_${isNewTrialActivation ? 'trial_init' : (afterData.subscription_activated_at || '')}`;
+    const paymentOrPlanMarker = isNewPaymentOrPlanChange
+      ? (afterData.last_payment_id || afterData.subscription_plan || now)
+      : isNewTrialActivation
+        ? 'trial_init'
+        : (afterData.subscription_activated_at || now);
+    const subLockKey = `clinic_sub_${clinicId}_${afterStatus}_${paymentOrPlanMarker}`;
     const subLockRef = admin.firestore().collection("whatsapp_dispatch_locks").doc(subLockKey);
     try {
       await subLockRef.create({
@@ -1186,24 +1200,27 @@ export const onClinicSubscriptionStatusChanged = onDocumentUpdated(
       });
     }
 
-    // 2. Paid Subscription Activated (status became 'active')
-    else if (afterStatus === 'active' && beforeStatus !== 'active') {
-      console.log(`[onClinicSubscription] Dispatching viitsa_clinic_sub_activated to ${clinicPhone}`);
+    // 2. Paid Subscription Activated or Plan Bought (status active with new payment / activation)
+    else if (isNewPaymentOrPlanChange) {
+      console.log(`[onClinicSubscription] Dispatching viitsa_clinic_sub_invoice (with PDF document) to ${clinicPhone}`);
       const planPricing: Record<string, Record<string, number>> = {
         solo: { monthly: 2999, annual: 29990 },
         clinic: { monthly: 5999, annual: 59990 },
         multispecialty: { monthly: 11999, annual: 119990 },
+        test: { monthly: 1, annual: 1 },
       };
-      const planAmount = planPricing[tier]?.[cycle] || (tier === 'multispecialty' ? 11999 : tier === 'clinic' ? 5999 : 2999);
-      const durationDays = cycle === 'annual' ? 365 : 30;
-      await sendClinicSubActivated({
+      const planAmount = planPricing[tier]?.[cycle] || (tier === 'test' ? 1 : tier === 'multispecialty' ? 11999 : tier === 'clinic' ? 5999 : 2999);
+      const invNum = afterData.last_payment_id || `VIITSA-SUB-${now.toString().slice(-6)}`;
+      const planDisplayName = tier === 'test' ? 'Test Plan (₹1)' : `${tier.toUpperCase()} Plan`;
+      
+      await sendClinicSubInvoice({
         to: clinicPhone,
         adminName,
         clinicName,
-        planName: `${tier.toUpperCase()} Plan`,
-        billingCycle: cycle.toUpperCase(),
-        amountPaid: planAmount,
-        nextRenewalDate: formatDisplayDate(new Date(now + durationDays * 86400000)),
+        invoiceNo: invNum,
+        planName: planDisplayName,
+        totalAmount: planAmount,
+        invoiceDate: formatDisplayDate(new Date()),
         supportPhone: '+91 73961 11081',
         clinicId,
       });
@@ -1379,3 +1396,5 @@ export const verifyRazorpayPayment = onCall(async (request) => {
     throw new HttpsError("invalid-argument", "Invalid signature.");
   }
 });
+
+

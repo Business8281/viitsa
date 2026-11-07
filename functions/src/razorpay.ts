@@ -6,7 +6,6 @@ import * as nodemailer from "nodemailer";
 import PDFDocument from "pdfkit";
 import { generateSubscriptionInvoicePdf } from "./invoicePdf";
 import {
-  sendClinicPaymentSuccess,
   sendClinicPaymentFailed,
   sendClinicSubCancelled,
   sendClinicSubInvoice,
@@ -120,6 +119,113 @@ function buildRazorpayEmailHtml(options: {
 </html>`.trim();
 }
 
+/**
+ * Resolves the genuine clinic administrator phone number directly from the database.
+ * Priority:
+ * 1. clinic.phone, contact_phone, reception_phone, mobile, or whatsapp_phone
+ * 2. clinic owner / admin user's phone in Firestore
+ * 3. any clinic_admin user linked to the clinic
+ * 4. any staff/doctor in the clinic
+ * 5. ONLY if the entire clinic has no phone in the database, falls back to the provided fallback.
+ */
+async function resolveClinicAdminPhone(clinicId?: string, fallbackPhone?: string): Promise<string | null> {
+  if (clinicId) {
+    try {
+      const cDoc = await getDb().collection("clinics").doc(clinicId).get();
+      if (cDoc.exists) {
+        const cData = cDoc.data() || {};
+        const cp = cData.phone || cData.contact_phone || cData.reception_phone || cData.mobile || cData.whatsapp_phone;
+        if (cp) return cp;
+        const ownerId = cData.owner_user_id || cData.admin_user_id;
+        if (ownerId) {
+          const uDoc = await getDb().collection("users").doc(ownerId).get();
+          if (uDoc.exists) {
+            const uData = uDoc.data() || {};
+            const up = uData.phone || uData.phone_number || uData.phoneNumber || uData.contact_phone || uData.mobile;
+            if (up) return up;
+          }
+        }
+      }
+      const usersSnap = await getDb().collection("users").where("clinic_id", "==", clinicId).get();
+      for (const uDoc of usersSnap.docs) {
+        const uData = uDoc.data();
+        if (uData.role === "clinic_admin") {
+          const up = uData.phone || uData.phone_number || uData.phoneNumber || uData.contact_phone || uData.mobile;
+          if (up) return up;
+        }
+      }
+      for (const uDoc of usersSnap.docs) {
+        const uData = uDoc.data();
+        const up = uData.phone || uData.phone_number || uData.phoneNumber || uData.contact_phone || uData.mobile;
+        if (up) return up;
+      }
+    } catch (e) {
+      console.warn("Error resolving clinic admin phone from database:", e);
+    }
+  }
+  return fallbackPhone || null;
+}
+
+/**
+ * Dispatches the official WhatsApp subscription tax invoice:
+ * 1. ALWAYS to the Clinic Admin's registered WhatsApp phone number from the database.
+ * 2. If the payer entered a DIFFERENT number on checkout (e.g. accountant/doctor/staff paying),
+ *    also dispatches to the payer's number so both parties receive the confirmation!
+ */
+async function dispatchSubscriptionInvoiceToRecipients(options: {
+  clinicId?: string;
+  payerContact?: string | null;
+  adminName?: string;
+  clinicName?: string;
+  invoiceNo: string;
+  planName: string;
+  totalAmount: number | string;
+  invoiceDate?: string;
+  supportPhone?: string;
+}) {
+  const clinicAdminPhone = await resolveClinicAdminPhone(options.clinicId);
+  const payerPhone = options.payerContact;
+
+  const cleanAdmin = clinicAdminPhone ? String(clinicAdminPhone).replace(/\D/g, "").slice(-10) : "";
+  const cleanPayer = payerPhone ? String(payerPhone).replace(/\D/g, "").slice(-10) : "";
+
+  const destinations: { phone: string; label: string }[] = [];
+
+  // 1. Clinic Admin registered number ALWAYS receives the invoice
+  if (clinicAdminPhone) {
+    destinations.push({ phone: clinicAdminPhone, label: "Clinic Admin" });
+  }
+
+  // 2. Number given at Razorpay checkout ALSO receives the invoice (if different from admin)
+  if (payerPhone && cleanPayer && cleanPayer !== cleanAdmin) {
+    destinations.push({ phone: payerPhone, label: "Payer (Razorpay Checkout)" });
+  }
+
+  // Fallback: if database had no clinic admin phone, send to payer phone
+  if (destinations.length === 0 && payerPhone) {
+    destinations.push({ phone: payerPhone, label: "Payer" });
+  }
+
+  for (const dest of destinations) {
+    try {
+      await sendClinicSubInvoice({
+        to: dest.phone,
+        adminName: options.adminName || 'Doctor',
+        clinicName: options.clinicName || 'Clinic',
+        invoiceNo: options.invoiceNo,
+        planName: options.planName,
+        totalAmount: options.totalAmount,
+        invoiceDate: options.invoiceDate || new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }),
+        supportPhone: options.supportPhone || '+91 73961 11081',
+        clinicId: options.clinicId,
+      });
+      console.log(`[dispatchSubscriptionInvoice] Successfully sent invoice to ${dest.label} (${dest.phone})`);
+    } catch (err) {
+      console.warn(`[dispatchSubscriptionInvoice] Could not deliver invoice to ${dest.label} (${dest.phone}):`, err);
+    }
+  }
+}
+
 const RAZORPAY_PLANS: Record<string, Record<string, string>> = {
   solo: {
     monthly: "plan_TkvpQ2LluCpPIu", // ₹2,999/mo
@@ -132,6 +238,10 @@ const RAZORPAY_PLANS: Record<string, Record<string, string>> = {
   multispecialty: {
     monthly: "plan_TnqRjtV2FJcvRj", // ₹11,999/mo
     annual: "plan_To65A7RUG0xsVs",  // ₹1,19,990/yr
+  },
+  test: {
+    monthly: "plan_To68mK4uUYtaWP", // ₹1/mo
+    annual: "plan_To68mK4uUYtaWP",  // ₹1/mo
   },
 };
 
@@ -183,7 +293,8 @@ export const createClinicSubscription = onCall({ region: "asia-south1" }, async 
     }
   }
 
-  const effectiveSkipTrial = Boolean(skipTrial || trialAlreadyUsed);
+  const isTestTier = tier === 'test';
+  const effectiveSkipTrial = Boolean(skipTrial || trialAlreadyUsed || isTestTier);
 
   const razorpay = new Razorpay({
     key_id: process.env.RAZORPAY_KEY_ID || "",
@@ -191,10 +302,76 @@ export const createClinicSubscription = onCall({ region: "asia-south1" }, async 
   });
 
   try {
+    if (isTestTier) {
+      // Create a Razorpay Payment Link for ₹1.
+      // Payment Links are hosted directly on Razorpay's verified domain (rzp.io),
+      // which completely bypasses the "website does not match registered website" block on test hostnames!
+      let adminPhone = await resolveClinicAdminPhone(
+        clinicId,
+        (request.data as any)?.phone || (request.auth.token as any)?.phone_number || userData.phone
+      );
+      const rawPhone = adminPhone ? String(adminPhone).replace(/\D/g, "") : "";
+      const finalContact = rawPhone.length >= 10 ? rawPhone.slice(-10) : "";
+
+      const customerPayload: any = {
+        name: clinicData.owner_name || clinicData.name || userData.name || "Clinic Administrator",
+        email: clinicEmail || "accounts@viitsa.com"
+      };
+      if (finalContact) {
+        customerPayload.contact = finalContact;
+      }
+
+      const checkoutReadonly: any = {
+        email: true
+      };
+      if (finalContact) {
+        checkoutReadonly.contact = true;
+      }
+
+      const paymentLink: any = await (razorpay.paymentLink.create({
+        amount: 100, // ₹1.00 in paise
+        currency: "INR",
+        accept_partial: false,
+        description: "Test Plan (₹1) Invoice Verification",
+        customer: customerPayload,
+        options: {
+          checkout: {
+            readonly: checkoutReadonly
+          }
+        },
+        notify: {
+          sms: false,
+          email: false
+        },
+        reminder_enable: false,
+        notes: {
+          clinic_id: clinicId,
+          tier: "test",
+          cycle: cycle || "monthly",
+          plan_name: "Test Plan (₹1)",
+          is_test_plan: "true",
+          phone: finalContact || "",
+          admin_name: clinicData.owner_name || userData.name || "Clinic Administrator",
+          clinic_name: clinicData.name || "Clinic"
+        },
+        callback_url: `https://viitsadb.web.app/clinic/subscription-success?tier=test&status=paid`,
+        callback_method: "get"
+      }) as any);
+
+      return {
+        id: paymentLink.id,
+        short_url: paymentLink.short_url,
+        is_payment_link: true,
+        is_order: false,
+        is_trial: false,
+        trial_already_used: trialAlreadyUsed
+      };
+    }
+
     const payload: any = {
       plan_id: resolvedPlanId,
       customer_notify: 1,
-      total_count: cycle === 'annual' ? 10 : 120, // 10 cycles
+      total_count: (cycle === 'annual' ? 10 : 120),
       notes: {
         clinic_id: clinicId,
         tier: tier || 'clinic',
@@ -564,8 +741,9 @@ export const razorpayWebhook = onRequest(async (req, res) => {
               solo: { monthly: 2999, annual: 29990 },
               clinic: { monthly: 5999, annual: 59990 },
               multispecialty: { monthly: 11999, annual: 119990 },
+              test: { monthly: 1, annual: 1 },
             };
-            const planAmount = planPricing[tier]?.[cycle] || (tier === 'multispecialty' ? 11999 : tier === 'clinic' ? 5999 : 2999);
+            const planAmount = planPricing[tier]?.[cycle] || (tier === 'test' ? 1 : tier === 'multispecialty' ? 11999 : tier === 'clinic' ? 5999 : 2999);
             const invNum = `VIITSA-${isTrial ? 'TRL' : 'SUB'}-${Date.now().toString().slice(-6)}`;
 
             let invBuffer: Buffer | null = null;
@@ -752,8 +930,9 @@ export const razorpayWebhook = onRequest(async (req, res) => {
                 solo: { monthly: 2999, annual: 29990 },
                 clinic: { monthly: 5999, annual: 59990 },
                 multispecialty: { monthly: 11999, annual: 119990 },
+                test: { monthly: 1, annual: 1 },
               };
-              const renewalAmount = payment?.amount ? (payment.amount / 100) : (planPricing[tier]?.[cycle] || 5999);
+              const renewalAmount = payment?.amount ? (payment.amount / 100) : (planPricing[tier]?.[cycle] || (tier === 'test' ? 1 : 5999));
               const invNum = `VIITSA-REN-${Date.now().toString().slice(-6)}`;
 
               let renPdf: Buffer | null = null;
@@ -817,20 +996,11 @@ export const razorpayWebhook = onRequest(async (req, res) => {
             }
           }
 
-          // Dispatch WhatsApp renewal notification
+          // Dispatch WhatsApp renewal notification directly to Clinic Admin
           try {
             const clinicDoc = await getDb().collection("clinics").doc(clinicId).get();
             const clinicData = clinicDoc.data() || {};
-            let cPhone = clinicData.phone || clinicData.contact_phone || sub.customer_details?.contact || payment?.contact;
-            if (!cPhone && clinicUsers.docs.length > 0) {
-              cPhone = clinicUsers.docs[0].data()?.phone;
-            }
-            if (!cPhone && (clinicData.owner_user_id || clinicData.admin_user_id)) {
-              const uSnap = await getDb().collection("users").doc(clinicData.owner_user_id || clinicData.admin_user_id).get();
-              if (uSnap.exists) {
-                cPhone = uSnap.data()?.phone;
-              }
-            }
+            const cPhone = await resolveClinicAdminPhone(clinicId, sub.customer_details?.contact || payment?.contact);
             // If the clinic was transitioning from trial/deactivated to active, onClinicSubscriptionStatusChanged
             // already canonically dispatches viitsa_clinic_sub_activated.
             // Only send standalone payment success receipt if clinic was already active (routine renewal charge),
@@ -840,16 +1010,18 @@ export const razorpayWebhook = onRequest(async (req, res) => {
                 solo: { monthly: 2999, annual: 29990 },
                 clinic: { monthly: 5999, annual: 59990 },
                 multispecialty: { monthly: 11999, annual: 119990 },
+                test: { monthly: 1, annual: 1 },
               };
-              const paidAmt = payment?.amount ? (payment.amount / 100) : (planPricing[tier]?.[cycle] || 5999);
-              await sendClinicPaymentSuccess({
+              const paidAmt = payment?.amount ? (payment.amount / 100) : (planPricing[tier]?.[cycle] || (tier === 'test' ? 1 : 5999));
+              const invNum = payment?.id || `VIITSA-SUB-${Date.now().toString().slice(-6)}`;
+              await sendClinicSubInvoice({
                 to: cPhone,
                 adminName: clinicData.owner_name || 'Doctor',
                 clinicName: clinicData.name || 'Clinic',
-                planName: `${tier.toUpperCase()} Plan`,
-                amount: paidAmt,
-                transactionId: payment?.id || sub.id,
-                nextRenewalDate: new Date(Date.now() + (cycle === 'annual' ? 365 : 30) * 86400000).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }),
+                invoiceNo: invNum,
+                planName: tier === 'test' ? 'Test Plan (₹1)' : `${tier.toUpperCase()} Plan`,
+                totalAmount: paidAmt,
+                invoiceDate: new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }),
                 supportPhone: '+91 73961 11081',
                 clinicId,
               });
@@ -894,6 +1066,12 @@ export const razorpayWebhook = onRequest(async (req, res) => {
     } else if (event.event === "payment.failed") {
       const payment = event.payload.payment?.entity;
       const clinicId = payment?.notes?.clinic_id;
+      const isTestPlan = payment?.notes?.is_test_plan === 'true' || payment?.notes?.tier === 'test';
+      if (isTestPlan) {
+        console.log(`[RazorpayWebhook] Suppressed payment.failed notification for test plan.`);
+        res.status(200).send("OK");
+        return;
+      }
       if (clinicId) {
         try {
           const clinicDoc = await getDb().collection("clinics").doc(clinicId).get();
@@ -919,12 +1097,52 @@ export const razorpayWebhook = onRequest(async (req, res) => {
     } else if (event.event === "payment.captured") {
       const payment = event.payload.payment?.entity;
       const clinicId = payment?.notes?.clinic_id;
-      if (clinicId && !payment?.subscription_id) {
-        await getDb().collection("clinics").doc(clinicId).update({
-          last_payment_id: payment.id,
-          last_payment_status: "paid",
-          subscription_updated_at: new Date().toISOString()
-        }).catch(() => {});
+      const isTestPlan = payment?.notes?.is_test_plan === 'true' || payment?.notes?.tier === 'test';
+
+      if (clinicId) {
+        if (isTestPlan) {
+          const updatePayload: any = {
+            last_payment_id: payment.id,
+            last_payment_status: "paid",
+            subscription_status: "active",
+            subscription_plan: "test",
+            subscription_billing_cycle: payment?.notes?.cycle || "monthly",
+            subscription_activated_at: new Date().toISOString(),
+            subscription_updated_at: new Date().toISOString()
+          };
+          await getDb().collection("clinics").doc(clinicId).update(updatePayload).catch(() => {});
+          
+          await getDb().collection("subscriptions").doc(payment.order_id || payment.id).set({
+            id: payment.order_id || payment.id,
+            clinic_id: clinicId,
+            plan_name: "Test Plan (₹1)",
+            tier: "test",
+            billing_cycle: "monthly",
+            status: "active",
+            created_at: new Date().toISOString(),
+            payment_id: payment.id,
+            payment_status: "paid"
+          }, { merge: true }).catch(() => {});
+
+          // Dispatch invoice WhatsApp template with PDF attachment to Clinic Admin AND payer (if different)
+          await dispatchSubscriptionInvoiceToRecipients({
+            clinicId,
+            payerContact: payment?.contact || payment?.notes?.phone,
+            adminName: payment?.notes?.admin_name || 'Doctor',
+            clinicName: payment?.notes?.clinic_name || 'Clinic',
+            invoiceNo: payment.id,
+            planName: 'Test Plan (₹1)',
+            totalAmount: 1,
+            invoiceDate: new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }),
+            supportPhone: '+91 73961 11081',
+          });
+        } else if (!payment?.subscription_id) {
+          await getDb().collection("clinics").doc(clinicId).update({
+            last_payment_id: payment.id,
+            last_payment_status: "paid",
+            subscription_updated_at: new Date().toISOString()
+          }).catch(() => {});
+        }
       }
     } else if (event.event === "payment_link.paid") {
       const plink = event.payload.payment_link?.entity;
@@ -936,8 +1154,13 @@ export const razorpayWebhook = onRequest(async (req, res) => {
 
       const urlOrId = `${plink?.short_url || ''} ${plink?.id || ''}`;
 
+      // Test plan link
+      if (plink?.notes?.is_test_plan === 'true' || plink?.notes?.tier === 'test' || plink?.amount === 100) {
+        tier = 'test';
+        cycle = 'monthly';
+      }
       // Annual links
-      if (urlOrId.includes("xlfXiVqg") || plink?.amount === 2999000) {
+      else if (urlOrId.includes("xlfXiVqg") || plink?.amount === 2999000) {
         tier = "solo";
         cycle = "annual";
       } else if (urlOrId.includes("9OYAB40N") || plink?.amount === 5999000) {
@@ -1007,8 +1230,9 @@ export const razorpayWebhook = onRequest(async (req, res) => {
               solo: { monthly: 2999, annual: 29990 },
               clinic: { monthly: 5999, annual: 59990 },
               multispecialty: { monthly: 11999, annual: 119990 },
+              test: { monthly: 1, annual: 1 },
             };
-            const linkAmount = payment?.amount ? (payment.amount / 100) : (plink?.amount ? plink.amount / 100 : (planPricing[tier]?.[cycle] || 5999));
+            const linkAmount = payment?.amount ? (payment.amount / 100) : (plink?.amount ? plink.amount / 100 : (planPricing[tier]?.[cycle] || (tier === 'test' ? 1 : 5999)));
             const invNum = `VIITSA-INV-${Date.now().toString().slice(-6)}`;
 
             let paidPdf: Buffer | null = null;
@@ -1068,6 +1292,20 @@ export const razorpayWebhook = onRequest(async (req, res) => {
           } catch (e) {
             console.warn("Could not send webhook confirmation email:", e);
           }
+        }
+
+        if (tier === 'test') {
+          await dispatchSubscriptionInvoiceToRecipients({
+            clinicId,
+            payerContact: plink?.customer?.contact || plink?.notes?.phone || payment?.contact,
+            adminName: plink?.customer?.name || 'Doctor',
+            clinicName: plink?.notes?.clinic_name || 'Clinic',
+            invoiceNo: payment?.id || plink?.id || `VIITSA-SUB-${Date.now().toString().slice(-6)}`,
+            planName: 'Test Plan (₹1)',
+            totalAmount: 1,
+            invoiceDate: new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }),
+            supportPhone: '+91 73961 11081',
+          });
         }
 
         // WhatsApp lifecycle notification is canonically handled by onClinicSubscriptionStatusChanged
@@ -1183,42 +1421,34 @@ export const razorpayWebhook = onRequest(async (req, res) => {
             ]
           });
 
-          // Dispatch WhatsApp template viitsa_clinic_sub_invoice
-          let contact = invoice.customer_details?.contact;
-          if (!contact && clinicId) {
+          let invoicePlanName = 'Clinic Pro Subscription';
+          const invoiceSubId = invoice.subscription_id || event.payload.subscription?.entity?.id;
+          if (invoiceSubId) {
             try {
-              const cDoc = await getDb().collection("clinics").doc(clinicId).get();
-              if (cDoc.exists) {
-                const cData = cDoc.data() || {};
-                contact = cData.phone || cData.contact_phone;
-                if (!contact && (cData.owner_user_id || cData.admin_user_id)) {
-                  const uSnap = await getDb().collection("users").doc(cData.owner_user_id || cData.admin_user_id).get();
-                  if (uSnap.exists) {
-                    contact = uSnap.data()?.phone;
-                  }
+              const subDoc = await getDb().collection("subscriptions").doc(invoiceSubId).get();
+              if (subDoc.exists) {
+                const sData = subDoc.data() || {};
+                if (sData.tier === 'test') {
+                  invoicePlanName = 'Test Plan (₹1)';
+                } else if (sData.plan_name) {
+                  invoicePlanName = sData.plan_name;
                 }
               }
-            } catch (cErr) {
-              console.warn("Error fetching clinic phone for invoice WhatsApp:", cErr);
-            }
+            } catch (sErr) {}
           }
-          if (contact) {
-            try {
-              await sendClinicSubInvoice({
-                to: contact,
-                adminName: invoice.customer_details?.name || 'Doctor',
-                clinicName: invoice.customer_details?.name || 'Clinic',
-                invoiceNo: invoiceId,
-                planName: 'Clinic Pro Subscription',
-                totalAmount: amountStr,
-                invoiceDate: new Date(invoice.issued_at * 1000 || Date.now()).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }),
-                supportPhone: '+91 73961 11081',
-                clinicId,
-              });
-            } catch (waErr) {
-              console.warn("Could not dispatch WhatsApp invoice template:", waErr);
-            }
-          }
+
+          // Dispatch WhatsApp template viitsa_clinic_sub_invoice to Clinic Admin AND payer (if different)
+          await dispatchSubscriptionInvoiceToRecipients({
+            clinicId,
+            payerContact: invoice.customer_details?.contact,
+            adminName: invoice.customer_details?.name || 'Doctor',
+            clinicName: invoice.customer_details?.name || 'Clinic',
+            invoiceNo: invoiceId,
+            planName: invoicePlanName,
+            totalAmount: amountStr,
+            invoiceDate: new Date(invoice.issued_at * 1000 || Date.now()).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }),
+            supportPhone: '+91 73961 11081',
+          });
         } catch (e) {
           console.error("Error sending invoice email", e);
         }

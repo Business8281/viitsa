@@ -492,6 +492,9 @@ function ClinicLayout() {
     if (user.clinic_documents_uploaded !== true) return <Navigate to="/clinic/upload-documents" replace />;
     const verificationStatus = clinic?.verification_status || user.clinic_verification_status || 'unverified';
     if (verificationStatus !== 'approved') return <Navigate to="/clinic/pending-approval" replace />;
+    if (clinic?.subscription_status !== 'active' && clinic?.subscription_status !== 'free_plan' && clinic?.subscription_status !== 'trial') {
+      return <Navigate to="/clinic/subscription-setup" replace />;
+    }
   } else if (user.role === 'clinic_doctor' || user.role === 'clinic_staff' || user.role === 'doctor' || user.role === 'staff') {
     if (clinic && clinic.verification_status !== 'approved') {
       return <Navigate to="/clinic/pending-approval" replace />;

@@ -49,8 +49,17 @@ export function ClinicSubscriptionSetupPage() {
   const [showSwitchPlans, setShowSwitchPlans] = useState(false);
   const [success, setSuccess] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
-  const [selectedTier, setSelectedTier] = useState<'solo' | 'clinic' | 'multispecialty'>('clinic');
+  const [selectedTier, setSelectedTier] = useState<'solo' | 'clinic' | 'multispecialty' | 'test'>('clinic');
   const [selectedCycle, setSelectedCycle] = useState<'monthly' | 'annual'>('monthly');
+
+  // Host-based isolation: Test Plan is ONLY visible on test / staging hosting (viitsadb.web.app, viitsadb.firebaseapp.com, localhost)
+  // NEVER on the main production domain (viitsa.com or www.viitsa.com)
+  const isTestPlanHost = typeof window !== 'undefined' && (
+    window.location.hostname.includes('viitsadb') ||
+    window.location.hostname.includes('localhost') ||
+    window.location.hostname === '127.0.0.1' ||
+    new URLSearchParams(window.location.search).get('test_plan') === 'true'
+  );
 
   // Self-healing:
   // 1. If trial was activated and 30 days have not elapsed, guarantee status is 'trial' and trial_completed is false.
@@ -96,13 +105,14 @@ export function ClinicSubscriptionSetupPage() {
   }, [clinic?.clinic_id, clinic?.subscription_status, clinic?.trial_completed, clinic?.trial_activated, clinic?.trial_used, clinic?.trial_ends_at, isTrialPeriodStillRunning, hasActuallyCompletedTrial, user?.user_id]);
 
 
-  const handleSuccess = async (paymentData?: any, chosenTier?: 'solo' | 'clinic' | 'multispecialty') => {
+  const handleSuccess = async (paymentData?: any, chosenTier?: 'solo' | 'clinic' | 'multispecialty' | 'test') => {
     if (!user || !clinic) return;
     setIsProcessing(true);
 
     const activeTier = chosenTier || selectedTier;
-    // Resilient trial detection: if payment response confirms trial, OR user was eligible for trial, OR monthly plan chosen while not already active
-    const isTrial = Boolean(
+    const isTest = activeTier === 'test';
+    // Resilient trial detection: Test plan charges ₹1 immediately to verify invoices, so trial is false
+    const isTrial = isTest ? false : Boolean(
       paymentData?.is_trial ||
       isTrialEligible ||
       (selectedCycle === 'monthly' && clinic?.subscription_status !== 'active' && clinic?.trial_completed !== true)
@@ -176,8 +186,10 @@ export function ClinicSubscriptionSetupPage() {
         solo: { monthly: 2999, annual: 29990 },
         clinic: { monthly: 5999, annual: 59990 },
         multispecialty: { monthly: 11999, annual: 119990 },
+        test: { monthly: 1, annual: 1 },
       };
-      const planAmount = planPricing[activeTier]?.[selectedCycle] || 5999;
+      const planAmount = planPricing[activeTier]?.[selectedCycle] || (activeTier === 'test' ? 1 : 5999);
+      const displayPlanName = activeTier === 'test' ? 'Test Plan (₹1)' : `${activeTier.toUpperCase()} Plan (${selectedCycle.toUpperCase()})`;
 
       if (recipientEmail) {
         try {
@@ -187,9 +199,11 @@ export function ClinicSubscriptionSetupPage() {
 
           await sendInstantEmail({
             to: recipientEmail,
-            subject: isTrial
-              ? `30-Day Free Trial Activated: ${activeTier.toUpperCase()} Plan | Viitsa Healthcare`
-              : `Subscription Activated: ${activeTier.toUpperCase()} Plan (${selectedCycle.toUpperCase()}) | Viitsa Healthcare`,
+            subject: isTest
+              ? `Test Plan (₹1) Invoice & Confirmation | Viitsa Healthcare`
+              : isTrial
+                ? `30-Day Free Trial Activated: ${activeTier.toUpperCase()} Plan | Viitsa Healthcare`
+                : `Subscription Activated: ${activeTier.toUpperCase()} Plan (${selectedCycle.toUpperCase()}) | Viitsa Healthcare`,
             invoiceData: {
               invoiceNumber: invNum,
               invoiceDate: new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }),
@@ -197,17 +211,17 @@ export function ClinicSubscriptionSetupPage() {
               clinicName: clinic.name || 'Clinic Partner',
               customerEmail: recipientEmail,
               customerPhone: (clinic as any)?.phone || '',
-              planName: `${activeTier.toUpperCase()} Plan (${selectedCycle.toUpperCase()})`,
+              planName: displayPlanName,
               tier: activeTier,
               cycle: selectedCycle,
               amount: isTrial ? 0 : planAmount,
               paymentId: paymentData?.razorpay_payment_id || paymentData?.razorpay_subscription_id || 'Autopay Mandate',
               isTrial,
-              notes: isTrial ? '30-Day Free Trial Activated. Auto-mandate registered.' : 'Subscription active in real-time.'
+              notes: isTest ? 'Test Plan (₹1) Invoice Verification.' : isTrial ? '30-Day Free Trial Activated. Auto-mandate registered.' : 'Subscription active in real-time.'
             },
             htmlContent: buildSubscriptionActivatedHtml({
               clinicName: clinic.name,
-              planName: `${activeTier.toUpperCase()} Plan`,
+              planName: displayPlanName,
               cycle: selectedCycle,
               isTrial,
               trialEndsAt: isTrial ? new Date(trialEndsAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' }) : undefined,
@@ -466,7 +480,7 @@ export function ClinicSubscriptionSetupPage() {
             </div>
 
             {/* Tier Cards Grid */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+            <div className={`grid grid-cols-1 ${isTestPlanHost ? 'md:grid-cols-2 lg:grid-cols-4' : 'md:grid-cols-3'} gap-6 mb-8`}>
               {[
                 {
                   id: 'solo' as const,
@@ -495,28 +509,51 @@ export function ClinicSubscriptionSetupPage() {
                   priceAnnual: '₹1,19,990',
                   limits: ['Up to 8 Doctors', '20 Staff seats', '1 Location', '2,000 AI Intakes / mo', '5,000 WhatsApp / mo', 'Unlimited document storage'],
                   planId: import.meta.env.VITE_RAZORPAY_PLAN_ID_MULTI || 'plan_multi_default'
-                }
+                },
+                ...(isTestPlanHost ? [{
+                  id: 'test' as const,
+                  name: 'Test Plan',
+                  desc: 'Instant ₹1 plan for live invoice & WhatsApp verification.',
+                  priceMonthly: '₹1',
+                  priceAnnual: '₹1',
+                  popular: false,
+                  isTest: true,
+                  limits: [
+                    '₹1 Immediate Charge',
+                    'Instant PDF Invoice Generation',
+                    'WhatsApp Invoice Delivery Test',
+                    'Email Invoice Delivery Test',
+                    'Full Clinic Access Unlocked'
+                  ],
+                  planId: 'plan_To68mK4uUYtaWP'
+                }] : [])
               ].map((tier) => {
                 const isSelected = selectedTier === tier.id;
+                const isTest = (tier as any).isTest;
 
                 return (
                   <div
                     key={tier.id}
                     onClick={() => setSelectedTier(tier.id)}
                     className={`bg-white border rounded-2xl p-6 shadow-sm relative overflow-hidden flex flex-col justify-between transition-all ${isSelected
-                      ? 'border-primary ring-2 ring-primary/20 shadow-md'
-                      : 'border-black/5 hover:border-black/20'
+                      ? isTest ? 'border-amber-500 ring-2 ring-amber-500/20 shadow-md' : 'border-primary ring-2 ring-primary/20 shadow-md'
+                      : isTest ? 'border-amber-200 hover:border-amber-400 bg-amber-50/20' : 'border-black/5 hover:border-black/20'
                       }`}
                   >
-                    {tier.popular && (
+                    {(tier as any).popular && (
                       <div className="absolute top-0 right-0 bg-accent text-white text-[10px] font-bold uppercase tracking-wider px-3 py-1 rounded-bl-xl">
                         Most Popular
+                      </div>
+                    )}
+                    {isTest && (
+                      <div className="absolute top-0 right-0 bg-amber-600 text-white text-[10px] font-bold uppercase tracking-wider px-3 py-1 rounded-bl-xl shadow-sm">
+                        Invoice Test (₹1)
                       </div>
                     )}
 
                     <div>
                       <div className="flex items-center gap-2 mb-2">
-                        <Crown size={18} className={tier.popular ? "text-accent" : "text-primary"} />
+                        <Crown size={18} className={(tier as any).popular ? "text-accent" : isTest ? "text-amber-600" : "text-primary"} />
                         <h3 className="text-lg font-bold text-ink">{tier.name}</h3>
                       </div>
                       <p className="text-ink-subtle text-xs mb-4">{tier.desc}</p>
@@ -530,7 +567,17 @@ export function ClinicSubscriptionSetupPage() {
                             {selectedCycle === 'annual' ? '/ year' : '/ month'}
                           </span>
                         </div>
-                        {isTrialEligible ? (
+                        {isTest ? (
+                          <div className="mt-2 space-y-1">
+                            <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-amber-50 border border-amber-200 text-amber-800 text-[11px] font-bold">
+                              <CreditCard size={12} className="text-amber-600 shrink-0" />
+                              <span>Instant ₹1 Live Payment</span>
+                            </div>
+                            <p className="text-[11px] text-amber-700 font-medium">
+                              Charges ₹1 now • Verifies PDF invoice & WhatsApp delivery
+                            </p>
+                          </div>
+                        ) : isTrialEligible ? (
                           <div className="mt-2 space-y-1">
                             <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-800 text-[11px] font-bold">
                               <Sparkles size={12} className="text-emerald-600 shrink-0" />
@@ -556,7 +603,7 @@ export function ClinicSubscriptionSetupPage() {
                       <ul className="space-y-2.5 mb-6 text-xs">
                         {tier.limits.map((lim, idx) => (
                           <li key={idx} className="flex items-center gap-2 text-ink">
-                            <CheckCircle2 size={14} className="text-primary shrink-0" />
+                            <CheckCircle2 size={14} className={isTest ? "text-amber-600 shrink-0" : "text-primary shrink-0"} />
                             <span>{lim}</span>
                           </li>
                         ))}
@@ -569,20 +616,27 @@ export function ClinicSubscriptionSetupPage() {
                           clinicId={clinic?.clinic_id || ''}
                           tier={tier.id}
                           cycle={selectedCycle}
-                          skipTrial={!isTrialEligible}
+                          skipTrial={isTest ? true : !isTrialEligible}
+                          planId={tier.planId}
                           prefillEmail={clinic?.email || user?.email}
                           prefillName={clinic?.name || user?.name}
                           prefillContact={clinic?.phone || user?.phone}
                           buttonText={
-                            isTrialEligible
-                              ? "Start Free Trial of 30 Days"
-                              : isRetry
-                                ? "Update Payment Method & Retry"
-                                : "Pay & Activate Subscription"
+                            isTest
+                              ? "Pay ₹1 & Test Invoice"
+                              : isTrialEligible
+                                ? "Start Free Trial of 30 Days"
+                                : isRetry
+                                  ? "Update Payment Method & Retry"
+                                  : "Pay & Activate Subscription"
                           }
-                          className={`w-full py-3 px-3 rounded-xl text-xs font-bold transition-all shadow-sm flex items-center justify-center text-center cursor-pointer ${isSelected
-                            ? 'btn-primary shadow-md'
-                            : 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                          className={`w-full py-3 px-3 rounded-xl text-xs font-bold transition-all shadow-sm flex items-center justify-center text-center cursor-pointer ${isTest
+                            ? isSelected
+                              ? 'bg-amber-600 hover:bg-amber-700 text-white shadow-md'
+                              : 'bg-amber-500 hover:bg-amber-600 text-white'
+                            : isSelected
+                              ? 'btn-primary shadow-md'
+                              : 'bg-emerald-600 hover:bg-emerald-700 text-white'
                             }`}
                           onSuccess={(paymentData) => handleSuccess(paymentData, tier.id)}
                         />

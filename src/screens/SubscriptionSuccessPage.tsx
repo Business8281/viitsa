@@ -84,6 +84,8 @@ export function SubscriptionSuccessPage() {
       detectedTier = planParam.toLowerCase();
     } else if (pendingUpgrade?.tier) {
       detectedTier = pendingUpgrade.tier.toLowerCase();
+    } else if (typeof window !== 'undefined' && sessionStorage.getItem('viitsa_sub_tier')) {
+      detectedTier = (sessionStorage.getItem('viitsa_sub_tier') || 'clinic').toLowerCase();
     } else if (clinic?.subscription_plan) {
       detectedTier = clinic.subscription_plan.toLowerCase();
     }
@@ -130,7 +132,7 @@ export function SubscriptionSuccessPage() {
         const isTrialSession = typeof window !== 'undefined' && sessionStorage.getItem('viitsa_is_trial') === 'true';
         const isTrialClinic = (clinic?.subscription_status === 'trial' || (clinic as any)?.trial_status === 'active_trial') ||
           ((clinic as any)?.trial_completed !== true && detectedCycle === 'monthly' && clinic?.subscription_status !== 'active');
-        const isTrial = Boolean(isTrialParam || isTrialSession || (pendingUpgrade?.is_trial === true) || isTrialClinic);
+        const isTrial = detectedTier === 'test' ? false : Boolean(isTrialParam || isTrialSession || (pendingUpgrade?.is_trial === true) || isTrialClinic);
         const trialEndsAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
         setResolvedIsTrial(isTrial);
 
@@ -218,16 +220,20 @@ export function SubscriptionSuccessPage() {
               solo: { monthly: 2999, annual: 29990 },
               clinic: { monthly: 5999, annual: 59990 },
               multispecialty: { monthly: 11999, annual: 119990 },
+              test: { monthly: 1, annual: 1 },
             };
-            const paidAmount = planPricing[detectedTier]?.[detectedCycle] || (detectedTier === 'multispecialty' ? 11999 : detectedTier === 'clinic' ? 5999 : 2999);
+            const paidAmount = planPricing[detectedTier]?.[detectedCycle] || (detectedTier === 'test' ? 1 : detectedTier === 'multispecialty' ? 11999 : detectedTier === 'clinic' ? 5999 : 2999);
             const invNumber = `VIITSA-${isTrial ? 'TRL' : 'INV'}-${Date.now().toString().slice(-6)}`;
+            const displayPlanName = detectedTier === 'test' ? 'Test Plan (₹1)' : `${detectedTier.toUpperCase()} Plan (${detectedCycle.toUpperCase()})`;
 
             const sendInstantEmail = httpsCallable(functions, 'sendInstantEmail');
             await sendInstantEmail({
               to: recipientEmail,
-              subject: isTrial
-                ? `30-Day Free Trial Activated: ${detectedTier.toUpperCase()} Plan | Viitsa Healthcare`
-                : `Payment Confirmed: ${detectedTier.toUpperCase()} Plan (${detectedCycle.toUpperCase()}) Activated | Viitsa Healthcare`,
+              subject: detectedTier === 'test'
+                ? `Test Plan (₹1) Invoice & Confirmation | Viitsa Healthcare`
+                : isTrial
+                  ? `30-Day Free Trial Activated: ${detectedTier.toUpperCase()} Plan | Viitsa Healthcare`
+                  : `Payment Confirmed: ${detectedTier.toUpperCase()} Plan (${detectedCycle.toUpperCase()}) Activated | Viitsa Healthcare`,
               invoiceData: {
                 invoiceNumber: invNumber,
                 invoiceDate: new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }),
@@ -235,7 +241,7 @@ export function SubscriptionSuccessPage() {
                 clinicName: clinic?.name || 'Clinic Partner',
                 customerEmail: recipientEmail,
                 customerPhone: (clinic as any)?.phone || (clinic as any)?.contact_phone || '',
-                planName: `${detectedTier.toUpperCase()} Plan (${detectedCycle.toUpperCase()})`,
+                planName: displayPlanName,
                 tier: detectedTier,
                 cycle: detectedCycle,
                 amount: isTrial ? 0 : paidAmount,

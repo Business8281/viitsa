@@ -1,5 +1,8 @@
 import PDFDocument from "pdfkit";
 import * as admin from "firebase-admin";
+import * as crypto from "crypto";
+import * as path from "path";
+import * as fs from "fs";
 
 export interface InvoiceDetails {
   invoiceNumber: string;
@@ -44,30 +47,49 @@ export async function generateSubscriptionInvoicePdf(data: InvoiceDetails): Prom
       topGrad.stop(0, '#05C994').stop(0.5, '#04b081').stop(1, '#0f766e');
       doc.rect(0, 0, 595.28, 14).fill(topGrad);
 
-      // 2. HEADER SECTION (Left: Logo Tile & Brand)
-      // Logo tile: rounded square with gradient & white "V"
-      const tileGrad = doc.linearGradient(45, 36, 97, 88);
-      tileGrad.stop(0, '#05C994').stop(1, '#0f766e');
-      doc.roundedRect(45, 36, 52, 52, 12).fill(tileGrad);
+      // 2. HEADER SECTION (Left: Official Logo & Brand)
+      const logoCandidates = [
+        path.join(__dirname, 'assets', 'logo.png'),
+        path.join(__dirname, '..', 'src', 'assets', 'logo.png'),
+        path.join(process.cwd(), 'public', 'official_logo_VIITSA.png'),
+        path.join(process.cwd(), 'dist', 'official_logo_VIITSA.png')
+      ];
+      const logoPath = logoCandidates.find(p => fs.existsSync(p));
+      let hasRenderedLogo = false;
+      if (logoPath) {
+        try {
+          doc.image(logoPath, 45, 30, { fit: [60, 60] });
+          hasRenderedLogo = true;
+        } catch (imgErr) {
+          console.warn('Notice loading invoice logo image:', imgErr);
+        }
+      }
 
-      doc.fontSize(28).font('Helvetica-Bold').fillColor('#FFFFFF')
-        .text('V', 45, 48, { width: 52, align: 'center' });
+      if (!hasRenderedLogo) {
+        const tileGrad = doc.linearGradient(45, 36, 97, 88);
+        tileGrad.stop(0, '#05C994').stop(1, '#0f766e');
+        doc.roundedRect(45, 36, 52, 52, 12).fill(tileGrad);
+        doc.fontSize(28).font('Helvetica-Bold').fillColor('#FFFFFF')
+          .text('V', 45, 48, { width: 52, align: 'center' });
+      }
 
       // Brand Title next to logo
       doc.fontSize(24).font('Helvetica-Bold').fillColor('#05C994')
-        .text('VIITSA', 108, 40);
+        .text('VIITSA', 115, 36);
 
       const tierLabel = (data.tier || 'clinic').toUpperCase() === 'SOLO'
         ? 'SOLO PLAN'
         : (data.tier || '').toUpperCase() === 'MULTISPECIALTY'
           ? 'MULTI-SPECIALTY'
-          : 'CLINIC PRO';
+          : (data.tier || '').toUpperCase() === 'TEST'
+            ? 'TEST PLAN'
+            : 'CLINIC PRO';
 
       doc.fontSize(10).font('Helvetica-Bold').fillColor('#64748b')
-        .text(tierLabel, 109, 66);
+        .text(tierLabel, 116, 62);
 
       doc.fontSize(8.5).font('Helvetica').fillColor('#94a3b8')
-        .text('Smarter Healthcare, For Everyone', 109, 79);
+        .text('Smarter Healthcare, For Everyone', 116, 75);
 
       // HEADER RIGHT: Subtle "INVOICE" Watermark & Metadata Card
       doc.fontSize(36).font('Helvetica-Bold').fillColor('#f1f5f9')
@@ -422,15 +444,24 @@ export async function ensurePatientInvoicePdfUrl(data: PatientInvoicePdfDetails,
   const buffer = await generatePatientInvoicePdf(data);
 
   if (!admin.apps.length) admin.initializeApp();
-  const bucket = admin.storage().bucket();
+  const bucketName = process.env.STORAGE_BUCKET_NAME || process.env.FIREBASE_STORAGE_BUCKET || "viitsadb.firebasestorage.app";
+  let bucket: any;
+  try {
+    bucket = admin.storage().bucket(bucketName);
+  } catch (e) {
+    bucket = admin.storage().bucket();
+  }
   const cleanInv = (data.invoiceNumber || `BILL-${Date.now()}`).replace(/[^\w-]/g, '_');
   const filePath = `invoices/${clinicId || 'general'}/Invoice_${cleanInv}_${Date.now()}.pdf`;
   const file = bucket.file(filePath);
+
+  const downloadToken = crypto.randomUUID();
 
   await file.save(buffer, {
     metadata: {
       contentType: 'application/pdf',
       metadata: {
+        firebaseStorageDownloadTokens: downloadToken,
         invoiceNumber: data.invoiceNumber,
         clinicName: data.clinicName,
         patientName: data.patientName,
@@ -438,31 +469,34 @@ export async function ensurePatientInvoicePdfUrl(data: PatientInvoicePdfDetails,
     },
   });
 
-  try {
-    const [signedUrl] = await file.getSignedUrl({
-      action: 'read',
-      expires: '01-01-2035',
-    });
-    return signedUrl;
-  } catch (err) {
-    console.warn('[ensurePatientInvoicePdfUrl] getSignedUrl fallback to direct media URL:', err);
-    return `https://firebasestorage.googleapis.com/v0/b/${bucket.name}/o/${encodeURIComponent(filePath)}?alt=media`;
-  }
+  await file.makePublic().catch(() => {});
+  const publicMediaUrl = `https://firebasestorage.googleapis.com/v0/b/${bucket.name}/o/${encodeURIComponent(filePath)}?alt=media&token=${downloadToken}`;
+
+  return publicMediaUrl;
 }
 
 export async function ensureSubscriptionInvoicePdfUrl(data: InvoiceDetails, clinicId?: string): Promise<string> {
   const buffer = await generateSubscriptionInvoicePdf(data);
 
   if (!admin.apps.length) admin.initializeApp();
-  const bucket = admin.storage().bucket();
+  const bucketName = process.env.STORAGE_BUCKET_NAME || process.env.FIREBASE_STORAGE_BUCKET || "viitsadb.firebasestorage.app";
+  let bucket: any;
+  try {
+    bucket = admin.storage().bucket(bucketName);
+  } catch (e) {
+    bucket = admin.storage().bucket();
+  }
   const cleanInv = (data.invoiceNumber || `SUB-${Date.now()}`).replace(/[^\w-]/g, '_');
   const filePath = `invoices/${clinicId || 'subscriptions'}/Sub_Invoice_${cleanInv}_${Date.now()}.pdf`;
   const file = bucket.file(filePath);
+
+  const downloadToken = crypto.randomUUID();
 
   await file.save(buffer, {
     metadata: {
       contentType: 'application/pdf',
       metadata: {
+        firebaseStorageDownloadTokens: downloadToken,
         invoiceNumber: data.invoiceNumber,
         clinicName: data.clinicName,
         planName: data.planName,
@@ -470,14 +504,7 @@ export async function ensureSubscriptionInvoicePdfUrl(data: InvoiceDetails, clin
     },
   });
 
-  try {
-    const [signedUrl] = await file.getSignedUrl({
-      action: 'read',
-      expires: '01-01-2035',
-    });
-    return signedUrl;
-  } catch (err) {
-    console.warn('[ensureSubscriptionInvoicePdfUrl] getSignedUrl fallback to direct media URL:', err);
-    return `https://firebasestorage.googleapis.com/v0/b/${bucket.name}/o/${encodeURIComponent(filePath)}?alt=media`;
-  }
+  await file.makePublic().catch(() => {});
+  const publicMediaUrl = `https://firebasestorage.googleapis.com/v0/b/${bucket.name}/o/${encodeURIComponent(filePath)}?alt=media&token=${downloadToken}`;
+  return publicMediaUrl;
 }

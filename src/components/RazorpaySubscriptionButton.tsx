@@ -6,7 +6,7 @@ import { useToast } from '../lib/toast';
 interface RazorpaySubscriptionButtonProps {
   clinicId: string;
   planId?: string;
-  tier?: 'solo' | 'clinic' | 'multispecialty';
+  tier?: 'solo' | 'clinic' | 'multispecialty' | 'test';
   cycle?: 'monthly' | 'annual';
   buttonText?: string;
   className?: string;
@@ -66,12 +66,15 @@ export function RazorpaySubscriptionButton({
     try {
       // 1. Create subscription on backend with tier & cycle
       const createSubscription = httpsCallable(functions, 'createClinicSubscription');
+      const isTestTier = tier === 'test';
       const subResult = await createSubscription({ 
         clinicId, 
-        planId, 
-        skipTrial,
+        planId: planId || (isTestTier ? 'plan_To68mK4uUYtaWP' : undefined), 
+        skipTrial: isTestTier ? true : skipTrial,
         tier,
-        cycle
+        cycle,
+        phone: prefillContact,
+        email: prefillEmail
       });
       const subscription = subResult.data as any;
 
@@ -79,7 +82,13 @@ export function RazorpaySubscriptionButton({
         throw new Error('Failed to create subscription mandate');
       }
 
+      if (subscription.is_payment_link && subscription.short_url) {
+        window.location.href = subscription.short_url;
+        return;
+      }
+
       const isTrial = Boolean(subscription.is_trial);
+      const isOrder = Boolean(subscription.is_order || subscription.order_id);
 
       // Persist trial state in sessionStorage so redirect flow (UPI Autopay / Netbanking / 3DS) on SubscriptionSuccessPage detects trial
       if (typeof window !== 'undefined') {
@@ -91,16 +100,17 @@ export function RazorpaySubscriptionButton({
       }
 
       // 2. Configure and open Razorpay modal
-      const options = {
+      const options: any = {
         key: import.meta.env.VITE_RAZORPAY_KEY_ID, 
-        subscription_id: subscription.id,
         name: 'Viitsa Healthcare',
-        description: isTrial 
-          ? `30-Day Free Trial (₹0 today). Auto-renews via UPI/Card after 30 days.` 
-          : `${tier.toUpperCase()} Plan (${cycle.toUpperCase()}) Subscription`,
+        description: isTestTier
+          ? 'Test Plan (₹1) - Live Invoice & WhatsApp Verification'
+          : isTrial 
+            ? `30-Day Free Trial (₹0 today). Auto-renews via UPI/Card after 30 days.` 
+            : `${tier.toUpperCase()} Plan (${cycle.toUpperCase()}) Subscription`,
         handler: async function (response: any) {
-          toast(isTrial ? '30-Day Free Trial activated successfully!' : 'Subscription activated successfully!', 'success');
-          if (onSuccess) onSuccess({ ...response, is_trial: isTrial, contact: prefillContact });
+          toast(isTestTier ? 'Test Plan payment successful! Generating invoice...' : isTrial ? '30-Day Free Trial activated successfully!' : 'Subscription activated successfully!', 'success');
+          if (onSuccess) onSuccess({ ...response, is_trial: isTrial, is_order: isOrder, contact: prefillContact });
         },
         prefill: {
           name: prefillName || '',
@@ -116,6 +126,14 @@ export function RazorpaySubscriptionButton({
           }
         }
       };
+
+      if (isOrder) {
+        options.order_id = subscription.order_id;
+        options.amount = subscription.amount || 100;
+        options.currency = 'INR';
+      } else {
+        options.subscription_id = subscription.id;
+      }
 
       const rzp = new (window as any).Razorpay(options);
       

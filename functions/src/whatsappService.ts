@@ -157,6 +157,13 @@ export function formatAmount(amt: number | string | undefined | null): string {
   return isNaN(n) ? String(amt) : n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
+export function formatDisplayDate(dateStr: string | Date | undefined | null): string {
+  if (!dateStr) return new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+  const d = new Date(dateStr);
+  if (isNaN(d.getTime())) return String(dateStr);
+  return d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+}
+
 // In-memory cache for fast deduplication across simultaneous requests
 const recentDispatches = new Map<string, number>();
 const inFlightDispatches = new Set<string>();
@@ -261,7 +268,7 @@ export function getEventCategory(templateName: string): { category: string; wind
     return { category: 'clinic_sub_renewal_reminder', windowMs: 180 * 1000 };
   }
   if (name === 'viitsa_clinic_sub_invoice' || name === 'viitsa_clinic_sub_invc') {
-    return { category: 'clinic_sub_invoice', windowMs: 180 * 1000 };
+    return { category: 'clinic_sub_invoice', windowMs: 5 * 1000 };
   }
   if (name === 'viitsa_clinic_quota_alert' || name === 'viitsa_clinic_quota_al') {
     return { category: 'clinic_quota_alert', windowMs: 180 * 1000 };
@@ -1600,9 +1607,10 @@ export async function sendClinicSubInvoice(data: {
   let pdfLink = data.pdfUrl;
   if (!pdfLink) {
     try {
-      const numAmt = typeof data.totalAmount === 'number'
+      const parsedAmt = typeof data.totalAmount === 'number'
         ? data.totalAmount
-        : parseFloat(String(data.totalAmount).replace(/[^\d.]/g, '')) || 5999;
+        : parseFloat(String(data.totalAmount).replace(/[^\d.]/g, ''));
+      const numAmt = isNaN(parsedAmt) ? 5999 : parsedAmt;
       pdfLink = await ensureSubscriptionInvoicePdfUrl({
         invoiceNumber: data.invoiceNo || 'INV-001',
         invoiceDate: data.invoiceDate || new Date().toLocaleDateString('en-IN'),
@@ -1610,7 +1618,7 @@ export async function sendClinicSubInvoice(data: {
         clinicName: data.clinicName || 'Clinic Partner',
         customerEmail: '',
         planName: data.planName || 'Clinic Plan',
-        tier: 'clinic',
+        tier: (data.planName || '').toLowerCase().includes('solo') ? 'solo' : (data.planName || '').toLowerCase().includes('multi') ? 'multispecialty' : (data.planName || '').toLowerCase().includes('test') ? 'test' : 'clinic',
         cycle: 'monthly',
         amount: numAmt,
       }, data.clinicId);
@@ -1621,6 +1629,7 @@ export async function sendClinicSubInvoice(data: {
 
   const components: any[] = [];
   const finalPdfUrl = pdfLink || `https://viitsa.com/api/invoice/${data.invoiceNo || 'INV'}.pdf`;
+  const cleanInvFile = String(data.invoiceNo || 'INV').replace(/[^\w-]/g, '_');
   components.push({
     type: 'header',
     parameters: [
@@ -1628,7 +1637,7 @@ export async function sendClinicSubInvoice(data: {
         type: 'document',
         document: {
           link: finalPdfUrl,
-          filename: `Viitsa_Invoice_${data.invoiceNo || 'INV'}.pdf`,
+          filename: `Viitsa_Invoice_${cleanInvFile}.pdf`,
         },
       },
     ],
@@ -1641,7 +1650,7 @@ export async function sendClinicSubInvoice(data: {
       { type: 'text', text: data.invoiceNo || 'INV-001' },
       { type: 'text', text: data.planName || 'Clinic Plan' },
       { type: 'text', text: formatAmount(data.totalAmount) },
-      { type: 'text', text: data.invoiceDate || new Date().toLocaleDateString('en-IN') },
+      { type: 'text', text: formatDisplayDate(data.invoiceDate) },
       { type: 'text', text: data.supportPhone || '+91 73961 11081' },
     ],
   });

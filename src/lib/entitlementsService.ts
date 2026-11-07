@@ -13,6 +13,39 @@ import type {
 // Default plans seeded as fallback or when initialized in Firestore
 export const DEFAULT_PLANS: SubscriptionPlan[] = [
   {
+    id: 'test',
+    code: 'test',
+    name: 'Test Plan',
+    tier_rank: 0,
+    monthly_price_paise: 100,
+    annual_price_paise: 100,
+    monthly_price_inr: 1,
+    annual_price_inr: 1,
+    description: 'Test plan for live invoice generation and WhatsApp delivery testing.',
+    popular: false,
+    is_active: true,
+    limits: {
+      doctors_included: 5,
+      staff_seats_included: 10,
+      locations_included: 1,
+      ai_intakes_monthly: 1000,
+      whatsapp_messages_monthly: 2500,
+      storage_gb: 0,
+    },
+    features: {
+      ai_triage: 'advanced',
+      schedules_queues: 'multi_doc',
+      whatsapp_automation: 'full',
+      billing_suite: 'advanced',
+      inventory: 'advanced',
+      custom_roles: true,
+      audit_log: true,
+      custom_branding: true,
+      multi_location: false,
+      sla_support: 'priority',
+    }
+  },
+  {
     id: 'solo',
     code: 'solo',
     name: 'Solo',

@@ -432,7 +432,7 @@ export interface PatientNotification {
 
 // ── Subscription & Entitlements Models (Spec v1.0) ──
 
-export type SubscriptionTier = 'solo' | 'clinic' | 'multispecialty' | 'hospital' | 'enterprise';
+export type SubscriptionTier = 'solo' | 'clinic' | 'multispecialty' | 'hospital' | 'enterprise' | 'test';
 export type BillingCycle = 'monthly' | 'annual';
 export type ClinicSubscriptionState = 'trialing' | 'active' | 'past_due' | 'read_only' | 'cancelled' | 'pending';
 

@@ -1059,7 +1059,7 @@ export function SettingsScreen() {
         <div className="space-y-6">
           {(() => {
             const activeClinic = (liveClinic || clinic) as Clinic;
-            const planCode = (activeClinic.subscription_plan as any) || 'solo';
+            const planCode = (activeClinic.subscription_plan as any) || (activeClinic.subscription_status === 'active' ? 'solo' : 'none');
             const matchedPlan = DEFAULT_PLANS.find(p => p.id === planCode) || DEFAULT_PLANS[0];
             const limits = getEffectiveLimits(matchedPlan);
             const periodInfo = getSubscriptionPeriodEnd(activeClinic);
@@ -1125,7 +1125,7 @@ export function SettingsScreen() {
                             </span>
                           ) : (
                             <span className="font-semibold text-primary capitalize">
-                              {activeClinic.subscription_status === 'free_plan' ? 'Active (30-Day Free Trial)' : (activeClinic.subscription_status || 'Active')}
+                              {activeClinic.subscription_status === 'free_plan' ? 'Active (30-Day Free Trial)' : (activeClinic.subscription_status || 'Inactive / No Plan')}
                             </span>
                           )}
                         </p>
