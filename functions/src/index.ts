@@ -1082,9 +1082,11 @@ export const onClinicSubscriptionStatusChanged = onDocumentUpdated(
       (afterStatus === 'trial' && Boolean(afterData.last_payment_id) && afterData.last_payment_id !== beforeData.last_payment_id)
     );
 
+    const DEDUP_COOLDOWN_MS = 6 * 60 * 60 * 1000; // 6-hour lock across subscription lifecycle events
+
     if (isNewTrialActivation) {
       const lastSent = afterData.last_trial_wa_sent_at ? new Date(afterData.last_trial_wa_sent_at).getTime() : 0;
-      if (now - lastSent > 60000) {
+      if (now - lastSent > DEDUP_COOLDOWN_MS) {
         console.log(`[onClinicSubscription] Dispatching viitsa_clinic_trial_activated to ${clinicPhone}`);
         await sendClinicTrialActivated({
           to: clinicPhone,
@@ -1098,13 +1100,15 @@ export const onClinicSubscriptionStatusChanged = onDocumentUpdated(
           clinicId,
         });
         await event.data?.after.ref.update({ last_trial_wa_sent_at: new Date().toISOString() }).catch(() => {});
+      } else {
+        console.log(`[onClinicSubscription] Suppressed duplicate trial activation WhatsApp; already sent within 6h cooldown.`);
       }
     }
 
     // 2. Paid Subscription Activated (status became 'active')
     else if (afterStatus === 'active' && beforeStatus !== 'active' && beforeStatus !== 'trial') {
       const lastSent = afterData.last_sub_wa_sent_at ? new Date(afterData.last_sub_wa_sent_at).getTime() : 0;
-      if (now - lastSent > 60000) {
+      if (now - lastSent > DEDUP_COOLDOWN_MS) {
         console.log(`[onClinicSubscription] Dispatching viitsa_clinic_sub_activated to ${clinicPhone}`);
         const planPricing: Record<string, Record<string, number>> = {
           solo: { monthly: 2999, annual: 29990 },
@@ -1125,21 +1129,29 @@ export const onClinicSubscriptionStatusChanged = onDocumentUpdated(
           clinicId,
         });
         await event.data?.after.ref.update({ last_sub_wa_sent_at: new Date().toISOString() }).catch(() => {});
+      } else {
+        console.log(`[onClinicSubscription] Suppressed duplicate subscription activation WhatsApp; already sent within 6h cooldown.`);
       }
     }
 
     // 3. Subscription Cancelled
     else if (afterStatus === 'cancelled' && beforeStatus !== 'cancelled') {
-      console.log(`[onClinicSubscription] Dispatching viitsa_clinic_sub_cancelled to ${clinicPhone}`);
-      await sendClinicSubCancelled({
-        to: clinicPhone,
-        adminName,
-        clinicName,
-        cancelledPlan: `${tier.toUpperCase()} Plan`,
-        effectiveDate: formatDisplayDate(new Date()),
-        supportPhone: '+91 73961 11081',
-        clinicId,
-      });
+      const lastCancelledSent = afterData.last_sub_cancelled_wa_sent_at ? new Date(afterData.last_sub_cancelled_wa_sent_at).getTime() : 0;
+      if (now - lastCancelledSent > DEDUP_COOLDOWN_MS) {
+        console.log(`[onClinicSubscription] Dispatching viitsa_clinic_sub_cancelled to ${clinicPhone}`);
+        await sendClinicSubCancelled({
+          to: clinicPhone,
+          adminName,
+          clinicName,
+          cancelledPlan: `${tier.toUpperCase()} Plan`,
+          effectiveDate: formatDisplayDate(new Date()),
+          supportPhone: '+91 73961 11081',
+          clinicId,
+        });
+        await event.data?.after.ref.update({ last_sub_cancelled_wa_sent_at: new Date().toISOString() }).catch(() => {});
+      } else {
+        console.log(`[onClinicSubscription] Suppressed duplicate cancellation WhatsApp; already dispatched via webhook within cooldown.`);
+      }
     }
 
     // 4. Subscription Deactivated / Halted

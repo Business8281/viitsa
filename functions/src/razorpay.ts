@@ -614,6 +614,9 @@ export const razorpayWebhook = onRequest(async (req, res) => {
                 supportPhone: '+91 73961 11081',
                 clinicId,
               });
+              await getDb().collection("clinics").doc(clinicId).update({
+                last_trial_wa_sent_at: new Date().toISOString()
+              }).catch(() => {});
             } else {
               const planPricing: Record<string, Record<string, number>> = {
                 solo: { monthly: 2999, annual: 29990 },
@@ -701,34 +704,9 @@ export const razorpayWebhook = onRequest(async (req, res) => {
             }).catch(() => {});
           }
 
-          // Dispatch WhatsApp Trial Activated Notification to clinic
-          try {
-            const clinicDoc = await getDb().collection("clinics").doc(clinicId).get();
-            const clinicData = clinicDoc.data() || {};
-            let cPhone = clinicData.phone || clinicData.contact_phone || sub.customer_details?.contact || payment?.contact;
-            if (!cPhone && clinicUsers.docs.length > 0) {
-              cPhone = clinicUsers.docs[0].data()?.phone;
-            }
-            if (!cPhone && (clinicData.owner_user_id || clinicData.admin_user_id)) {
-              const uSnap = await getDb().collection("users").doc(clinicData.owner_user_id || clinicData.admin_user_id).get();
-              if (uSnap.exists) {
-                cPhone = uSnap.data()?.phone;
-              }
-            }
-            if (cPhone) {
-              await sendClinicTrialActivated({
-                to: cPhone,
-                adminName: clinicData.owner_name || 'Doctor',
-                clinicName: clinicData.name || 'Clinic',
-                planTier: `${tier.toUpperCase()} Plan`,
-                trialValidUntil: new Date(trialEndsAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }),
-                supportPhone: '+91 73961 11081',
-                clinicId,
-              });
-            }
-          } catch (waErr) {
-            console.warn("Could not dispatch WhatsApp trial activated notification:", waErr);
-          }
+          // NOTE: viitsa_clinic_trial_activated WhatsApp template is canonically dispatched by subscription.authenticated.
+          // Skipping duplicate dispatch in subscription.charged to prevent double-messaging.
+          console.log(`[RazorpayWebhook] subscription.charged: trial token charge confirmed for clinic ${clinicId}. Skipping duplicate trial activation WhatsApp dispatch.`);
         } else {
           // ── ACTUAL POST-TRIAL FULL PLAN RENEWAL CHARGE (e.g. ₹5,999) ──
           // The 30-day trial has completed and the recurring monthly/annual plan debit occurred
@@ -890,10 +868,12 @@ export const razorpayWebhook = onRequest(async (req, res) => {
         });
         await batch.commit();
 
+        const nowIso = new Date().toISOString();
         await getDb().collection("clinics").doc(clinicId).update({
           subscription_status: isHalted ? "deactivated" : "cancelled",
-          subscription_cancelled_at: isHalted ? null : new Date().toISOString(),
-          subscription_deactivated_at: isHalted ? new Date().toISOString() : null,
+          subscription_cancelled_at: isHalted ? null : nowIso,
+          subscription_deactivated_at: isHalted ? nowIso : null,
+          last_sub_cancelled_wa_sent_at: isHalted ? null : nowIso,
         });
 
         // Dispatch WhatsApp template

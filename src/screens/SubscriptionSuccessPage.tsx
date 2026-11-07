@@ -105,6 +105,26 @@ export function SubscriptionSuccessPage() {
       try {
         setSaving(true);
 
+        // Guard 1: If subscription is currently cancelled or deactivated (e.g. user revoked UPI mandate), NEVER overwrite it back
+        if (clinic?.subscription_status === 'cancelled' || clinic?.subscription_status === 'deactivated') {
+          console.warn('[SubscriptionSuccess] Clinic subscription is already cancelled/deactivated. Suppressing re-activation.');
+          setSaving(false);
+          if (typeof window !== 'undefined' && window.history?.replaceState) {
+            window.history.replaceState({}, document.title, window.location.pathname);
+          }
+          return;
+        }
+
+        // Guard 2: If this payment ID was already processed and recorded on this clinic, skip duplicate activation & notifications
+        if (paymentId && clinic?.last_payment_id === paymentId) {
+          console.log('[SubscriptionSuccess] Payment ID already recorded on clinic doc. Suppressing duplicate activation.');
+          setSaving(false);
+          if (typeof window !== 'undefined' && window.history?.replaceState) {
+            window.history.replaceState({}, document.title, window.location.pathname);
+          }
+          return;
+        }
+
         // Detect if this transaction corresponds to a 30-Day Free Trial mandate
         const isTrialParam = searchParams.get('is_trial') === 'true' || searchParams.get('trial') === 'true';
         const isTrialSession = typeof window !== 'undefined' && sessionStorage.getItem('viitsa_is_trial') === 'true';
@@ -238,7 +258,7 @@ export function SubscriptionSuccessPage() {
           }
         }
 
-        // 6. Send instant WhatsApp confirmation to clinic admin with multi-tier phone fallback
+        // 6. Send instant WhatsApp confirmation to clinic admin with multi-tier phone fallback & 6-hour deduplication guard
         const targetPhone = (
           (clinic as any)?.phone || 
           (clinic as any)?.contact_phone || 
@@ -247,9 +267,14 @@ export function SubscriptionSuccessPage() {
           (typeof window !== 'undefined' ? (sessionStorage.getItem('viitsa_reg_phone') || localStorage.getItem('viitsa_clinic_phone') || '') : '')
         ).replace(/\D/g, '').slice(-10);
 
+        const nowMs = Date.now();
+        const sixHoursMs = 6 * 60 * 60 * 1000;
+        const lastTrialWa = (clinic as any)?.last_trial_wa_sent_at ? new Date((clinic as any).last_trial_wa_sent_at).getTime() : 0;
+        const lastSubWa = (clinic as any)?.last_sub_wa_sent_at ? new Date((clinic as any).last_sub_wa_sent_at).getTime() : 0;
+
         if (targetPhone && targetPhone.length === 10) {
           try {
-            if (isTrial) {
+            if (isTrial && (nowMs - lastTrialWa > sixHoursMs)) {
               const waRes = await sendWhatsAppClinicTrialActivated({
                 to: targetPhone,
                 clinicId: targetClinicId,
@@ -264,7 +289,7 @@ export function SubscriptionSuccessPage() {
                   last_trial_wa_sent_at: new Date().toISOString()
                 }).catch(() => {});
               }
-            } else {
+            } else if (!isTrial && (nowMs - lastSubWa > sixHoursMs)) {
               const planPricing: Record<string, Record<string, number>> = {
                 solo: { monthly: 2999, annual: 29990 },
                 clinic: { monthly: 5999, annual: 59990 },
@@ -289,6 +314,8 @@ export function SubscriptionSuccessPage() {
                   last_sub_wa_sent_at: new Date().toISOString()
                 }).catch(() => {});
               }
+            } else {
+              console.log('[SubscriptionSuccess] Skipping WhatsApp dispatch: cooldown active (< 6 hours).');
             }
           } catch (waErr) {
             console.warn('Could not send WhatsApp subscription activation notification:', waErr);
@@ -300,6 +327,11 @@ export function SubscriptionSuccessPage() {
           localStorage.removeItem('viitsa_pending_upgrade');
           sessionStorage.removeItem('viitsa_is_trial');
         } catch (e) {}
+
+        // Strip payment parameters from URL immediately to prevent re-execution on browser refresh
+        if (typeof window !== 'undefined' && window.history?.replaceState) {
+          window.history.replaceState({}, document.title, window.location.pathname);
+        }
 
       } catch (err: any) {
         console.error('Real-time plan activation error:', err);
