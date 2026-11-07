@@ -222,63 +222,8 @@ export function ClinicSubscriptionSetupPage() {
         }
       }
 
-      // Send instant WhatsApp notification to clinic admin with 24-hour deduplication guard
-      const targetPhone = (
-        paymentData?.contact ||
-        paymentData?.customer_contact ||
-        (clinic as any)?.phone || 
-        (clinic as any)?.contact_phone ||
-        user?.phone || 
-        (user as any)?.phone_number ||
-        (typeof window !== 'undefined' ? (sessionStorage.getItem('viitsa_reg_phone') || localStorage.getItem('viitsa_clinic_phone') || '') : '')
-      ).replace(/\D/g, '').slice(-10);
-
-      const nowMs = Date.now();
-      const cooldownMs = 2 * 60 * 1000; // 2-minute deduplication cooldown
-      const lastTrialWa = (clinic as any)?.last_trial_wa_sent_at ? new Date((clinic as any).last_trial_wa_sent_at).getTime() : 0;
-      const lastSubWa = (clinic as any)?.last_sub_wa_sent_at ? new Date((clinic as any).last_sub_wa_sent_at).getTime() : 0;
-
-      if (targetPhone && targetPhone.length === 10) {
-        try {
-          if (isTrial && (nowMs - lastTrialWa > cooldownMs)) {
-            const waRes = await sendWhatsAppClinicTrialActivated({
-              to: targetPhone,
-              clinicId: clinic.clinic_id,
-              adminName: user.name || (clinic as any)?.owner_name || 'Doctor',
-              clinicName: clinic.name || 'Clinic',
-              planTier: `${activeTier.toUpperCase()} Plan`,
-              trialValidUntil: new Date(trialEndsAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }),
-              supportPhone: '+91 73961 11081',
-            });
-            if (waRes?.success) {
-              await updateDoc(doc(db, 'clinics', clinic.clinic_id), {
-                last_trial_wa_sent_at: new Date().toISOString()
-              }).catch(() => {});
-            }
-          } else if (!isTrial && (nowMs - lastSubWa > cooldownMs)) {
-            const waRes = await sendWhatsAppClinicSubActivated({
-              to: targetPhone,
-              clinicId: clinic.clinic_id,
-              adminName: user.name || (clinic as any)?.owner_name || 'Doctor',
-              clinicName: clinic.name || 'Clinic',
-              planName: `${activeTier.toUpperCase()} Plan`,
-              billingCycle: selectedCycle.toUpperCase(),
-              amountPaid: planAmount,
-              nextRenewalDate: new Date(Date.now() + durationDays * 86400000).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }),
-              supportPhone: '+91 73961 11081',
-            });
-            if (waRes?.success) {
-              await updateDoc(doc(db, 'clinics', clinic.clinic_id), {
-                last_sub_wa_sent_at: new Date().toISOString()
-              }).catch(() => {});
-            }
-          } else {
-            console.log('[ClinicSubscriptionSetup] Skipping WhatsApp dispatch: cooldown active (< 2 minutes).');
-          }
-        } catch (waErr) {
-          console.warn('Could not dispatch WhatsApp subscription confirmation:', waErr);
-        }
-      }
+      // Note: WhatsApp activation notification is canonically dispatched by the backend
+      // onClinicSubscriptionStatusChanged trigger when clinic document updates in Firestore.
 
       setSuccess(true);
       setTimeout(() => {

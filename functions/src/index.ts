@@ -1050,7 +1050,14 @@ export const onClinicSubscriptionStatusChanged = onDocumentUpdated(
     const beforeStatus = beforeData.subscription_status;
     const afterStatus = afterData.subscription_status;
 
-    if (beforeStatus === afterStatus) return;
+    // Detect if this is a genuine new trial activation (status change OR newly authenticated mandate)
+    const isNewTrialActivation = (
+      (afterStatus === 'trial' && beforeStatus !== 'trial') ||
+      (afterStatus === 'trial' && Boolean(afterData.trial_activated) && !Boolean(beforeData.trial_activated)) ||
+      (afterStatus === 'trial' && Boolean(afterData.last_payment_id) && afterData.last_payment_id !== beforeData.last_payment_id)
+    );
+
+    if (beforeStatus === afterStatus && !isNewTrialActivation) return;
 
     let clinicPhone = afterData.phone || afterData.contact_phone;
     if (!clinicPhone && (afterData.owner_user_id || afterData.admin_user_id)) {
@@ -1073,15 +1080,9 @@ export const onClinicSubscriptionStatusChanged = onDocumentUpdated(
     const cycle = afterData.subscription_billing_cycle || 'monthly';
     const now = Date.now();
 
-    // 1. Trial Activated (status became 'trial' OR trial mandate was newly activated / authenticated)
-    const isNewTrialActivation = (
-      (afterStatus === 'trial' && beforeStatus !== 'trial') ||
-      (afterStatus === 'trial' && Boolean(afterData.trial_activated) && !Boolean(beforeData.trial_activated)) ||
-      (afterStatus === 'trial' && Boolean(afterData.last_payment_id) && afterData.last_payment_id !== beforeData.last_payment_id)
-    );
-
     const DEDUP_COOLDOWN_MS = 2 * 60 * 1000; // 2-minute cooldown across rapid database triggers
 
+    // 1. Trial Activated (status became 'trial' OR trial mandate was newly activated / authenticated)
     if (isNewTrialActivation) {
       const lastSent = afterData.last_trial_wa_sent_at ? new Date(afterData.last_trial_wa_sent_at).getTime() : 0;
       if (now - lastSent > DEDUP_COOLDOWN_MS) {

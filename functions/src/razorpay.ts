@@ -6,12 +6,10 @@ import * as nodemailer from "nodemailer";
 import PDFDocument from "pdfkit";
 import { generateSubscriptionInvoicePdf } from "./invoicePdf";
 import {
-  sendClinicTrialActivated,
   sendClinicSubActivated,
   sendClinicPaymentSuccess,
   sendClinicPaymentFailed,
   sendClinicSubCancelled,
-  sendClinicSubDeactivated,
   sendClinicSubInvoice,
 } from "./whatsappService";
 
@@ -638,57 +636,8 @@ export const razorpayWebhook = onRequest(async (req, res) => {
           }
         }
 
-        // Dispatch WhatsApp notification to clinic
-        try {
-          const clinicDoc = await getDb().collection("clinics").doc(clinicId).get();
-          const clinicData = clinicDoc.data() || {};
-          let cPhone = clinicData.phone || clinicData.contact_phone || sub.customer_details?.contact;
-          if (!cPhone && clinicUsers.docs.length > 0) {
-            cPhone = clinicUsers.docs[0].data()?.phone;
-          }
-          if (!cPhone && (clinicData.owner_user_id || clinicData.admin_user_id)) {
-            const uSnap = await getDb().collection("users").doc(clinicData.owner_user_id || clinicData.admin_user_id).get();
-            if (uSnap.exists) {
-              cPhone = uSnap.data()?.phone;
-            }
-          }
-          if (cPhone) {
-            if (isTrial) {
-              await sendClinicTrialActivated({
-                to: cPhone,
-                adminName: clinicData.owner_name || 'Doctor',
-                clinicName: clinicData.name || 'Clinic',
-                planTier: `${tier.toUpperCase()} Plan`,
-                trialValidUntil: new Date(trialEndsAt!).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }),
-                supportPhone: '+91 73961 11081',
-                clinicId,
-              });
-              await getDb().collection("clinics").doc(clinicId).update({
-                last_trial_wa_sent_at: new Date().toISOString()
-              }).catch(() => {});
-            } else {
-              const planPricing: Record<string, Record<string, number>> = {
-                solo: { monthly: 2999, annual: 29990 },
-                clinic: { monthly: 5999, annual: 59990 },
-                multispecialty: { monthly: 11999, annual: 119990 },
-              };
-              const planAmount = planPricing[tier]?.[cycle] || 5999;
-              await sendClinicSubActivated({
-                to: cPhone,
-                adminName: clinicData.owner_name || 'Doctor',
-                clinicName: clinicData.name || 'Clinic',
-                planName: `${tier.toUpperCase()} Plan`,
-                billingCycle: cycle.toUpperCase(),
-                amountPaid: planAmount,
-                nextRenewalDate: new Date(Date.now() + (cycle === 'annual' ? 365 : 30) * 86400000).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }),
-                supportPhone: '+91 73961 11081',
-                clinicId,
-              });
-            }
-          }
-        } catch (waErr) {
-          console.warn("Could not dispatch WhatsApp subscription activation:", waErr);
-        }
+        // WhatsApp notification is canonically dispatched by onClinicSubscriptionStatusChanged trigger upon Firestore clinic status update
+        console.log(`[RazorpayWebhook] Clinic ${clinicId} subscription updated to '${isTrial ? "trial" : "active"}'. WhatsApp lifecycle notification will be canonically dispatched by onClinicSubscriptionStatusChanged.`);
       }
     } else if (event.event === "subscription.charged") {
       const sub = event.payload.subscription.entity;
@@ -931,36 +880,8 @@ export const razorpayWebhook = onRequest(async (req, res) => {
             last_sub_cancelled_wa_sent_at: isHalted ? null : nowIso,
           });
 
-          // Dispatch WhatsApp template
-          try {
-            const cPhone = clinicData.phone || clinicData.contact_phone || sub.customer_details?.contact;
-            if (cPhone) {
-              if (isHalted) {
-                await sendClinicSubDeactivated({
-                  to: cPhone,
-                  adminName: clinicData.owner_name || 'Doctor',
-                  clinicName: clinicData.name || 'Clinic',
-                  planName: `${(clinicData.subscription_plan || 'Clinic').toUpperCase()} Plan`,
-                  deactivationDate: new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }),
-                  status: 'Deactivated - Overdue',
-                  supportPhone: '+91 73961 11081',
-                  clinicId,
-                });
-              } else {
-                await sendClinicSubCancelled({
-                  to: cPhone,
-                  adminName: clinicData.owner_name || 'Doctor',
-                  clinicName: clinicData.name || 'Clinic',
-                  cancelledPlan: `${(clinicData.subscription_plan || 'Clinic').toUpperCase()} Plan`,
-                  effectiveDate: new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }),
-                  supportPhone: '+91 73961 11081',
-                  clinicId,
-                });
-              }
-            }
-          } catch (waErr) {
-            console.warn("Could not dispatch WhatsApp cancellation/deactivation template:", waErr);
-          }
+          // WhatsApp cancellation/deactivation is canonically dispatched by onClinicSubscriptionStatusChanged trigger
+          console.log(`[RazorpayWebhook] Clinic ${clinicId} subscription status set to '${isHalted ? "deactivated" : "cancelled"}'. WhatsApp notification will be canonically dispatched by onClinicSubscriptionStatusChanged.`);
         } else {
           console.log(`[RazorpayWebhook] Clinic ${clinicId} has already moved to newer subscription ${clinicData.razorpay_subscription_id}. Ignoring cancellation for old subscription ${sub.id}.`);
         }
