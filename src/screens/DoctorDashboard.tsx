@@ -23,7 +23,7 @@ export function DoctorDashboard() {
   const location = useLocation();
   const isDoctorRoute = location.pathname.startsWith('/doctor');
   const billingPath = isDoctorRoute ? '/doctor/billing' : '/clinic/billing';
-  const { appointments, bills, refresh } = useClinicData();
+  const { appointments, patients, bills, refresh } = useClinicData();
   const { toast } = useToast();
   const [openAppt, setOpenAppt] = useState<Appointment | null>(null);
   const [viewingPatientRecords, setViewingPatientRecords] = useState<Patient | any | null>(null);

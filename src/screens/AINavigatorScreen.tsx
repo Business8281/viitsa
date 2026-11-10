@@ -149,7 +149,7 @@ export function AINavigatorScreen() {
 
   const riskBars = useMemo(() => riskBarsFromPatient(selectedPatient ?? undefined, vitals ?? undefined), [selectedPatient, vitals]);
 
-  const handleAIResponse = useCallback(async (userText: string) => {
+  const handleAIResponse = useCallback(async (userText: string, audioData?: { base64: string; mimeType: string } | null) => {
     userExchanges.current += 1;
     const ctx = clinic
       ? {

@@ -56,6 +56,7 @@ interface PatientRow {
 }
 interface ConsultationRow {
   id: string; patient_name?: string; patient_id?: string; clinic_id?: string;
+  doctor_id?: string; prescription?: any; doctor_name?: string;
   diagnosis?: string; created_at?: string;
 }
 interface InvoiceRow {
@@ -325,7 +326,7 @@ function MetricCard({ icon, label, value, sub, tone }: {
 }
 
 // ── GenericDataView ───────────────────────────────────────────────────────────
-function GenericDataView({ activeTab, users, clinics, appointments, invoices, billing, supportTickets, complaints, reports, subscriptions, onUserSelect, onViewInvoice, auditLogs }: any) {
+function GenericDataView({ activeTab, users, clinics, appointments, invoices, billing, supportTickets, complaints, reports, subscriptions, onUserSelect, onViewInvoice, auditLogs, onVerifyDoctor }: any) {
   let title = '';
   for (const section of ADMIN_NAV) {
     if (section.id === activeTab) { title = section.label; break; }
@@ -379,7 +380,7 @@ function GenericDataView({ activeTab, users, clinics, appointments, invoices, bi
         <td className="px-4 py-3 text-right">
           <div className="flex items-center gap-2 justify-end">
             <button
-              onClick={() => handleVerifyDoctor(u.id, true)}
+              onClick={() => onVerifyDoctor && onVerifyDoctor(u.id, true)}
               className="px-3 py-1 bg-teal-600 text-white rounded text-xs hover:bg-teal-700"
             >
               Approve
@@ -387,7 +388,7 @@ function GenericDataView({ activeTab, users, clinics, appointments, invoices, bi
             <button
               onClick={() => {
                 const reason = prompt("Enter reason for doctor rejection:");
-                if (reason !== null) handleVerifyDoctor(u.id, false, reason);
+                if (reason !== null && onVerifyDoctor) onVerifyDoctor(u.id, false, reason);
               }}
               className="px-3 py-1 bg-red-100 text-red-700 rounded text-xs hover:bg-red-200"
             >
@@ -2213,6 +2214,7 @@ export function AdminDashboard() {
               onUserSelect={setSelectedUserId}
               onViewInvoice={setAdminViewingInvoice}
               auditLogs={auditLogs}
+              onVerifyDoctor={handleVerifyDoctor}
             />
           )}
           </SectionErrorBoundary>

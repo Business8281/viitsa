@@ -268,7 +268,7 @@ export function getEventCategory(templateName: string): { category: string; wind
     return { category: 'clinic_sub_renewal_reminder', windowMs: 180 * 1000 };
   }
   if (name === 'viitsa_clinic_sub_invoice' || name === 'viitsa_clinic_sub_invc') {
-    return { category: 'clinic_sub_invoice', windowMs: 5 * 1000 };
+    return { category: 'clinic_sub_invoice', windowMs: 180 * 1000 };
   }
   if (name === 'viitsa_clinic_quota_alert' || name === 'viitsa_clinic_quota_al') {
     return { category: 'clinic_quota_alert', windowMs: 180 * 1000 };
@@ -1604,6 +1604,52 @@ export async function sendClinicSubInvoice(data: {
   supportPhone?: string;
   clinicId?: string;
 }): Promise<WhatsAppSendResult> {
+  const cleanPhone = normalizePhoneNumber(data.to);
+  const cleanInv = String(data.invoiceNo || 'INV').replace(/[^\w-]/g, '_');
+
+  // Distributed atomic transaction lock per invoice number & recipient phone
+  // Prevents dual-dispatch when Razorpay webhooks (subscription.charged / invoice.paid) and onClinicSubscriptionStatusChanged trigger concurrently
+  let invLockRef: admin.firestore.DocumentReference | null = null;
+  if (cleanPhone && cleanPhone.length >= 10 && cleanInv && cleanInv !== 'INV' && cleanInv !== 'INV-001') {
+    if (!admin.apps.length) admin.initializeApp();
+    const db = admin.firestore();
+    invLockRef = db.collection('whatsapp_dispatch_locks').doc(`sub_inv_${cleanInv}_${cleanPhone}`);
+    let shouldSuppress = false;
+    let existingMsgId: string | undefined;
+    const nowMs = Date.now();
+    try {
+      await db.runTransaction(async (transaction) => {
+        const lockSnap = await transaction.get(invLockRef!);
+        if (lockSnap.exists) {
+          const lData = lockSnap.data() || {};
+          const lastMs = lData.dispatched_at_ms || 0;
+          // If already sent or actively in-flight within 60s, suppress duplicate
+          if (lData.status === 'sent' || (lData.status === 'in_progress' && (nowMs - lastMs < 60000))) {
+            shouldSuppress = true;
+            existingMsgId = lData.message_id;
+            return;
+          }
+        }
+        transaction.set(invLockRef!, {
+          invoice_no: data.invoiceNo,
+          phone: cleanPhone,
+          clinic_id: data.clinicId || null,
+          status: 'in_progress',
+          dispatched_at_ms: nowMs,
+          created_at: admin.firestore.FieldValue.serverTimestamp(),
+        }, { merge: true });
+      });
+    } catch (txnErr) {
+      console.warn('[sendClinicSubInvoice] Transaction lock error:', txnErr);
+      shouldSuppress = true;
+    }
+
+    if (shouldSuppress) {
+      console.log(`[sendClinicSubInvoice] Suppressed duplicate WhatsApp invoice for ${data.invoiceNo} to ${cleanPhone} (invoice lock already acquired)`);
+      return { success: true, messageId: existingMsgId || 'dedup_suppressed_invoice_lock' };
+    }
+  }
+
   let pdfLink = data.pdfUrl;
   if (!pdfLink) {
     try {
@@ -1654,12 +1700,30 @@ export async function sendClinicSubInvoice(data: {
       { type: 'text', text: data.supportPhone || '+91 73961 11081' },
     ],
   });
-  return sendWhatsAppTemplate({
+  const sendRes = await sendWhatsAppTemplate({
     to: data.to,
     clinicId: data.clinicId,
     templateName: 'viitsa_clinic_sub_invoice',
     components,
   });
+
+  if (invLockRef) {
+    if (sendRes.success) {
+      await invLockRef.set({
+        status: 'sent',
+        message_id: sendRes.messageId || 'ok',
+        completed_at_ms: Date.now(),
+      }, { merge: true }).catch(() => {});
+    } else {
+      await invLockRef.set({
+        status: 'failed',
+        error: sendRes.error || 'Dispatch failed',
+        failed_at_ms: Date.now(),
+      }, { merge: true }).catch(() => {});
+    }
+  }
+
+  return sendRes;
 }
 
 /**

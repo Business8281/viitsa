@@ -620,7 +620,7 @@ export function ClinicSubscriptionSetupPage() {
                           planId={tier.planId}
                           prefillEmail={clinic?.email || user?.email}
                           prefillName={clinic?.name || user?.name}
-                          prefillContact={clinic?.phone || user?.phone}
+                          prefillContact={clinic?.phone || user?.phone || undefined}
                           buttonText={
                             isTest
                               ? "Pay ₹1 & Test Invoice"

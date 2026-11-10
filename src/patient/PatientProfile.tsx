@@ -189,10 +189,10 @@ export function PatientProfile({ onTab }: Props) {
 
     const computedDob = pickStr(account?.dob, authPatientAccount?.dob, user?.dob, cached?.dob);
     let computedAge: string | number | null = null;
-    if (account?.age !== undefined && account?.age !== null && account?.age !== '') computedAge = account.age;
-    else if (authPatientAccount?.age !== undefined && authPatientAccount?.age !== null && authPatientAccount?.age !== '') computedAge = authPatientAccount.age;
-    else if (user?.age !== undefined && user?.age !== null && user?.age !== '') computedAge = user.age;
-    else if (cached?.age !== undefined && cached?.age !== null && cached?.age !== '') computedAge = cached.age;
+    if (account?.age !== undefined && account?.age !== null && (account?.age as unknown) !== '') computedAge = account.age;
+    else if (authPatientAccount?.age !== undefined && authPatientAccount?.age !== null && (authPatientAccount?.age as unknown) !== '') computedAge = authPatientAccount.age;
+    else if (user?.age !== undefined && user?.age !== null && (user?.age as unknown) !== '') computedAge = user.age;
+    else if (cached?.age !== undefined && cached?.age !== null && (cached?.age as unknown) !== '') computedAge = cached.age;
     else if (computedDob) computedAge = calculateAge(computedDob);
 
     return {

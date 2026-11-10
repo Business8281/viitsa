@@ -45,6 +45,7 @@ export function PatientLanding({ clinic, onBook, onAI, onLogin }: Props) {
   const [otpCode, setOtpCode] = useState('');
   const [otpSent, setOtpSent] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [googleLoading, setGoogleLoading] = useState(false);
   const [otpError, setOtpError] = useState('');
 
   const handleBook = onBook || (() => navigate('/patient/book'));

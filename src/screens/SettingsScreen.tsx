@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, useMemo } from 'react';
 import { useSearchParams, Navigate } from 'react-router-dom';
 import { 
   Save, Building2, Clock, Stethoscope, Users, Bell, Plus, AlertCircle, 
-  RefreshCw, QrCode, Link2, Share2, FileText, Download, Eye, ExternalLink, 
+  RefreshCw, QrCode, Link2, Share2, FileText, Download, Eye, EyeOff, ExternalLink, 
   Shield, UploadCloud, Edit3, Trash2, CheckCircle2, XCircle, PhoneCall, 
   Mail, Award, Briefcase, IndianRupee, MapPin, GraduationCap, Search, 
   FileCheck, Check, Upload, X, ShieldCheck, Copy, Printer, Smartphone,

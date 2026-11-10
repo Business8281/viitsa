@@ -495,7 +495,7 @@ function ClinicLayout() {
     if (clinic?.subscription_status !== 'active' && clinic?.subscription_status !== 'free_plan' && clinic?.subscription_status !== 'trial') {
       return <Navigate to="/clinic/subscription-setup" replace />;
     }
-  } else if (user.role === 'clinic_doctor' || user.role === 'clinic_staff' || user.role === 'doctor' || user.role === 'staff') {
+  } else if (user.role === 'clinic_staff' || user.role === 'staff') {
     if (clinic && clinic.verification_status !== 'approved') {
       return <Navigate to="/clinic/pending-approval" replace />;
     }

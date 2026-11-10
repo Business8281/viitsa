@@ -82,8 +82,6 @@ export function AdminLoginPage() {
     setIsRegisterMode(register);
     setLocalError(null);
     clearError();
-    setForgotMode(false);
-    setResetSent(false);
     setOtpSent(false);
     const newParams = new URLSearchParams();
     if (register) {

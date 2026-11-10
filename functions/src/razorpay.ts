@@ -1443,7 +1443,7 @@ export const razorpayWebhook = onRequest(async (req, res) => {
             payerContact: invoice.customer_details?.contact,
             adminName: invoice.customer_details?.name || 'Doctor',
             clinicName: invoice.customer_details?.name || 'Clinic',
-            invoiceNo: invoiceId,
+            invoiceNo: invoice.payment_id || invoiceId,
             planName: invoicePlanName,
             totalAmount: amountStr,
             invoiceDate: new Date(invoice.issued_at * 1000 || Date.now()).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }),

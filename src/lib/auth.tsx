@@ -90,6 +90,7 @@ interface AuthState {
   loading: boolean;
   error: string | null;
   setClinic: (clinic: Clinic | null) => void;
+  setUser: (user: User | null) => void;
   switchClinic: (clinic: Clinic) => Promise<void>;
   loginWithEmail: (email: string, password: string, expectedRole?: Role) => Promise<AuthResponse>;
   registerWithEmail: (email: string, password: string, onboarding: OnboardingData) => Promise<AuthResponse>;
@@ -109,6 +110,7 @@ interface AuthState {
   login: (email: string, password: string) => Promise<{ ok: boolean; error?: string }>;
   loginWithGoogleLegacy: () => Promise<{ ok: boolean; error?: string }>;
   loginWithOtp: (email: string) => Promise<{ ok: boolean; error?: string }>;
+  sendEmailOtp: (email: string) => Promise<{ ok: boolean; error?: string }>;
   verifyEmailOtp: (email: string, token: string) => Promise<{ ok: boolean; error?: string }>;
 }
 
@@ -1021,7 +1023,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       login,
       loginWithGoogleLegacy,
       loginWithOtp,
+      sendEmailOtp: loginWithOtp,
       verifyEmailOtp,
+      setUser,
     }),
     [
       user,
@@ -1030,6 +1034,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       loading,
       error,
       setClinic,
+      setUser,
       switchClinic,
       loginWithEmail,
       registerWithEmail,
@@ -1068,6 +1073,7 @@ const defaultAuthState: AuthState = {
   error: null,
   clearError: () => {},
   loginWithEmail: async () => ({ ok: false, error: 'Authentication initializing...' }),
+  login: async () => ({ ok: false, error: 'Authentication initializing...' }),
   registerWithEmail: async () => ({ ok: false, error: 'Authentication initializing...' }),
   logout: async () => {},
   switchClinic: async () => {},

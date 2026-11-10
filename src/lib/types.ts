@@ -18,6 +18,7 @@ export type VisitType = 'walk-in' | 'scheduled';
 export type AppointmentVisitType = 'new-visit' | 'follow-up' | 'report-discussion';
 
 export interface Clinic {
+  id?: string;
   clinic_id: string;
   name: string;
   clinic_code?: string;
@@ -38,10 +39,10 @@ export interface Clinic {
   working_hours: { open: string; close: string; days: string[] };
   clinic_setup_complete?: boolean;
   documents_uploaded?: boolean;
-  verification_status?: 'unverified' | 'pending' | 'approved' | 'rejected';
+  verification_status?: 'unverified' | 'pending' | 'approved' | 'rejected' | 'verified' | 'docs_needed';
   rejection_reason?: string;
   onboarding_documents?: { name: string; url: string }[];
-  subscription_status?: 'pending' | 'active' | 'deactivated' | 'free_plan' | 'cancelled' | 'trial';
+  subscription_status?: 'pending' | 'active' | 'deactivated' | 'free_plan' | 'cancelled' | 'trial' | 'suspended' | 'payment_failed' | 'past_due';
   subscription_updated_at?: string;
   subscription_activated_at?: string;
   subscription_period_end?: string;
@@ -62,8 +63,17 @@ export interface Clinic {
   scheduled_at?: string;
   trial_used?: boolean;
   has_used_trial?: boolean;
+  trial_completed?: boolean;
+  trial_activated?: boolean;
+  trial_status?: string;
   trial_started_at?: string;
   trial_ends_at?: string;
+  doctor_name?: string | null;
+  last_payment_id?: string | null;
+  last_payment_status?: string;
+  last_renewal_at?: string;
+  razorpay_subscription_id?: string;
+  whatsapp_reminders_enabled?: boolean;
   documents?: any;
   created_at: string;
   updated_at?: string;
@@ -108,7 +118,19 @@ export interface User {
   clinic_setup_complete?: boolean;
   clinic_documents_uploaded?: boolean;
   clinic_verification_status?: 'unverified' | 'pending' | 'approved' | 'rejected';
-  clinic_subscription_status?: 'pending' | 'active';
+  clinic_subscription_status?: 'pending' | 'active' | 'trial' | 'free_plan' | 'cancelled' | 'deactivated';
+  email_verified?: boolean;
+  verification_status?: 'pending' | 'approved' | 'rejected' | 'under_review';
+  attender_name?: string | null;
+  attender_phone?: string | null;
+  chronic_conditions?: string | null;
+  allergies?: string | null;
+  current_medications?: string | string[] | null;
+  dob?: string | null;
+  age?: number | string | null;
+  emergency_contact_name?: string | null;
+  emergency_contact_phone?: string | null;
+  gender?: 'Male' | 'Female' | 'Other' | string | null;
 }
 
 export interface Patient {
@@ -119,6 +141,7 @@ export interface Patient {
   clinic_id: string;
   name: string;
   full_name?: string;
+  status?: 'active' | 'left' | 'inactive';
   age: number | null;
   dob?: string | null;
   gender: 'Male' | 'Female' | 'Other' | null;
@@ -156,6 +179,8 @@ export interface PatientAccount {
   chronic_conditions: string;
   emergency_contact_name: string | null;
   emergency_contact_phone: string | null;
+  attender_name?: string | null;
+  attender_phone?: string | null;
   otp_code: string;
   otp_verified: boolean;
   auth_user_id: string | null;
@@ -448,9 +473,9 @@ export interface PlanLimits {
 export interface PlanFeatures {
   ai_triage: 'basic' | 'standard' | 'advanced' | 'custom';
   schedules_queues: 'single' | 'multi_doc' | 'advanced_multi' | 'multi_department';
-  whatsapp_automation: 'reminders_only' | 'confirm_reschedule' | 'full_crm' | 'custom_flows';
-  billing_suite: 'standard' | 'full' | 'tpa_insurance' | 'full_ipd';
-  inventory: 'none' | 'basic' | 'purchase_orders' | 'multi_store';
+  whatsapp_automation: 'reminders_only' | 'confirm_reschedule' | 'full' | 'full_crm' | 'custom_flows';
+  billing_suite: 'standard' | 'advanced' | 'full' | 'tpa_insurance' | 'full_ipd';
+  inventory: 'none' | 'basic' | 'advanced' | 'purchase_orders' | 'multi_store';
   custom_roles: boolean;
   audit_log: boolean;
   custom_branding: boolean;
