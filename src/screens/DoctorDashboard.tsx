@@ -211,7 +211,7 @@ export function DoctorDashboard() {
 
       {/* Live Billing Overview */}
       <div className="space-y-3">
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 min-w-0 max-w-full">
           <SectionHeader title="Billing & Collections Overview" subtitle={`Live financials · Period: ${billingPresetLabel}`} />
           <DateRangeFilter
             preset={billingDatePreset}
@@ -312,7 +312,7 @@ export function DoctorDashboard() {
         </div>
 
         {/* Date Filter & Search toolbar */}
-        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 bg-surface p-3 rounded-2xl border border-divider/60">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 bg-surface p-3 rounded-2xl border border-divider/60 min-w-0 max-w-full">
           <DateRangeFilter
             preset={apptDatePreset}
             onPresetChange={setApptDatePreset}

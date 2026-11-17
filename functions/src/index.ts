@@ -84,9 +84,12 @@ export {
   onAppointmentUpdated,
 };
 
-function formatDisplayDate(dateStr: string | Date | undefined): string {
+function formatDisplayDate(dateStr: any): string {
   if (!dateStr) return new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
-  const d = new Date(dateStr);
+  let dateVal = dateStr;
+  if (typeof dateVal?.toDate === 'function') dateVal = dateVal.toDate();
+  else if (typeof dateVal?.seconds === 'number') dateVal = new Date(dateVal.seconds * 1000);
+  const d = new Date(dateVal);
   if (isNaN(d.getTime())) return String(dateStr);
   return d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
 }
@@ -301,7 +304,7 @@ export const sendWhatsAppAuthOtp = onCall(
     }
 
     // Generate cryptographically sound 6-digit OTP
-    const otpCode = String(Math.floor(100000 + Math.random() * 900000));
+    const otpCode = String(crypto.randomInt(100000, 1000000));
 
     // Store in phone_otps collection with 10-minute expiry
     await db.collection("phone_otps").doc(cleanPhone).set({
@@ -355,7 +358,7 @@ export const verifyWhatsAppAuthOtp = onCall(
         throw new HttpsError('deadline-exceeded', 'OTP has expired. Please request a new code.');
       }
 
-      if (otpData.code !== cleanOtp && cleanOtp !== '123456') {
+      if (otpData.code !== cleanOtp) {
         throw new HttpsError('permission-denied', 'Incorrect OTP. Please enter the valid verification code.');
       }
 
@@ -728,7 +731,7 @@ export const onAppointmentCreated = onDocumentCreated(
         dispatched_at_ms: Date.now(),
         created_at: admin.firestore.FieldValue.serverTimestamp(),
       });
-    } catch (lockErr) {
+    } catch (_lockErr) {
       console.log(`[onAppointmentCreated] Suppressed duplicate confirmation WhatsApp for appointment ${apptId} (lock already acquired)`);
       return;
     }
@@ -863,7 +866,7 @@ export const onLabReportCreated = onDocumentCreated(
         dispatched_at_ms: Date.now(),
         created_at: admin.firestore.FieldValue.serverTimestamp(),
       });
-    } catch (lockErr) {
+    } catch (_lockErr) {
       console.log(`[onLabReportCreated] Suppressed duplicate lab report WhatsApp for report ${reportId} (lock already acquired)`);
       return;
     }
@@ -1029,7 +1032,7 @@ export const onClinicVerificationStatusChanged = onDocumentUpdated(
           dispatched_at_ms: Date.now(),
           created_at: admin.firestore.FieldValue.serverTimestamp(),
         });
-      } catch (lockErr) {
+      } catch (_lockErr) {
         console.log(`[onClinicVerification] Suppressed duplicate pending approval notice for clinic ${clinicId}`);
         return;
       }
@@ -1056,7 +1059,7 @@ export const onClinicVerificationStatusChanged = onDocumentUpdated(
         dispatched_at_ms: Date.now(),
         created_at: admin.firestore.FieldValue.serverTimestamp(),
       });
-    } catch (lockErr) {
+    } catch (_lockErr) {
       console.log(`[onClinicVerification] Suppressed duplicate verification notice for clinic ${clinicId} (${afterStatus})`);
       return;
     }
@@ -1116,7 +1119,7 @@ export const onClinicSubscriptionStatusChanged = onDocumentUpdated(
     // Detect if this is a genuine new trial activation (status became trial OR trial mandate newly authorized)
     const isNewTrialActivation = (
       (afterStatus === 'trial' && beforeStatus !== 'trial') ||
-      (afterStatus === 'trial' && Boolean(afterData.trial_activated) && !Boolean(beforeData.trial_activated))
+      (afterStatus === 'trial' && Boolean(afterData.trial_activated) && !beforeData.trial_activated)
     );
 
     // Detect if this is a paid plan purchase, plan upgrade, or renewal payment
@@ -1179,7 +1182,7 @@ export const onClinicSubscriptionStatusChanged = onDocumentUpdated(
         dispatched_at_ms: now,
         created_at: admin.firestore.FieldValue.serverTimestamp(),
       });
-    } catch (lockErr) {
+    } catch (_lockErr) {
       console.log(`[onClinicSubscription] Suppressed duplicate subscription WhatsApp for clinic ${clinicId} (${afterStatus})`);
       return;
     }
@@ -1300,7 +1303,7 @@ export const onDoctorVerificationStatusChanged = onDocumentUpdated(
         dispatched_at_ms: Date.now(),
         created_at: admin.firestore.FieldValue.serverTimestamp(),
       });
-    } catch (lockErr) {
+    } catch (_lockErr) {
       console.log(`[onDoctorVerification] Suppressed duplicate doctor verification notice for user ${event.params.userId}`);
       return;
     }
@@ -1338,7 +1341,7 @@ export const createRazorpayOrder = onCall(async (request) => {
     key_secret: process.env.RAZORPAY_KEY_SECRET || "",
   });
 
-  const { amount, currency, receipt } = request.data;
+  const { amount, currency, receipt } = request.data || {};
   
   if (!request.auth) {
     throw new HttpsError("unauthenticated", "User must be logged in to create an order.");
@@ -1362,7 +1365,7 @@ export const createRazorpayOrder = onCall(async (request) => {
 });
 
 export const verifyRazorpayPayment = onCall(async (request) => {
-  const { razorpay_order_id, razorpay_subscription_id, razorpay_payment_id, razorpay_signature } = request.data;
+  const { razorpay_order_id, razorpay_subscription_id, razorpay_payment_id, razorpay_signature } = request.data || {};
   
   if (!request.auth) {
     throw new HttpsError("unauthenticated", "User must be logged in to verify payment.");
@@ -1390,7 +1393,9 @@ export const verifyRazorpayPayment = onCall(async (request) => {
     .update(body.toString())
     .digest("hex");
     
-  if (expectedSignature === razorpay_signature) {
+  const expBuf = Buffer.from(expectedSignature, "utf-8");
+  const actBuf = Buffer.from(razorpay_signature, "utf-8");
+  if (expBuf.length === actBuf.length && crypto.timingSafeEqual(expBuf, actBuf)) {
     return { success: true };
   } else {
     throw new HttpsError("invalid-argument", "Invalid signature.");

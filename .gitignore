@@ -49,4 +49,8 @@ functions/check_db.js
 functions/create-admin.js
 functions/send.js
 functions/test-*
+.agent/
+antigravity-skills/
+*.tsbuildinfo
+__pycache__/
 

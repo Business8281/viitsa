@@ -70,7 +70,7 @@ export const whatsappWebhook = onRequest(
                     const docRef = logsSnap.docs[0].ref;
                     await docRef.update({
                       status: newStatus,
-                      recipient_phone: recipientId || undefined,
+                      ...(recipientId ? { recipient_phone: recipientId } : {}),
                       status_updated_at: admin.firestore.FieldValue.serverTimestamp(),
                       ...(errors ? { delivery_error: errors } : {}),
                     });

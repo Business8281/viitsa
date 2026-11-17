@@ -655,6 +655,27 @@ export function ClinicSubscriptionSetupPage() {
               })}
             </div>
 
+            {/* Hospital & Enterprise Custom Quote Card */}
+            <div className="bg-gradient-to-r from-slate-900 to-teal-950 text-white rounded-2xl p-5 sm:p-6 border border-teal-800/40 shadow-lg mb-8 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+              <div className="space-y-1.5 max-w-2xl">
+                <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-teal-500/20 text-teal-300 text-[11px] font-bold uppercase tracking-wider border border-teal-500/30">
+                  <Building2 size={13} />
+                  Hospital & Enterprise Custom Quote
+                </div>
+                <h4 className="text-base sm:text-lg font-bold text-white">Need a Hospital, IPD, or Multi-Facility Deployment?</h4>
+                <p className="text-xs text-slate-300 leading-relaxed">
+                  Hospital plans are offered exclusively via custom quote based on bed capacity, operating theaters, multi-campus architecture, and dedicated on-premise/hybrid cloud SLA.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => navigate('/contact')}
+                className="shrink-0 px-4 py-2.5 rounded-xl bg-teal-500 hover:bg-teal-400 text-slate-950 font-bold text-xs uppercase tracking-wider transition shadow-md hover:shadow-teal-500/20"
+              >
+                Request Custom Quote →
+              </button>
+            </div>
+
             {/* Security & Reassurance note below the 3 cards */}
             <p className="text-center text-xs text-ink-subtle">
               🔒 Secured by Razorpay Subscriptions • 30-Day Free Trial (₹0 charged today) • Auto-debits chosen plan on Day 31 • Cancel anytime before Day 30 at zero charge

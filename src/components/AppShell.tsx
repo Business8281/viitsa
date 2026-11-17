@@ -128,7 +128,7 @@ export function AppShell({ children }: AppShellProps) {
       {mobileOpen && (
         <div className="lg:hidden fixed inset-0 z-50 flex">
           <div className="absolute inset-0 bg-ink/40 backdrop-blur-sm" onClick={() => setMobileOpen(false)} />
-          <aside className="relative w-72 bg-white flex flex-col animate-slide-up">
+          <aside className="relative w-72 max-w-[85vw] bg-white flex flex-col animate-slide-up">
             <div className="px-5 py-4 border-b border-black/5 flex items-center justify-between">
               <ViitsaLogo size="sm" />
               <button onClick={() => setMobileOpen(false)} className="p-1.5 text-ink-subtle">
@@ -147,7 +147,7 @@ export function AppShell({ children }: AppShellProps) {
       )}
 
       {/* Main */}
-      <div className="flex-1 lg:ml-64 min-w-0">
+      <div className="flex-1 lg:ml-64 min-w-0 max-w-full">
         {/* Topbar */}
         <header className="sticky top-0 z-30 bg-white/95 backdrop-blur border-b border-black/5">
           <div className="flex items-center justify-between px-4 sm:px-6 py-3 gap-4">
@@ -200,7 +200,7 @@ export function AppShell({ children }: AppShellProps) {
         </header>
 
         {/* Main content */}
-        <main className="p-4 sm:p-6 max-w-[1600px] mx-auto">{children}</main>
+        <main className="p-3 sm:p-6 max-w-[1600px] mx-auto min-w-0">{children}</main>
       </div>
     </div>
   );

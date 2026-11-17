@@ -275,13 +275,13 @@ export function SetupWizardPage() {
 
       {/* Progress Steps */}
       <div className="bg-white border-b border-slate-100 border-t border-slate-50">
-        <div className="max-w-4xl mx-auto px-4 py-3">
-          <div className="flex items-center justify-between">
+        <div className="max-w-4xl mx-auto px-4 py-3 overflow-x-auto no-scrollbar">
+          <div className="flex items-center justify-between min-w-max sm:min-w-0">
             {STEPS.map((s, i) => (
               <div key={s.id} className="flex items-center">
                 <button
                   onClick={() => s.id < step && setStep(s.id)}
-                  className={`flex items-center gap-3 px-3 py-2 rounded-xl transition-all ${
+                  className={`flex items-center gap-3 px-3 py-2 rounded-xl shrink-0 transition-all ${
                     step === s.id
                       ? 'bg-emerald-50 text-emerald-600'
                       : s.id < step
@@ -319,7 +319,7 @@ export function SetupWizardPage() {
         <div className="bg-white rounded-2xl shadow-lg border border-slate-100 overflow-hidden">
           {/* Step 1: Clinic Details */}
           {step === 1 && (
-            <div className="p-8">
+            <div className="p-4 sm:p-8">
               <div className="mb-6">
                 <h2 className="text-2xl font-bold text-slate-900 mb-2">Clinic Details</h2>
                 <p className="text-slate-600">Add your clinic's address and contact information</p>
@@ -340,7 +340,7 @@ export function SetupWizardPage() {
                   </div>
                 </div>
 
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
                     <label className="block text-sm font-medium text-slate-700 mb-1.5">City *</label>
                     <input
@@ -364,7 +364,7 @@ export function SetupWizardPage() {
                   </div>
                 </div>
 
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
                     <label className="block text-sm font-medium text-slate-700 mb-1.5">Phone</label>
                     <div className="relative">
@@ -448,7 +448,7 @@ export function SetupWizardPage() {
 
           {/* Step 2: Doctors */}
           {step === 2 && (
-            <div className="p-8">
+            <div className="p-4 sm:p-8">
               <div className="mb-6">
                 <h2 className="text-2xl font-bold text-slate-900 mb-2">Add Doctors</h2>
                 <p className="text-slate-600">Add medical staff who will see patients</p>
@@ -485,7 +485,7 @@ export function SetupWizardPage() {
                       )}
                     </div>
 
-                    <div className="grid grid-cols-2 gap-3">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                       <div>
                         <label className="block text-xs font-medium text-slate-600 mb-1">Name *</label>
                         <input
@@ -545,7 +545,7 @@ export function SetupWizardPage() {
 
           {/* Step 3: Staff */}
           {step === 3 && (
-            <div className="p-8">
+            <div className="p-4 sm:p-8">
               <div className="mb-6">
                 <h2 className="text-2xl font-bold text-slate-900 mb-2">Add Staff</h2>
                 <p className="text-slate-600">Add receptionists and support staff</p>
@@ -582,7 +582,7 @@ export function SetupWizardPage() {
                       )}
                     </div>
 
-                    <div className="grid grid-cols-3 gap-3">
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                       <div>
                         <label className="block text-xs font-medium text-slate-600 mb-1">Name *</label>
                         <input
@@ -630,14 +630,14 @@ export function SetupWizardPage() {
 
           {/* Step 4: Working Hours */}
           {step === 4 && (
-            <div className="p-8">
+            <div className="p-4 sm:p-8">
               <div className="mb-6">
                 <h2 className="text-2xl font-bold text-slate-900 mb-2">Working Hours</h2>
                 <p className="text-slate-600">Set your clinic's operating schedule</p>
               </div>
 
               <div className="space-y-6">
-                <div className="grid grid-cols-2 gap-6">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6">
                   <div className="p-4 bg-emerald-50 rounded-xl border border-emerald-100">
                     <label className="block text-sm font-medium text-emerald-700 mb-2">Opening Time</label>
                     <input
@@ -681,8 +681,8 @@ export function SetupWizardPage() {
                   <p className="text-sm text-slate-600 mb-2">
                     Your clinic will be shown as
                   </p>
-                  <div className="flex items-center gap-4">
-                    <Clock className="w-5 h-5 text-emerald-500" />
+                  <div className="flex flex-wrap items-center gap-2 sm:gap-4">
+                    <Clock className="w-5 h-5 text-emerald-500 shrink-0" />
                     <span className="text-lg font-medium text-slate-800">
                       {workingHours.open} - {workingHours.close}
                     </span>
@@ -696,7 +696,7 @@ export function SetupWizardPage() {
 
           {/* Step 5: Subscription */}
           {step === 5 && (
-            <div className="p-8">
+            <div className="p-4 sm:p-8">
               <div className="mb-6">
                 <h2 className="text-2xl font-bold text-slate-900 mb-2">Pro Plan Subscription</h2>
                 <p className="text-slate-600">Start your 30-day free trial to access all Pro features</p>

@@ -317,7 +317,7 @@ export function PatientHome({ onTab, clinicId }: Props) {
         )}
       </div>
 
-      <div className="px-4 mt-5 space-y-5">
+      <div className="px-4 mt-5 space-y-5 pb-28">
         {/* Clinic Status & Selection Card */}
         {clinic ? (
           <div className="bg-white rounded-2xl border border-gray-100 p-4 flex items-center justify-between shadow-sm">

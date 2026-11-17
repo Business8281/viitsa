@@ -484,7 +484,7 @@ export function AINavigatorScreen() {
                   )}
                 </div>
                 {vitals && (
-                  <div className="grid grid-cols-4 gap-1.5 mt-3">
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 mt-3">
                     <VitalBox label="BP" value={vitals.systolic_bp && vitals.diastolic_bp ? `${vitals.systolic_bp}/${vitals.diastolic_bp}` : '—'} />
                     <VitalBox label="Pulse" value={vitals.pulse ? `${vitals.pulse}` : '—'} />
                     <VitalBox label="Temp" value={vitals.temperature ? `${vitals.temperature}` : '—'} />

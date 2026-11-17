@@ -108,14 +108,14 @@ export function SubscriptionInvoiceView({ subscription, clinic, onClose }: Props
   };
 
   return (
-    <div className="flex flex-col items-center overflow-auto w-full relative h-full">
+    <div className="flex flex-col items-start sm:items-center overflow-x-auto w-full relative h-full">
       
       {/* Top sticky bar with close/actions */}
-      <div className="sticky top-0 left-0 w-full bg-white/90 backdrop-blur-sm border-b border-gray-200 p-4 flex items-center justify-between z-50 print:hidden">
-        <button onClick={onClose} className="btn-secondary px-4 py-2 flex items-center gap-2">
+      <div className="sticky top-0 left-0 w-full bg-white/95 backdrop-blur-sm border-b border-gray-200 p-3 sm:p-4 flex items-center justify-between gap-2 overflow-x-auto z-50 print:hidden">
+        <button onClick={onClose} className="btn-secondary px-3 sm:px-4 py-2 flex items-center gap-1.5 sm:gap-2 shrink-0 text-xs sm:text-sm">
           <ArrowLeft size={16} /> Back to Settings
         </button>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2 sm:gap-3 shrink-0">
           <button onClick={handlePrint} className="btn-secondary px-6">
             <Printer size={16} /> Print
           </button>

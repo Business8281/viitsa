@@ -157,9 +157,12 @@ export function formatAmount(amt: number | string | undefined | null): string {
   return isNaN(n) ? String(amt) : n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
-export function formatDisplayDate(dateStr: string | Date | undefined | null): string {
+export function formatDisplayDate(dateStr: any): string {
   if (!dateStr) return new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
-  const d = new Date(dateStr);
+  let dateVal = dateStr;
+  if (typeof dateVal?.toDate === 'function') dateVal = dateVal.toDate();
+  else if (typeof dateVal?.seconds === 'number') dateVal = new Date(dateVal.seconds * 1000);
+  const d = new Date(dateVal);
   if (isNaN(d.getTime())) return String(dateStr);
   return d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
 }
@@ -447,6 +450,22 @@ export async function sendWhatsAppTemplate(options: {
             return comp;
           });
         }
+        // Adapt parameters if retrying viitsa_appt_confirm_online (8 params) from viitsa_appt_confirm_new_visit (7 params)
+        if (alias === 'viitsa_appt_confirm_online' && Array.isArray(aliasComponents)) {
+          aliasComponents = aliasComponents.map((comp: any) => {
+            if (comp.type === 'body' && Array.isArray(comp.parameters) && comp.parameters.length === 7) {
+              return {
+                ...comp,
+                parameters: [
+                  ...comp.parameters.slice(0, 6),
+                  { type: 'text', text: 'New Visit' },
+                  comp.parameters[6], // clinic phone
+                ],
+              };
+            }
+            return comp;
+          });
+        }
 
         const fallbackPayload = {
           ...payload,
@@ -505,8 +524,12 @@ export async function sendWhatsAppTemplate(options: {
     }
 
     // If still failing and error mentions button mismatch while button was sent, retry without button component
-    if (!response.ok && (data?.error?.message?.toLowerCase().includes('button') || data?.error?.error_user_msg?.toLowerCase().includes('button')) && options.components?.some((c: any) => c.type === 'button')) {
-      console.warn(`[WhatsAppService] Button component rejected (${data?.error?.message}). Retrying without button fallback...`);
+    const errDetails = (data?.error?.error_data?.details || '').toLowerCase();
+    const isButtonError = data?.error?.message?.toLowerCase().includes('button') || 
+                          data?.error?.error_user_msg?.toLowerCase().includes('button') ||
+                          errDetails.includes('button');
+    if (!response.ok && isButtonError && options.components?.some((c: any) => c.type === 'button')) {
+      console.warn(`[WhatsAppService] Button component rejected (${data?.error?.message} - ${errDetails}). Retrying without button fallback...`);
       const withoutButtonComponents = options.components.filter((c: any) => c.type !== 'button');
       const withoutButtonPayload = {
         ...payload,
@@ -721,11 +744,14 @@ async function incrementClinicUsage(clinicId: string) {
  * Template: phone_login_otps (alias: viitsa_login_otp)
  * Category: AUTHENTICATION
  * Variables: {{1}} = otp_code
- * Button: Copy code (sub_type: copy_code)
+ * Button: Copy code (sub_type: url)
  */
 export async function sendOtpWhatsApp(to: string, otpCode: string): Promise<WhatsAppSendResult> {
   const templateName = process.env.WA_TEMPLATE_OTP || 'phone_login_otps';
 
+  // Meta approved template phone_login_otps has a dynamic URL button:
+  // url: https://www.whatsapp.com/otp/code/?otp_type=COPY_CODE&code_expiration_minutes=10&code=otp{{1}}
+  // Meta Cloud API requires sub_type: "url" with parameter type: "text" for this button.
   const components = [
     {
       type: 'body',
@@ -735,10 +761,10 @@ export async function sendOtpWhatsApp(to: string, otpCode: string): Promise<What
     },
     {
       type: 'button',
-      sub_type: 'copy_code',
+      sub_type: 'url',
       index: '0',
       parameters: [
-        { type: 'coupon_code', coupon_code: otpCode },
+        { type: 'text', text: otpCode },
       ],
     },
   ];
@@ -780,23 +806,8 @@ export async function sendAppointmentConfirmation(data: AppointmentConfirmData):
 
   switch (data.type) {
     case 'new_visit':
-      // Template: viitsa_appt_confirm_new_visit (7 params)
-      // {{1}}=patient, {{2}}=doctor, {{3}}=clinic, {{4}}=date, {{5}}=time, {{6}}=token, {{7}}=phone
-      templateName = process.env.WA_TEMPLATE_APPT_NEW_VISIT || 'viitsa_appt_confirm_new_visit';
-      bodyParams = [
-        { type: 'text', text: patient },
-        { type: 'text', text: docName },
-        { type: 'text', text: clinic },
-        { type: 'text', text: data.date || 'Scheduled Date' },
-        { type: 'text', text: data.timeOrSlot || 'Scheduled Time' },
-        { type: 'text', text: data.tokenOrQueue || 'Slot 1' },
-        { type: 'text', text: phone },
-      ];
-      break;
-
-    case 'online':
-      // Template: viitsa_appt_confirm_online (alias: viitsa_appt_confirm_new_visit) (7 params)
-      // {{1}}=patient, {{2}}=doctor, {{3}}=clinic, {{4}}=date, {{5}}=timeOrSlot, {{6}}=token, {{7}}=phone
+      // Template: viitsa_appt_confirm_online (alias: viitsa_appt_confirm_new_visit) (8 params)
+      // {{1}}=patient, {{2}}=doctor, {{3}}=clinic, {{4}}=date, {{5}}=timeOrSlot, {{6}}=token, {{7}}=visitType, {{8}}=phone
       templateName = process.env.WA_TEMPLATE_APPT_ONLINE || 'viitsa_appt_confirm_online';
       bodyParams = [
         { type: 'text', text: patient },
@@ -805,6 +816,23 @@ export async function sendAppointmentConfirmation(data: AppointmentConfirmData):
         { type: 'text', text: data.date || 'Scheduled Date' },
         { type: 'text', text: data.timeOrSlot || 'Scheduled Time' },
         { type: 'text', text: data.tokenOrQueue || 'Slot 1' },
+        { type: 'text', text: data.visitType || 'New Visit' },
+        { type: 'text', text: phone },
+      ];
+      break;
+
+    case 'online':
+      // Template: viitsa_appt_confirm_online (alias: viitsa_appt_confirm_new_visit) (8 params)
+      // {{1}}=patient, {{2}}=doctor, {{3}}=clinic, {{4}}=date, {{5}}=timeOrSlot, {{6}}=token, {{7}}=visitType, {{8}}=phone
+      templateName = process.env.WA_TEMPLATE_APPT_ONLINE || 'viitsa_appt_confirm_online';
+      bodyParams = [
+        { type: 'text', text: patient },
+        { type: 'text', text: docName },
+        { type: 'text', text: clinic },
+        { type: 'text', text: data.date || 'Scheduled Date' },
+        { type: 'text', text: data.timeOrSlot || 'Scheduled Time' },
+        { type: 'text', text: data.tokenOrQueue || 'Slot 1' },
+        { type: 'text', text: data.visitType || 'Online Consultation' },
         { type: 'text', text: phone },
       ];
       break;

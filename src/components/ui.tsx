@@ -97,33 +97,33 @@ export function DataTable({ headers, hiddenFrom, children, empty, emptyLabel }: 
 }) {
   return (
     <div className="card p-0 overflow-hidden">
-      <div className="overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead className="border-b border-black/5 bg-surface">
-            <tr>
-              {headers.map((h, i) => (
-                <th
-                  key={h}
-                  className={`text-left px-4 py-3 text-xs font-semibold text-ink-muted uppercase tracking-wide ${
-                    hiddenFrom?.[i] ? `hidden ${hiddenFrom[i]}:table-cell` : ''
-                  }`}
-                >
-                  {h}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-black/5">
-            {!empty ? children : (
+      {empty ? (
+        <div className="px-4 py-10 text-center text-sm text-ink-muted">
+          {emptyLabel}
+        </div>
+      ) : (
+        <div className="overflow-x-auto no-scrollbar">
+          <table className="w-full text-sm">
+            <thead className="border-b border-black/5 bg-surface">
               <tr>
-                <td colSpan={headers.length} className="px-4 py-10 text-center text-sm text-ink-muted">
-                  {emptyLabel}
-                </td>
+                {headers.map((h, i) => (
+                  <th
+                    key={h}
+                    className={`text-left px-4 py-3 text-xs font-semibold text-ink-muted uppercase tracking-wide ${
+                      hiddenFrom?.[i] ? `hidden ${hiddenFrom[i]}:table-cell` : ''
+                    }`}
+                  >
+                    {h}
+                  </th>
+                ))}
               </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
+            </thead>
+            <tbody className="divide-y divide-black/5">
+              {children}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }

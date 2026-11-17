@@ -44,7 +44,7 @@ export function DateRangeFilter({
   };
 
   return (
-    <div className={`flex flex-col sm:flex-row sm:items-center gap-2 flex-wrap ${className}`}>
+    <div className={`flex flex-col sm:flex-row sm:items-center gap-2 max-w-full ${className}`}>
       {label && (
         <span className="text-xs font-semibold text-ink-muted flex items-center gap-1 shrink-0">
           <Calendar size={13} className="text-primary" />
@@ -53,7 +53,7 @@ export function DateRangeFilter({
       )}
 
       {/* Preset Pill Buttons */}
-      <div className="inline-flex items-center p-1 bg-surface-elevated border border-divider/60 rounded-xl gap-1 shrink-0 shadow-xs">
+      <div className="flex flex-wrap items-center p-1 bg-surface-elevated border border-divider/60 rounded-xl gap-1 max-w-full shadow-xs">
         {presets.map((p) => {
           const active = preset === p.id;
           return (
@@ -61,7 +61,7 @@ export function DateRangeFilter({
               key={p.id}
               type="button"
               onClick={() => handleSelect(p.id)}
-              className={`px-2.5 py-1 text-xs font-semibold rounded-lg transition-all ${
+              className={`px-2.5 py-1 text-xs font-semibold rounded-lg transition-all shrink-0 whitespace-nowrap ${
                 active
                   ? 'bg-primary text-white shadow-xs'
                   : 'text-ink-muted hover:text-ink hover:bg-black/5'
@@ -75,27 +75,31 @@ export function DateRangeFilter({
 
       {/* Custom Date Pickers */}
       {(preset === 'custom' || showCustomInputs) && (
-        <div className="flex items-center gap-1.5 bg-surface-elevated border border-divider/60 p-1 rounded-xl text-xs shadow-xs animate-in fade-in duration-200">
-          <span className="text-ink-subtle pl-1 text-[11px] font-medium">From:</span>
-          <input
-            type="date"
-            value={formatDobForInput(customStart)}
-            onChange={(e) => {
-              onCustomStartChange?.(e.target.value);
-              onPresetChange('custom');
-            }}
-            className="px-2 py-0.5 bg-white border border-divider/50 rounded-md text-ink text-xs focus:ring-1 focus:ring-primary focus:outline-none"
-          />
-          <span className="text-ink-subtle text-[11px] font-medium">To:</span>
-          <input
-            type="date"
-            value={formatDobForInput(customEnd)}
-            onChange={(e) => {
-              onCustomEndChange?.(e.target.value);
-              onPresetChange('custom');
-            }}
-            className="px-2 py-0.5 bg-white border border-divider/50 rounded-md text-ink text-xs focus:ring-1 focus:ring-primary focus:outline-none"
-          />
+        <div className="flex flex-wrap items-center gap-1.5 bg-surface-elevated border border-divider/60 p-1.5 rounded-xl text-xs shadow-xs max-w-full animate-in fade-in duration-200">
+          <div className="flex items-center gap-1.5 flex-1 sm:flex-initial min-w-[140px]">
+            <span className="text-ink-subtle pl-1 text-[11px] font-medium shrink-0">From:</span>
+            <input
+              type="date"
+              value={formatDobForInput(customStart)}
+              onChange={(e) => {
+                onCustomStartChange?.(e.target.value);
+                onPresetChange('custom');
+              }}
+              className="px-2 py-0.5 bg-white border border-divider/50 rounded-md text-ink text-xs focus:ring-1 focus:ring-primary focus:outline-none w-full"
+            />
+          </div>
+          <div className="flex items-center gap-1.5 flex-1 sm:flex-initial min-w-[140px]">
+            <span className="text-ink-subtle text-[11px] font-medium shrink-0">To:</span>
+            <input
+              type="date"
+              value={formatDobForInput(customEnd)}
+              onChange={(e) => {
+                onCustomEndChange?.(e.target.value);
+                onPresetChange('custom');
+              }}
+              className="px-2 py-0.5 bg-white border border-divider/50 rounded-md text-ink text-xs focus:ring-1 focus:ring-primary focus:outline-none w-full"
+            />
+          </div>
           {(customStart || customEnd) && (
             <button
               type="button"
@@ -104,7 +108,7 @@ export function DateRangeFilter({
                 onCustomEndChange?.('');
               }}
               title="Clear custom range"
-              className="p-1 text-ink-subtle hover:text-ink rounded"
+              className="p-1 text-ink-subtle hover:text-ink rounded ml-auto"
             >
               <X size={12} />
             </button>

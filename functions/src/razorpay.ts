@@ -306,7 +306,7 @@ export const createClinicSubscription = onCall({ region: "asia-south1" }, async 
       // Create a Razorpay Payment Link for ₹1.
       // Payment Links are hosted directly on Razorpay's verified domain (rzp.io),
       // which completely bypasses the "website does not match registered website" block on test hostnames!
-      let adminPhone = await resolveClinicAdminPhone(
+      const adminPhone = await resolveClinicAdminPhone(
         clinicId,
         (request.data as any)?.phone || (request.auth.token as any)?.phone_number || userData.phone
       );
@@ -565,7 +565,12 @@ export const cancelClinicSubscription = onCall({ region: "asia-south1" }, async 
 });
 
 export const razorpayWebhook = onRequest(async (req, res) => {
-  const secret = process.env.RAZORPAY_WEBHOOK_SECRET || "viitsa_secret_123";
+  const secret = process.env.RAZORPAY_WEBHOOK_SECRET;
+  if (!secret) {
+    console.error("RAZORPAY_WEBHOOK_SECRET is not configured.");
+    res.status(500).send("Webhook secret misconfigured");
+    return;
+  }
   const signature = req.headers["x-razorpay-signature"] as string;
 
   if (!signature) {
@@ -580,7 +585,9 @@ export const razorpayWebhook = onRequest(async (req, res) => {
       .createHmac("sha256", secret)
       .update((req as any).rawBody)
       .digest("hex");
-    if (rawExpectedSignature === signature) {
+    const expBuf = Buffer.from(rawExpectedSignature, "utf-8");
+    const sigBuf = Buffer.from(signature, "utf-8");
+    if (expBuf.length === sigBuf.length && crypto.timingSafeEqual(expBuf, sigBuf)) {
       isSignatureValid = true;
     }
   }
@@ -590,7 +597,9 @@ export const razorpayWebhook = onRequest(async (req, res) => {
       .createHmac("sha256", secret)
       .update(typeof req.body === "string" ? req.body : JSON.stringify(req.body))
       .digest("hex");
-    if (jsonExpectedSignature === signature) {
+    const expBuf = Buffer.from(jsonExpectedSignature, "utf-8");
+    const sigBuf = Buffer.from(signature, "utf-8");
+    if (expBuf.length === sigBuf.length && crypto.timingSafeEqual(expBuf, sigBuf)) {
       isSignatureValid = true;
     }
   }
@@ -625,7 +634,7 @@ export const razorpayWebhook = onRequest(async (req, res) => {
         created_at: new Date().toISOString(),
         raw_created_at: event.created_at || null,
       });
-    } catch (createErr) {
+    } catch (_createErr) {
       console.log(`[RazorpayWebhook] Idempotency: Webhook event '${eventKey}' was already processed. Acknowledging immediately with 200 OK.`);
       res.status(200).send("OK: already processed");
       return;
@@ -1434,7 +1443,9 @@ export const razorpayWebhook = onRequest(async (req, res) => {
                   invoicePlanName = sData.plan_name;
                 }
               }
-            } catch (sErr) {}
+            } catch (sErr) {
+              console.warn('[razorpayWebhook] Failed to read subscription tier:', sErr);
+            }
           }
 
           // Dispatch WhatsApp template viitsa_clinic_sub_invoice to Clinic Admin AND payer (if different)

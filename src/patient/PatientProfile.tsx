@@ -436,7 +436,7 @@ export function PatientProfile({ onTab }: Props) {
         </div>
       </div>
 
-      <div className="px-4 mt-5 space-y-4">
+      <div className="px-4 mt-5 space-y-4 pb-28">
         {error && (
           <div className="text-sm text-red-600 bg-red-50 border border-red-200 px-4 py-2.5 rounded-xl flex items-center gap-2">
             <AlertTriangle size={16} className="shrink-0" />
@@ -702,8 +702,8 @@ export function PatientProfile({ onTab }: Props) {
 
         {/* Set / Change Password Modal */}
         {showPasswordModal && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-xs animate-in fade-in duration-150">
-            <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-gray-100 max-h-[90vh] overflow-y-auto">
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/50 backdrop-blur-xs animate-in fade-in duration-150">
+            <div className="bg-white rounded-2xl max-w-md w-full p-4 sm:p-6 shadow-2xl border border-gray-100 max-h-[90vh] overflow-y-auto">
               <div className="flex items-center justify-between pb-4 border-b border-gray-100">
                 <div className="flex items-center gap-2">
                   <div className="w-8 h-8 rounded-lg bg-teal-50 text-teal-700 flex items-center justify-center">

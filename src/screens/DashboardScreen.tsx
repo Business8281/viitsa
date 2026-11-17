@@ -36,8 +36,8 @@ function MetricCard({
   const t = toneMap[tone];
   return (
     <div className="card flex items-center gap-4 hover:shadow-card-hover transition-shadow">
-      <div className={`inline-flex h-11 w-11 items-center justify-center rounded-xl ${t.bg} ${t.text}`}>{icon}</div>
-      <div className="min-w-0">
+      <div className={`inline-flex h-11 w-11 items-center justify-center rounded-xl ${t.bg} ${t.text} shrink-0`}>{icon}</div>
+      <div className="min-w-0 flex-1">
         <p className="text-xs text-ink-muted font-medium uppercase tracking-wide">{label}</p>
         <p className="text-2xl font-bold text-ink leading-tight">{value}</p>
         {sub && <p className="text-xs text-ink-muted truncate">{sub}</p>}
@@ -290,7 +290,7 @@ export function DashboardScreen() {
       )}
 
       {/* Metrics row */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
         <MetricCard icon={<Users size={20} />} label="Patients today" value={String(metrics.totalPatients)} sub={`${metrics.completed} completed`} tone="primary" />
         <MetricCard icon={<Clock size={20} />} label="Avg. wait time" value={`${metrics.avgWait} min`} sub="Across active queue" tone="warning" />
         <MetricCard icon={<Wallet size={20} />} label="Revenue today" value={formatRs(metrics.revenue)} sub={`${billingSummary.todayPaidTransactions} paid transaction${billingSummary.todayPaidTransactions !== 1 ? 's' : ''}`} tone="accent" />
@@ -309,7 +309,7 @@ export function DashboardScreen() {
           <div>
             <SectionHeader title="Billing & Payments" subtitle={`Live collections and outstanding dues · Period: ${billingPresetLabel}`} />
           </div>
-          <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+          <div className="flex flex-col sm:flex-row sm:items-center gap-2 min-w-0 max-w-full">
             <DateRangeFilter
               preset={billingDatePreset}
               onPresetChange={setBillingDatePreset}

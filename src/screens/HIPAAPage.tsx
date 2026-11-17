@@ -153,7 +153,7 @@ export function HIPAAPage() {
                   In accordance with <strong>Section 28 of the Legal Handover Document</strong>, VIITSA publishes this transparent Claims Matrix outlining our exact positioning and regulatory commitments:
                 </p>
                 <div className="overflow-x-auto">
-                  <table className="w-full text-left text-xs border border-slate-200 rounded-xl overflow-hidden">
+                  <table className="w-full min-w-[560px] text-left text-xs border border-slate-200 rounded-xl overflow-hidden">
                     <thead className="bg-slate-100 text-slate-900 font-bold">
                       <tr>
                         <th className="p-3 border-b border-slate-200">Framework / Topic</th>

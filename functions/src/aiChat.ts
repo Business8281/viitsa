@@ -1,4 +1,4 @@
-import { onCall } from 'firebase-functions/v2/https';
+import { onCall, HttpsError } from 'firebase-functions/v2/https';
 import { GoogleGenAI } from '@google/genai';
 import * as admin from 'firebase-admin';
 
@@ -6,12 +6,12 @@ export const aiChat = onCall({ region: 'asia-south1', timeoutSeconds: 120 }, asy
   const { messages, systemPrompt, audioBase64, audioMimeType, returnAudio = true, language } = request.data || {};
   
   if ((!messages || !Array.isArray(messages)) && !audioBase64) {
-    throw new Error('Messages or audio input is required');
+    throw new HttpsError('invalid-argument', 'Messages or audio input is required');
   }
 
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
-    throw new Error('API key is missing');
+    throw new HttpsError('failed-precondition', 'API key is missing');
   }
 
   const ai = new GoogleGenAI({ apiKey });
@@ -97,7 +97,7 @@ ${langRule}
     const responseText = response.text || '';
     let audioWavBase64: string | null = null;
 
-    // 2. If voice output is requested, synthesize natural speech with gemini-3.8-flash-tts
+    // 2. If voice output is requested, synthesize natural speech using dedicated TTS model
     if (returnAudio && responseText.trim()) {
       try {
         // Strip out TRIAGE_JSON and markdown characters for clean, natural speech voiceover
@@ -131,6 +131,6 @@ ${langRule}
     };
   } catch (error: any) {
     console.error('AI chat error:', error);
-    throw new Error('Failed to fetch AI response');
+    throw new HttpsError('internal', 'Failed to fetch AI response');
   }
 });

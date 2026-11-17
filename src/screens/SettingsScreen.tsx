@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useMemo } from 'react';
-import { useSearchParams, Navigate } from 'react-router-dom';
+import { useSearchParams, Navigate, useNavigate } from 'react-router-dom';
 import { 
   Save, Building2, Clock, Stethoscope, Users, Bell, Plus, AlertCircle, 
   RefreshCw, QrCode, Link2, Share2, FileText, Download, Eye, EyeOff, ExternalLink, 
@@ -89,9 +89,7 @@ const VALID_TABS: Tab[] = ['profile', 'hours', 'doctors', 'staff', 'notification
 
 export function SettingsScreen() {
   const { clinic, user, logout } = useAuth();
-  if (user?.role === 'doctor' || user?.role === 'clinic_doctor') {
-    return <Navigate to="/doctor/dashboard" replace />;
-  }
+  const navigate = useNavigate();
   const { toast } = useToast();
   const [searchParams, setSearchParams] = useSearchParams();
   const rawTab = searchParams.get('tab') as Tab | null;
@@ -669,6 +667,10 @@ export function SettingsScreen() {
     }
   };
 
+  if (user?.role === 'doctor' || user?.role === 'clinic_doctor') {
+    return <Navigate to="/doctor/dashboard" replace />;
+  }
+
   if (loading || !clinic) return <Loading label="Loading settings…" />;
 
   const tabs: { key: Tab; label: string; Icon: any }[] = [
@@ -683,8 +685,8 @@ export function SettingsScreen() {
 
   if (viewingSubscription && clinic) {
     return (
-      <div className="fixed inset-0 z-[100] bg-slate-900/50 backdrop-blur-sm p-4 overflow-auto flex items-center justify-center">
-        <div className="bg-white w-full max-w-[210mm] min-h-[90vh] rounded-2xl shadow-2xl overflow-hidden flex flex-col relative">
+      <div className="fixed inset-0 z-[100] bg-slate-900/50 backdrop-blur-sm p-2 sm:p-4 overflow-y-auto flex items-start justify-center">
+        <div className="bg-white w-full max-w-[210mm] min-h-[90vh] my-auto rounded-2xl shadow-2xl overflow-hidden flex flex-col relative">
           <SubscriptionInvoiceView
             subscription={viewingSubscription}
             clinic={clinic}
@@ -702,7 +704,7 @@ export function SettingsScreen() {
         <p className="text-sm text-ink-muted">Manage clinic profile, staff, and configuration</p>
       </div>
 
-      <div className="flex items-center gap-1 rounded-lg bg-primary-50/60 p-0.5 overflow-x-auto">
+      <div className="flex items-center gap-1 rounded-lg bg-primary-50/60 p-0.5 overflow-x-auto no-scrollbar">
         {tabs.map(({ key, label, Icon }) => (
           <button key={key} onClick={() => setTab(key)}
             className={`flex items-center gap-1.5 whitespace-nowrap rounded-md px-3 py-1.5 text-xs font-semibold transition ${tab === key ? 'bg-white text-primary shadow-sm' : 'text-ink-muted hover:text-ink'}`}>
@@ -966,7 +968,7 @@ export function SettingsScreen() {
       {tab === 'hours' && (
         <div className="card max-w-2xl space-y-5">
           <SectionHeader title="Working hours & slots" subtitle="Set open/close time, days, and appointment slot duration" />
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div><label className="label">Opens</label><input type="time" className="input" value={openHours} onChange={e => setOpenHours(e.target.value)} /></div>
             <div><label className="label">Closes</label><input type="time" className="input" value={closeHours} onChange={e => setCloseHours(e.target.value)} /></div>
           </div>
@@ -1643,6 +1645,29 @@ export function SettingsScreen() {
                         </div>
                       );
                     })}
+                  </div>
+
+                  {/* Hospital & Enterprise Custom Quote Notice */}
+                  <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+                    <div className="space-y-0.5">
+                      <p className="font-bold text-ink flex items-center gap-1.5">
+                        <Building2 size={15} className="text-primary" />
+                        Hospital & Multi-Facility Campus Deployments
+                      </p>
+                      <p className="text-ink-subtle text-[11px]">
+                        Looking for IPD, OT management, or hospital deployments? Hospital plans are provided exclusively via custom quote.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setChangePlanModalOpen(false);
+                        navigate('/contact');
+                      }}
+                      className="px-3.5 py-2 bg-primary text-white rounded-lg font-semibold text-xs shrink-0 hover:bg-primary-dark transition text-center"
+                    >
+                      Request Custom Quote →
+                    </button>
                   </div>
 
                   {/* Upgrade vs Downgrade contextual notices */}
@@ -2593,31 +2618,31 @@ function PatientAccessTab({ clinicId, clinicName, clinicPhone }: { clinicId: str
           <div className="relative max-w-3xl w-full my-auto space-y-4">
             
             {/* Action Bar (Hidden during printing) */}
-            <div className="no-print flex items-center justify-between gap-3 bg-white p-3.5 rounded-2xl shadow-lg border border-slate-200">
+            <div className="no-print flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 bg-white p-3.5 rounded-2xl shadow-lg border border-slate-200">
               <div className="flex items-center gap-2">
-                <Printer className="text-primary" size={20} />
+                <Printer className="text-primary shrink-0" size={20} />
                 <div>
                   <h3 className="text-sm font-bold text-ink">A4 Clinic Reception Standee & Poster</h3>
                   <p className="text-[11px] text-ink-muted">Fitted to full A4 paper (210mm × 297mm) ready for standees or walls</p>
                 </div>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 overflow-x-auto no-scrollbar shrink-0">
                 <button 
                   onClick={triggerA4Print} 
-                  className="btn-primary text-xs flex items-center gap-1.5 shadow-sm"
+                  className="btn-primary text-xs flex items-center gap-1.5 shadow-sm shrink-0"
                 >
                   <Printer size={14} /> Print Now (A4)
                 </button>
                 <button 
                   onClick={downloadA4Poster} 
                   disabled={downloadingA4}
-                  className="btn-secondary text-xs flex items-center gap-1.5"
+                  className="btn-secondary text-xs flex items-center gap-1.5 shrink-0"
                 >
                   <Download size={14} /> {downloadingA4 ? 'Preparing…' : 'Download A4 PNG'}
                 </button>
                 <button 
                   onClick={() => setShowA4Modal(false)} 
-                  className="p-1.5 rounded-lg text-ink-muted hover:text-ink hover:bg-slate-100 transition"
+                  className="p-1.5 rounded-lg text-ink-muted hover:text-ink hover:bg-slate-100 transition shrink-0 ml-auto sm:ml-0"
                   title="Close preview"
                 >
                   <X size={18} />
@@ -2626,7 +2651,7 @@ function PatientAccessTab({ clinicId, clinicName, clinicPhone }: { clinicId: str
             </div>
 
             {/* LIVE A4 STANDEE SHEET (BIG & FITTED) */}
-            <div className="overflow-x-auto pb-4 flex justify-center">
+            <div className="overflow-x-auto pb-4 flex justify-start sm:justify-center">
               <div 
                 id="qr-standee-print-area"
                 className="w-[210mm] min-h-[297mm] max-h-[297mm] bg-white p-8 md:p-12 shadow-2xl rounded-2xl border border-slate-200 flex flex-col justify-between items-center text-center relative select-none"
@@ -3996,12 +4021,12 @@ function AddUserModal({
           <input className="input" value={name} onChange={e => setName(e.target.value)} placeholder={isDoc ? "Dr. Priya Rao" : "John Mathew"} />
         </div>
 
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div><label className="label">Email Address *</label><input type="email" className="input" value={email} onChange={e => setEmail(e.target.value)} placeholder="doctor@clinic.com" /></div>
           <div><label className="label">Phone Number</label><input className="input" value={phone} onChange={e => setPhone(e.target.value)} placeholder="+91 9876543210" /></div>
         </div>
 
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div>
             <label className="label">Role</label>
             <select className="select" value={role} onChange={e => setRole(e.target.value as Role)}>
@@ -4017,7 +4042,7 @@ function AddUserModal({
         </div>
 
         {isDoc && (
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label className="label">Consultation Fee (₹)</label>
               <input type="number" min="0" className="input" value={consultationFee} onChange={e => setConsultationFee(e.target.value)} placeholder="500" />
@@ -4029,7 +4054,7 @@ function AddUserModal({
           </div>
         )}
 
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div>
             <label className="label">Designation</label>
             <input className="input" value={designation} onChange={e => setDesignation(e.target.value)} placeholder={isDoc ? "Senior Consultant" : "Front Desk Executive"} />

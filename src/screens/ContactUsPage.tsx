@@ -1,5 +1,5 @@
 import { useNavigate } from 'react-router-dom';
-import { ArrowLeft, Mail, Phone, Globe, MapPin } from 'lucide-react';
+import { ArrowLeft, Mail, Phone, Globe, MapPin, Building2 } from 'lucide-react';
 import { ViitsaLogo } from '../components/ViitsaLogo';
 
 export function ContactUsPage() {
@@ -21,6 +21,16 @@ export function ContactUsPage() {
           <p className="text-slate-600 mb-8">We're here to help and answer any question you might have. We look forward to hearing from you.</p>
           
           <div className="space-y-6">
+            <div className="flex items-center gap-4 p-4 rounded-xl border border-teal-200 bg-teal-50/70">
+              <div className="w-12 h-12 rounded-full bg-teal-600 text-white flex items-center justify-center shrink-0 shadow-sm">
+                <Building2 size={24} />
+              </div>
+              <div>
+                <h3 className="font-semibold text-teal-950">Hospital & Enterprise Custom Quotes</h3>
+                <p className="text-sm text-teal-800">For multi-specialty hospitals, IPD nursing homes, and custom enterprise quotes, email <strong className="text-teal-950 font-bold">support@viitsa.com</strong> or call our dedicated hospital solutions desk.</p>
+              </div>
+            </div>
+
             <div className="flex items-center gap-4 p-4 rounded-xl border border-slate-100 bg-slate-50">
               <div className="w-12 h-12 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center shrink-0">
                 <MapPin size={24} />

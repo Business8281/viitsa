@@ -448,7 +448,7 @@ export async function ensurePatientInvoicePdfUrl(data: PatientInvoicePdfDetails,
   let bucket: any;
   try {
     bucket = admin.storage().bucket(bucketName);
-  } catch (e) {
+  } catch (_e) {
     bucket = admin.storage().bucket();
   }
   const cleanInv = (data.invoiceNumber || `BILL-${Date.now()}`).replace(/[^\w-]/g, '_');
@@ -483,7 +483,7 @@ export async function ensureSubscriptionInvoicePdfUrl(data: InvoiceDetails, clin
   let bucket: any;
   try {
     bucket = admin.storage().bucket(bucketName);
-  } catch (e) {
+  } catch (_e) {
     bucket = admin.storage().bucket();
   }
   const cleanInv = (data.invoiceNumber || `SUB-${Date.now()}`).replace(/[^\w-]/g, '_');

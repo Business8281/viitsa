@@ -582,7 +582,7 @@ export function PatientFullDetails({ patientId, patientName, patient }: PatientF
   return (
     <div className="mt-4 pt-4 border-t border-slate-200">
       {/* Scrollable Tabs Header */}
-      <div className="flex overflow-x-auto gap-2 pb-2 mb-4 scrollbar-hide">
+      <div className="flex overflow-x-auto gap-2 pb-2 mb-4 scrollbar-hide no-scrollbar">
         {[
           { id: 'overview', label: 'Overview & Records', icon: Activity, count: 'Live', alert: false },
           { id: 'appointments', label: 'Appointments', icon: Calendar, count: visibleAppointments.length, alert: false },
@@ -594,7 +594,7 @@ export function PatientFullDetails({ patientId, patientName, patient }: PatientF
           <button
             key={t.id}
             onClick={() => setTab(t.id as any)}
-            className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold whitespace-nowrap transition-all shadow-sm ${
+            className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold whitespace-nowrap shrink-0 transition-all shadow-sm ${
               tab === t.id 
                 ? 'bg-primary text-white shadow-primary/20 shadow-md ring-2 ring-primary/20' 
                 : 'bg-white text-slate-700 hover:bg-slate-100 border border-slate-200'
@@ -1303,7 +1303,7 @@ export function PatientFullDetails({ patientId, patientName, patient }: PatientF
         {tab === 'invoices' && (
           <div className="space-y-4">
             {/* Financial Summary */}
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 sm:gap-3">
               <div className="bg-white p-3 rounded-xl border border-slate-200 text-center">
                 <span className="text-[10px] font-bold uppercase text-slate-400 block">Total Billed</span>
                 <span className="text-base sm:text-lg font-bold text-slate-900">₹{totalBilled}</span>

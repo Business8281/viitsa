@@ -509,7 +509,7 @@ export function PrescriptionView({
       {/* ========================================================================= */}
       {/* TOP FLOATING ACTION BAR (SCREEN ONLY / NO-PRINT) */}
       {/* ========================================================================= */}
-      <div className="no-print fixed top-4 z-50 flex items-center gap-2 bg-slate-900/90 backdrop-blur-md px-4 py-2 rounded-full shadow-2xl border border-slate-700/60 text-white animate-fade-in">
+      <div className="no-print fixed top-3 sm:top-4 left-2 right-2 sm:left-1/2 sm:right-auto sm:-translate-x-1/2 z-50 flex items-center gap-1.5 sm:gap-2 bg-slate-900/95 backdrop-blur-md px-3 sm:px-4 py-2 rounded-full shadow-2xl border border-slate-700/60 text-white animate-fade-in max-w-[calc(100vw-16px)] sm:max-w-max overflow-x-auto no-scrollbar">
         <span className="text-xs font-bold tracking-wide mr-2 text-teal-400 hidden sm:inline">
           Prescription A4 Preview
         </span>

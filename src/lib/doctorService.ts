@@ -112,7 +112,7 @@ export async function fetchClinicDoctors(clinicId: string, clinicData?: Clinic |
       return false;
     };
 
-    let docList = allCandidateUsers.filter(isDoctor);
+    const docList = allCandidateUsers.filter(isDoctor);
 
     // 7. If clinic has a named doctor_name, ensure they are represented in the list
     if (cData?.doctor_name) {

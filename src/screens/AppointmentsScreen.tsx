@@ -43,6 +43,7 @@ function generateSlots(openTime: string, closeTime: string, durationMin: number)
 }
 
 const SLOT_CACHE: Record<string, string[]> = {};
+const EMPTY_APPTS: Appointment[] = [];
 
 function getApptTypeLabel(a?: Appointment): string {
   if (!a) return 'Clinic';
@@ -190,7 +191,9 @@ export function AppointmentsScreen() {
   }, [appointments]);
 
   const selectedISO = localDateISO(selectedDate);
-  const selectedAppts = appointmentsByDate[selectedISO] ?? [];
+  const selectedAppts = useMemo(() => {
+    return appointmentsByDate[selectedISO] || EMPTY_APPTS;
+  }, [appointmentsByDate, selectedISO]);
 
   // Statistics for selected day
   const dayStats = useMemo(() => {
@@ -607,7 +610,7 @@ export function AppointmentsScreen() {
                 </button>
               </div>
             </div>
-            <div className="flex items-center gap-1 overflow-x-auto pb-1 -mx-1 px-1">
+            <div className="flex items-center gap-1 overflow-x-auto no-scrollbar pb-1 -mx-1 px-1">
               {dates.map((d) => {
                 const iso = localDateISO(d);
                 const appts = appointmentsByDate[iso] ?? [];
@@ -676,7 +679,7 @@ export function AppointmentsScreen() {
 
             {/* View Mode Tabs: Patient Queue vs All Appointments (Token-wise) */}
             <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 pt-1 border-t border-slate-100">
-              <div className="inline-flex p-1 bg-slate-100 rounded-xl">
+              <div className="inline-flex max-w-full overflow-x-auto no-scrollbar p-1 bg-slate-100 rounded-xl">
                 <button
                   type="button"
                   onClick={() => setDayTab('queue')}
@@ -1336,7 +1339,7 @@ export function AppointmentsScreen() {
             </span>
           </div>
 
-          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 bg-surface p-3 rounded-2xl border border-divider/60">
+          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 bg-surface p-3 rounded-2xl border border-divider/60 min-w-0 max-w-full">
             <DateRangeFilter
               preset={historyDatePreset}
               onPresetChange={setHistoryDatePreset}
@@ -1346,8 +1349,8 @@ export function AppointmentsScreen() {
               onCustomEndChange={setHistoryEnd}
               label="Calendar Period"
             />
-            <div className="flex items-center gap-2 flex-wrap">
-              <div className="flex bg-black/5 p-1 rounded-lg text-xs">
+            <div className="flex items-center gap-2 flex-wrap min-w-0 max-w-full">
+              <div className="flex bg-black/5 p-1 rounded-lg text-xs overflow-x-auto no-scrollbar max-w-full">
                 {(['all', 'done', 'waiting', 'cancelled'] as const).map((st) => (
                   <button
                     key={st}
@@ -2050,7 +2053,7 @@ function BookingModal({ open, onClose, onSaved, patients, doctors, clinicId, def
   const [saving, setSaving] = useState(false);
 
   const availableDoctors = useMemo(() => {
-    let list = [...doctors];
+    const list = [...doctors];
     if (currentUser?.name) {
       const exists = list.some(d => 
         (d.id && currentUser.id && d.id === currentUser.id) ||
@@ -2232,7 +2235,7 @@ function BookingModal({ open, onClose, onSaved, patients, doctors, clinicId, def
             </>
           )}
         </div>
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div>
             <label className="label">Date</label>
             <input type="date" min={todayISO()} className="input" value={formatDobForInput(date)} onChange={(e) => setDate(e.target.value)} />
@@ -2357,7 +2360,7 @@ function WalkInModal({ open, onClose, onSaved, patients, clinicId, doctors, curr
   };
 
   const availableDoctors = useMemo(() => {
-    let list = [...doctors];
+    const list = [...doctors];
     if (currentUser?.name) {
       const exists = list.some(d => 
         (d.id && currentUser.id && d.id === currentUser.id) ||
@@ -2663,7 +2666,7 @@ function WalkInModal({ open, onClose, onSaved, patients, clinicId, doctors, curr
         </div>
 
         {/* DOB & Age (Disabled input auto-computed from DOB) */}
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div>
             <label className="label text-xs font-semibold text-ink">Date of Birth (DOB) *</label>
             <input
@@ -2691,7 +2694,7 @@ function WalkInModal({ open, onClose, onSaved, patients, clinicId, doctors, curr
         </div>
 
         {/* Contact Details (Phone & Email mandatory) */}
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div>
             <label className="label text-xs font-semibold text-ink">Patient Mobile Phone *</label>
             <input
@@ -2714,7 +2717,7 @@ function WalkInModal({ open, onClose, onSaved, patients, clinicId, doctors, curr
         </div>
 
         {/* Attendant Details (Name & Phone mandatory) */}
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div>
             <label className="label text-xs font-semibold text-ink">Attendant / Guardian Name *</label>
             <input
@@ -2736,7 +2739,7 @@ function WalkInModal({ open, onClose, onSaved, patients, clinicId, doctors, curr
         </div>
 
         {/* Date & Time */}
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div>
             <label className="label text-xs font-semibold text-ink">Appointment Date *</label>
             <input

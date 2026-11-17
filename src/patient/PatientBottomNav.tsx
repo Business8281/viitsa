@@ -32,7 +32,7 @@ export function PatientBottomNav({ aiBadge, paymentBadge }: PatientBottomNavProp
             <Link
               key={key}
               to={`/patient/${key === 'home' ? 'dashboard' : key}`}
-              className={`relative flex flex-col items-center pt-2 pb-safe pb-3 gap-0.5 transition-colors ${
+              className={`relative flex flex-col items-center pt-2 pb-2.5 sm:pb-3 gap-0.5 transition-colors ${
                 isActive ? 'text-[#106EBE]' : 'text-gray-400'
               }`}
             >

@@ -8,6 +8,8 @@
     -moz-osx-font-smoothing: grayscale;
     text-rendering: optimizeLegibility;
     -webkit-text-size-adjust: 100%;
+    overflow-x: clip;
+    max-width: 100%;
   }
   body {
     background-color: #F5FAFA;
@@ -16,6 +18,13 @@
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
     margin: 0;
+    overflow-x: clip;
+    max-width: 100%;
+    position: relative;
+  }
+  #root {
+    overflow-x: clip;
+    max-width: 100%;
   }
   * {
     box-sizing: border-box;
@@ -192,14 +201,43 @@
   }
 }
 
+/* Safe-area utilities for iOS / mobile gestures */
+.safe-bottom {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+.pb-safe {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+.pt-safe {
+  padding-top: env(safe-area-inset-top, 0px);
+}
+
+/* Hide scrollbars for cleaner horizontal pill navigation */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
 /* Prescription A4 Styling */
 .prescription-preview {
   min-height: 100vh;
   display: flex;
   justify-content: center;
   align-items: flex-start;
-  padding: 24px;
+  padding: 72px 16px 24px;
   background-color: #f1f5f9;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+@media (max-width: 840px) {
+  .prescription-preview {
+    justify-content: flex-start;
+    padding: 72px 8px 24px;
+  }
 }
 
 .prescription-page {

@@ -288,7 +288,7 @@ export function PatientAINavigator({ onTab, clinicId, patientId, onBookWithSumma
   };
 
   return (
-    <div className="flex flex-col h-[calc(100dvh-60px)] bg-[#F4F9F8]">
+    <div className="flex flex-col h-[calc(100dvh-64px-env(safe-area-inset-bottom,0px))] bg-[#F4F9F8]">
       {/* Header */}
       <div className="bg-primary px-4 pt-safe pb-4 flex items-center gap-3 shadow-md" style={{ paddingTop: 'max(env(safe-area-inset-top), 48px)' }}>
         <button onClick={() => onTab('home')} className="p-2 rounded-xl bg-white/10 text-white active:bg-white/20">
@@ -424,7 +424,7 @@ export function PatientAINavigator({ onTab, clinicId, patientId, onBookWithSumma
       </div>
 
       {/* Input bar */}
-      <div className="bg-white border-t border-gray-100 px-4 py-3" style={{ paddingBottom: 'max(env(safe-area-inset-bottom), 12px)' }}>
+      <div className="bg-white border-t border-gray-100 px-4 py-3 shrink-0">
         <form
           onSubmit={(e) => { e.preventDefault(); void send(input); }}
           className="flex items-center gap-2"

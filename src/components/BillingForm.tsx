@@ -49,7 +49,7 @@ export function BillingForm({ patientName, doctorName, defaultFee = 500, onChang
   return (
     <div className="space-y-4">
       {/* Patient + doctor header */}
-      <div className="grid grid-cols-2 gap-3 text-sm">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
         <div className="rounded-lg bg-primary-50/50 px-3 py-2">
           <p className="text-[10px] text-ink-subtle uppercase">Patient</p>
           <p className="font-semibold text-ink">{patientName}</p>
@@ -99,7 +99,7 @@ export function BillingForm({ patientName, doctorName, defaultFee = 500, onChang
       </div>
 
       {/* Discount */}
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <div>
           <label className="label">Discount (₹)</label>
           <input type="number" min="0" className="input" value={value.discountAmount || ''}
@@ -124,7 +124,7 @@ export function BillingForm({ patientName, doctorName, defaultFee = 500, onChang
       {/* Payment method */}
       <div>
         <label className="label">Payment method</label>
-        <div className="grid grid-cols-4 gap-2">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
           {METHOD_CONFIG.map(({ method, label, Icon }) => {
             const active = value.paymentMethod === method;
             return (

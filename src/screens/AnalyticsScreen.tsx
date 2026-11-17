@@ -510,7 +510,7 @@ export function AnalyticsScreen() {
       )}
 
       {/* Top 4 KPI Metrics */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
         <Metric label="Total patients" value={String(stats.totalPatients)} sub="Seen this period" />
         <Metric label="Revenue (paid)" value={formatRs(stats.paidRevenue)} sub={`${rangeBills.filter(isBillPaid).length} paid bills`} />
         <Metric label="Avg bill value" value={formatRs(stats.avgBill)} sub="Per generated bill" />
@@ -966,8 +966,8 @@ export function AnalyticsScreen() {
                   No patients found matching the current age bracket and search filter.
                 </div>
               ) : (
-                <div className="max-h-72 overflow-y-auto divide-y divide-slate-100">
-                  <table className="w-full text-left border-collapse text-xs">
+                <div className="max-h-72 overflow-y-auto overflow-x-auto divide-y divide-slate-100">
+                  <table className="w-full min-w-[500px] text-left border-collapse text-xs">
                     <thead className="bg-slate-50 sticky top-0 z-10 text-[11px] font-bold text-ink-muted uppercase tracking-wider">
                       <tr>
                         <th className="py-2.5 px-3">Patient</th>

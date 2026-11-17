@@ -495,6 +495,7 @@ export interface SubscriptionPlan {
   description: string;
   popular?: boolean;
   coming_soon?: boolean;
+  is_custom_quote?: boolean;
   is_active: boolean;
   limits: PlanLimits;
   features: PlanFeatures;

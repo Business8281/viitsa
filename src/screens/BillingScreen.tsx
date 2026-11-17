@@ -222,7 +222,7 @@ export function BillingScreen() {
       </div>
 
       {/* Live Calendar Filter Bar */}
-      <div className="bg-surface p-3 rounded-2xl border border-divider/60 shadow-xs flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+      <div className="bg-surface p-3 rounded-2xl border border-divider/60 shadow-xs flex flex-col md:flex-row md:items-center md:justify-between gap-3 min-w-0 max-w-full">
         <DateRangeFilter
           preset={datePreset}
           onPresetChange={setDatePreset}
@@ -231,8 +231,9 @@ export function BillingScreen() {
           customEnd={customEnd}
           onCustomEndChange={setCustomEnd}
           label="Filter Period"
+          className="min-w-0 max-w-full"
         />
-        <span className="text-xs font-medium text-ink-muted">
+        <span className="text-xs font-medium text-ink-muted shrink-0">
           Showing <span className="font-bold text-ink">{filtered.length}</span> record{filtered.length !== 1 ? 's' : ''} ({datePreset})
         </span>
       </div>
@@ -262,7 +263,7 @@ export function BillingScreen() {
 
       <div className="card">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
-          <div className="flex flex-wrap gap-1 bg-black/5 p-1 rounded-lg w-max">
+          <div className="flex flex-wrap gap-1 bg-black/5 p-1 rounded-lg max-w-full">
             {(['all', 'paid', 'pending'] as StatusFilterKey[]).map(f => (
               <button
                 key={f}
@@ -279,45 +280,46 @@ export function BillingScreen() {
           </div>
         </div>
 
-        <div className="overflow-x-auto -mx-4 sm:mx-0">
-          <table className="w-full text-left border-collapse min-w-[600px]">
-            <thead>
-              <tr className="border-b border-black/5 text-xs text-ink-subtle uppercase tracking-wider">
-                <th className="p-3 font-medium">Patient</th>
-                <th className="p-3 font-medium">Date</th>
-                <th className="p-3 font-medium">Amount</th>
-                <th className="p-3 font-medium">Method</th>
-                <th className="p-3 font-medium">Status</th>
-                <th className="p-3 font-medium">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-black/5">
-              {filtered.length === 0 ? (
-                <tr>
-                  <td colSpan={6} className="p-8 text-center text-ink-muted text-sm">
-                    No bills found.
-                  </td>
+        {filtered.length === 0 ? (
+          <div className="p-8 text-center text-ink-muted text-sm">
+            No bills found.
+          </div>
+        ) : (
+          <div className="overflow-x-auto no-scrollbar w-full max-w-full">
+            <table className="w-full text-left border-collapse">
+              <thead>
+                <tr className="border-b border-black/5 text-xs text-ink-subtle uppercase tracking-wider">
+                  <th className="p-3 font-medium">Patient</th>
+                  <th className="p-3 font-medium hidden sm:table-cell">Date</th>
+                  <th className="p-3 font-medium">Amount</th>
+                  <th className="p-3 font-medium hidden md:table-cell">Method</th>
+                  <th className="p-3 font-medium">Status</th>
+                  <th className="p-3 font-medium text-right sm:text-left">Actions</th>
                 </tr>
-              ) : (
-                filtered.map(b => {
+              </thead>
+              <tbody className="divide-y divide-black/5">
+                {filtered.map(b => {
                   const patient = patients.find(p => p.patient_id === b.patient_id);
                   const inv = invoicesMap[b.appointment_id ?? b.bill_id!] || invoicesMap[b.created_at];
                   return (
                     <tr key={b.bill_id} className="hover:bg-black/[0.02] transition">
                       <td className="p-3">
                         <p className="text-sm font-medium text-ink">{patient?.name ?? (b as any).patient?.name ?? (b as any).patient_name ?? 'Unknown'}</p>
+                        <p className="text-xs text-ink-muted sm:hidden mt-0.5">{formatDate(b.created_at || (b as any).date)}</p>
                       </td>
-                      <td className="p-3 text-sm text-ink-muted">{formatDate(b.created_at || (b as any).date)}</td>
-                      <td className="p-3 text-sm font-semibold text-ink">{formatRs(getBillAmount(b))}</td>
-                      <td className="p-3 text-sm text-ink-muted capitalize flex items-center gap-1.5">
-                        <DollarSign size={14} className="text-ink-subtle" />
-                        {b.payment_method || 'cash'}
+                      <td className="p-3 text-sm text-ink-muted hidden sm:table-cell">{formatDate(b.created_at || (b as any).date)}</td>
+                      <td className="p-3 text-sm font-semibold text-ink whitespace-nowrap">{formatRs(getBillAmount(b))}</td>
+                      <td className="p-3 text-sm text-ink-muted capitalize hidden md:table-cell">
+                        <div className="flex items-center gap-1.5">
+                          <DollarSign size={14} className="text-ink-subtle shrink-0" />
+                          <span>{b.payment_method || 'cash'}</span>
+                        </div>
                       </td>
                       <td className="p-3">
-                        <span className={`badge ${statusBadgeClass(b.payment_status)} text-[10px] capitalize`}>{b.payment_status}</span>
+                        <span className={`badge ${statusBadgeClass(b.payment_status)} text-[10px] capitalize whitespace-nowrap`}>{b.payment_status}</span>
                       </td>
-                      <td className="p-3">
-                        <div className="flex items-center gap-2">
+                      <td className="p-3 text-right sm:text-left">
+                        <div className="flex items-center justify-end sm:justify-start gap-1.5">
                           {b.payment_status !== 'paid' && (
                             <>
                               <button onClick={() => markPaid(b)} className="btn-ghost text-xs text-primary py-1 px-2" title="Mark as Paid"><CheckCircle size={14} /></button>
@@ -333,11 +335,11 @@ export function BillingScreen() {
                       </td>
                     </tr>
                   );
-                })
-              )}
-            </tbody>
-          </table>
-        </div>
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
 
       <CreateBillModal open={open} onClose={() => setOpen(false)} onSaved={() => { setOpen(false); void refresh(); }} clinicId={clinic?.clinic_id ?? ''} patients={patients} inventory={inventory} />
@@ -464,7 +466,7 @@ function CreateBillModal({ open, onClose, onSaved, clinicId, patients, inventory
           </div>
         </div>
 
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div>
             <label className="label">Payment method</label>
             <select className="select" value={method} onChange={e => setMethod(e.target.value as any)}>

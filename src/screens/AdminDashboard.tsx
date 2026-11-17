@@ -316,7 +316,7 @@ function MetricCard({ icon, label, value, sub, tone }: {
   return (
     <div className="card flex items-center gap-4 hover:shadow-card-hover transition-shadow">
       <div className={`inline-flex h-11 w-11 items-center justify-center rounded-xl ${t.bg} ${t.text} shrink-0`}>{icon}</div>
-      <div className="min-w-0">
+      <div className="min-w-0 flex-1">
         <p className="text-xs text-ink-muted font-medium uppercase tracking-wide">{label}</p>
         <p className="text-2xl font-bold text-ink leading-tight">{value}</p>
         {sub && <p className="text-xs text-ink-muted truncate">{sub}</p>}
@@ -1447,14 +1447,14 @@ export function AdminDashboard() {
                   </div>
 
                   {/* Stat cards */}
-                  <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
                     <MetricCard icon={<Building2 size={20} />} label="Clinics"       value={String(totalClinics)}       sub={`${setupClinics} active · ${pendingClinics} pending`}   tone="primary" />
                     <MetricCard icon={<Users size={20} />}     label="Patients"      value={String(totalPatients)}      sub="Across all clinics"                                     tone="accent" />
                     <MetricCard icon={<Calendar size={20} />}  label="Appointments"  value={String(totalAppointments)}  sub={`${totalConsultations} consultations`}                  tone="warning" />
                     <MetricCard icon={<Wallet size={20} />}    label="Revenue Paid"  value={formatRupees(totalRevenue)} sub={`${formatRupees(pendingRevenue)} pending`}              tone="danger" />
                   </div>
 
-                  <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
                     <MetricCard icon={<UserCheck size={20} />}    label="System Users"  value={String(totalUsers)}     sub={`${companyAdmins} company admin · ${clinicAdmins} clinic admin`}  tone="primary" />
                     <MetricCard icon={<Stethoscope size={20} />}  label="Doctors"       value={String(doctorUsers)}    sub={`${staffUsers} staff`}                           tone="accent" />
                     <MetricCard icon={<Activity size={20} />}     label="Consultations" value={String(totalConsultations)} sub="All recorded"                               tone="warning" />
@@ -1779,7 +1779,7 @@ export function AdminDashboard() {
                   </div>
 
                   {/* Filters & Search Toolbar with Live Calendar Filter */}
-                  <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 bg-surface p-3 rounded-2xl border border-divider/60">
+                  <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 bg-surface p-3 rounded-2xl border border-divider/60 min-w-0 max-w-full">
                     <DateRangeFilter
                       preset={adminApptDatePreset}
                       onPresetChange={setAdminApptDatePreset}
@@ -1945,7 +1945,7 @@ export function AdminDashboard() {
                   </div>
 
                   {/* Filter Toolbar */}
-                  <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 bg-surface p-3 rounded-2xl border border-divider/60">
+                  <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 bg-surface p-3 rounded-2xl border border-divider/60 min-w-0 max-w-full">
                     <DateRangeFilter
                       preset={adminBillingDatePreset}
                       onPresetChange={setAdminBillingDatePreset}
@@ -2244,7 +2244,7 @@ export function AdminDashboard() {
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <p className="text-xs font-semibold text-ink-muted uppercase tracking-wide mb-1">Owner</p>
                   <p className="text-sm text-ink">{c.owner_name || '—'}</p>
@@ -2341,7 +2341,7 @@ export function AdminDashboard() {
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <p className="text-xs font-semibold text-ink-muted uppercase tracking-wide mb-1">Status</p>
                   <p className="text-sm text-ink">

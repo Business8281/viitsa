@@ -604,24 +604,24 @@ export function FamilyVault({ patientId: propsPatientId, onTab }: Props) {
 
           {/* Quick Metrics Cards */}
           <div className="grid grid-cols-3 gap-2 sm:gap-3">
-            <div className="bg-white/10 backdrop-blur-md rounded-2xl p-2.5 sm:p-3 border border-white/10">
-              <p className="text-[11px] sm:text-xs text-emerald-100/70 font-medium">Family Members</p>
-              <p className="text-lg sm:text-xl font-extrabold text-white mt-0.5">{uniqueMembers.length}</p>
+            <div className="bg-white/10 backdrop-blur-md rounded-2xl p-2.5 sm:p-3 border border-white/10 min-w-0">
+              <p className="text-[10px] sm:text-xs text-emerald-100/70 font-medium truncate">Family Members</p>
+              <p className="text-base sm:text-xl font-extrabold text-white mt-0.5 truncate">{uniqueMembers.length}</p>
             </div>
-            <div className="bg-white/10 backdrop-blur-md rounded-2xl p-2.5 sm:p-3 border border-white/10">
-              <p className="text-[11px] sm:text-xs text-emerald-100/70 font-medium">Diagnostic Reports</p>
-              <p className="text-lg sm:text-xl font-extrabold text-white mt-0.5">{totalReportsCount}</p>
+            <div className="bg-white/10 backdrop-blur-md rounded-2xl p-2.5 sm:p-3 border border-white/10 min-w-0">
+              <p className="text-[10px] sm:text-xs text-emerald-100/70 font-medium truncate">Diagnostic Reports</p>
+              <p className="text-base sm:text-xl font-extrabold text-white mt-0.5 truncate">{totalReportsCount}</p>
             </div>
-            <div className="bg-white/10 backdrop-blur-md rounded-2xl p-2.5 sm:p-3 border border-white/10">
-              <p className="text-[11px] sm:text-xs text-emerald-100/70 font-medium">Emergency Ready</p>
-              <p className="text-lg sm:text-xl font-extrabold text-white mt-0.5">{totalEmergencyContactsCount}</p>
+            <div className="bg-white/10 backdrop-blur-md rounded-2xl p-2.5 sm:p-3 border border-white/10 min-w-0">
+              <p className="text-[10px] sm:text-xs text-emerald-100/70 font-medium truncate">Emergency Ready</p>
+              <p className="text-base sm:text-xl font-extrabold text-white mt-0.5 truncate">{totalEmergencyContactsCount}</p>
             </div>
           </div>
         </div>
       </div>
 
       {/* Main Content Area */}
-      <div className="max-w-4xl mx-auto px-4 sm:px-6 pt-5 pb-8 space-y-4">
+      <div className="max-w-4xl mx-auto px-4 sm:px-6 pt-5 pb-28 space-y-4">
         {/* Search Bar (visible if members exist) */}
         {uniqueMembers.length > 0 && (
           <div className="bg-white rounded-2xl shadow-sm border border-slate-200/80 p-2 sm:p-2.5 flex items-center gap-2.5 transition focus-within:border-primary focus-within:ring-2 focus-within:ring-primary/10">

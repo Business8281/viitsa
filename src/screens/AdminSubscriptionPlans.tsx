@@ -45,30 +45,48 @@ export default function AdminSubscriptionPlans() {
                 Most Popular
               </div>
             )}
-            {plan.coming_soon && (
+            {(plan.is_custom_quote || plan.code === 'hospital') ? (
+              <div className="absolute top-0 right-0 bg-teal-700 text-white text-[10px] font-bold uppercase tracking-wider px-3 py-1 rounded-bl-xl shadow-xs">
+                Custom Quote
+              </div>
+            ) : plan.coming_soon ? (
               <div className="absolute top-0 right-0 bg-slate-500 text-white text-[10px] font-bold uppercase tracking-wider px-3 py-1 rounded-bl-xl">
                 Coming Soon
               </div>
-            )}
+            ) : null}
             
             <div>
               <div className="mb-4">
                 <h3 className="text-lg font-bold text-ink flex items-center gap-2">
-                  <Crown size={18} className={plan.popular ? 'text-accent' : 'text-primary'} />
+                  <Crown size={18} className={plan.popular ? 'text-accent' : (plan.is_custom_quote || plan.code === 'hospital') ? 'text-teal-700' : 'text-primary'} />
                   {plan.name}
                 </h3>
                 <p className="text-ink-subtle text-xs mt-1 leading-relaxed">{plan.description}</p>
               </div>
               
               <div className="mb-6 pb-6 border-b border-black/5">
-                <div className="flex items-baseline gap-1 mb-1">
-                  <span className="text-2xl font-bold text-ink">₹{plan.monthly_price_inr.toLocaleString('en-IN')}</span>
-                  <span className="text-ink-subtle text-xs mb-1">/ month</span>
-                </div>
-                <div className="flex items-center gap-1.5 text-primary font-medium text-xs mt-1 bg-primary/5 px-2 py-1 rounded-lg inline-flex">
-                  <CalendarClock size={12} />
-                  Annual: ₹{plan.annual_price_inr.toLocaleString('en-IN')}/yr
-                </div>
+                {(plan.is_custom_quote || plan.code === 'hospital') ? (
+                  <div>
+                    <div className="flex items-baseline gap-1 mb-1">
+                      <span className="text-2xl font-bold text-ink">Custom Quote</span>
+                    </div>
+                    <div className="flex items-center gap-1.5 text-teal-800 font-medium text-xs mt-1 bg-teal-50 px-2 py-1 rounded-lg inline-flex border border-teal-100">
+                      <CalendarClock size={12} className="text-teal-600" />
+                      Tailored SLA & Deployment
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    <div className="flex items-baseline gap-1 mb-1">
+                      <span className="text-2xl font-bold text-ink">₹{plan.monthly_price_inr.toLocaleString('en-IN')}</span>
+                      <span className="text-ink-subtle text-xs mb-1">/ month</span>
+                    </div>
+                    <div className="flex items-center gap-1.5 text-primary font-medium text-xs mt-1 bg-primary/5 px-2 py-1 rounded-lg inline-flex">
+                      <CalendarClock size={12} />
+                      Annual: ₹{plan.annual_price_inr.toLocaleString('en-IN')}/yr
+                    </div>
+                  </>
+                )}
               </div>
               
               <div className="space-y-2 mb-6 text-xs">

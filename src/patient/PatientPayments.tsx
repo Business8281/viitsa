@@ -395,18 +395,18 @@ export function PatientPayments({ patientId, onTab }: Props) {
         </div>
 
         {/* Live Metrics Grid */}
-        <div className="grid grid-cols-3 gap-2.5 mt-2">
-          <div className="bg-white/10 backdrop-blur-md rounded-xl p-3 border border-white/10">
-            <p className="text-[10px] text-white/70 font-semibold uppercase tracking-wider">Total Bills</p>
-            <p className="text-lg font-black text-white mt-0.5">{summary.totalCount}</p>
+        <div className="grid grid-cols-3 gap-2 sm:gap-2.5 mt-2">
+          <div className="bg-white/10 backdrop-blur-md rounded-xl p-2.5 sm:p-3 border border-white/10 min-w-0">
+            <p className="text-[10px] text-white/70 font-semibold uppercase tracking-wider truncate">Total Bills</p>
+            <p className="text-sm sm:text-lg font-black text-white mt-0.5 truncate">{summary.totalCount}</p>
           </div>
-          <div className="bg-emerald-500/20 backdrop-blur-md rounded-xl p-3 border border-emerald-400/20">
-            <p className="text-[10px] text-emerald-200 font-semibold uppercase tracking-wider">Total Paid</p>
-            <p className="text-lg font-black text-emerald-100 mt-0.5">{formatRs(summary.totalPaid)}</p>
+          <div className="bg-emerald-500/20 backdrop-blur-md rounded-xl p-2.5 sm:p-3 border border-emerald-400/20 min-w-0">
+            <p className="text-[10px] text-emerald-200 font-semibold uppercase tracking-wider truncate">Total Paid</p>
+            <p className="text-sm sm:text-lg font-black text-emerald-100 mt-0.5 truncate">{formatRs(summary.totalPaid)}</p>
           </div>
-          <div className={`backdrop-blur-md rounded-xl p-3 border ${summary.totalPending > 0 ? 'bg-amber-500/25 border-amber-300/30' : 'bg-white/10 border-white/10'}`}>
-            <p className="text-[10px] text-amber-200 font-semibold uppercase tracking-wider">Pending Due</p>
-            <p className={`text-lg font-black mt-0.5 ${summary.totalPending > 0 ? 'text-amber-100' : 'text-white/60'}`}>
+          <div className={`backdrop-blur-md rounded-xl p-2.5 sm:p-3 border min-w-0 ${summary.totalPending > 0 ? 'bg-amber-500/25 border-amber-300/30' : 'bg-white/10 border-white/10'}`}>
+            <p className="text-[10px] text-amber-200 font-semibold uppercase tracking-wider truncate">Pending Due</p>
+            <p className={`text-sm sm:text-lg font-black mt-0.5 truncate ${summary.totalPending > 0 ? 'text-amber-100' : 'text-white/60'}`}>
               {formatRs(summary.totalPending)}
             </p>
           </div>

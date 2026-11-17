@@ -5,9 +5,12 @@ import {
   sendAppointmentRescheduled,
 } from "./whatsappService";
 
-function formatDisplayDate(dateStr: string | Date | undefined): string {
+function formatDisplayDate(dateStr: any): string {
   if (!dateStr) return new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
-  const d = new Date(dateStr);
+  let dateVal = dateStr;
+  if (typeof dateVal?.toDate === 'function') dateVal = dateVal.toDate();
+  else if (typeof dateVal?.seconds === 'number') dateVal = new Date(dateVal.seconds * 1000);
+  const d = new Date(dateVal);
   if (isNaN(d.getTime())) return String(dateStr);
   return d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
 }
@@ -122,7 +125,7 @@ export const onAppointmentUpdated = onDocumentUpdated(
           dispatched_at_ms: Date.now(),
           created_at: admin.firestore.FieldValue.serverTimestamp(),
         });
-      } catch (lockErr) {
+      } catch (_lockErr) {
         console.log(`[onAppointmentUpdated] Suppressed duplicate cancellation WhatsApp for appointment ${appointmentId}`);
         return;
       }
@@ -163,7 +166,7 @@ export const onAppointmentUpdated = onDocumentUpdated(
           dispatched_at_ms: Date.now(),
           created_at: admin.firestore.FieldValue.serverTimestamp(),
         });
-      } catch (lockErr) {
+      } catch (_lockErr) {
         console.log(`[onAppointmentUpdated] Suppressed duplicate reschedule WhatsApp for appointment ${appointmentId}`);
         return;
       }

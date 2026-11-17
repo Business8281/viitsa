@@ -1,6 +1,7 @@
 import { onCall, HttpsError } from "firebase-functions/v2/https";
 import * as nodemailer from "nodemailer";
 import * as admin from "firebase-admin";
+import * as crypto from "crypto";
 import * as dotenv from "dotenv";
 
 dotenv.config();
@@ -96,7 +97,9 @@ export const sendVerificationEmail = onCall({
       if (parsed.origin && !parsed.origin.includes('localhost') && !parsed.origin.includes('127.0.0.1')) {
         baseOrigin = parsed.origin;
       }
-    } catch {}
+    } catch (_err) {
+      // Continue with default baseOrigin if continueUrl is not a valid URL
+    }
   }
   const defaultUrl = isClinic ? `${baseOrigin}/clinic/login?verified=true` : `${baseOrigin}/login?verified=true`;
 
@@ -274,7 +277,9 @@ export const sendPasswordResetEmail = onCall({
       if (parsed.origin && !parsed.origin.includes('localhost') && !parsed.origin.includes('127.0.0.1')) {
         baseOrigin = parsed.origin;
       }
-    } catch {}
+    } catch (_err) {
+      // Continue with default baseOrigin if continueUrl is not a valid URL
+    }
   }
 
   const defaultReturn = isAdmin ? "/admin/login" : (isClinic ? "/clinic/login" : "/login");
@@ -478,7 +483,7 @@ export const sendEmailAuthOtp = onCall(
     }
 
     // Generate cryptographically sound 6-digit OTP
-    const otpCode = String(Math.floor(100000 + Math.random() * 900000));
+    const otpCode = String(crypto.randomInt(100000, 1000000));
 
     if (!admin.apps.length) admin.initializeApp();
     const db = admin.firestore();
@@ -621,7 +626,7 @@ export const verifyEmailAuthOtp = onCall(
       throw new HttpsError("deadline-exceeded", "Verification code has expired. Please request a new code.");
     }
 
-    if (otpData.code !== cleanOtp && cleanOtp !== "123456") {
+    if (otpData.code !== cleanOtp) {
       throw new HttpsError("permission-denied", "Incorrect verification code. Please check your email and try again.");
     }
 
@@ -635,7 +640,9 @@ export const verifyEmailAuthOtp = onCall(
       if (authUser) {
         await admin.auth().updateUser(authUser.uid, { emailVerified: true });
       }
-    } catch {}
+    } catch (_authErr) {
+      // Ignore if user not found in auth yet
+    }
 
     return { success: true, message: "Email verified successfully." };
   }
@@ -651,19 +658,50 @@ export const markEmailVerified = onCall(
     cors: true,
   },
   async (request) => {
+    if (!request.auth) {
+      throw new HttpsError("unauthenticated", "Authentication required to mark email as verified.");
+    }
     const { email, uid } = request.data || {};
     if (!admin.apps.length) admin.initializeApp();
     const cleanEmail = email ? String(email).trim().toLowerCase() : undefined;
+    const callerUid = request.auth.uid;
+
+    // Verify administrator authority directly from trusted Firestore user record (not client-selected token claims)
+    let isAdmin = false;
+    const callerDoc = await admin.firestore().collection("users").doc(callerUid).get();
+    if (callerDoc.exists) {
+      const callerRole = callerDoc.data()?.role;
+      isAdmin = callerRole === 'admin' || callerRole === 'company_admin';
+    }
+
+    // Must be self or admin
+    if (!isAdmin && uid && uid !== callerUid) {
+      throw new HttpsError("permission-denied", "Unauthorized to update email verification for another user.");
+    }
+
+    const targetUid = uid || callerUid;
+
+    // Retrieve target user from Firebase Auth to bind verification to their actual registered email
+    const targetUser = await admin.auth().getUser(targetUid);
+    const targetEmail = targetUser.email ? targetUser.email.trim().toLowerCase() : undefined;
+    if (!targetEmail) {
+      throw new HttpsError("failed-precondition", "Target user has no email address associated with their account.");
+    }
+
+    // Non-admin updates require verified evidence of OTP ownership bound to the target account's Auth email
+    if (!isAdmin) {
+      if (cleanEmail && cleanEmail !== targetEmail) {
+        throw new HttpsError("permission-denied", "Provided email does not match account registered email.");
+      }
+
+      const otpDoc = await admin.firestore().collection("email_otps").doc(targetEmail).get();
+      if (!otpDoc.exists || !otpDoc.data()?.verified) {
+        throw new HttpsError("permission-denied", "Email OTP has not been verified for this email address.");
+      }
+    }
 
     try {
-      if (uid) {
-        await admin.auth().updateUser(uid, { emailVerified: true });
-      } else if (cleanEmail) {
-        const user = await admin.auth().getUserByEmail(cleanEmail);
-        if (user) {
-          await admin.auth().updateUser(user.uid, { emailVerified: true });
-        }
-      }
+      await admin.auth().updateUser(targetUid, { emailVerified: true });
       return { success: true };
     } catch (err: any) {
       console.warn("[markEmailVerified] warning:", err);

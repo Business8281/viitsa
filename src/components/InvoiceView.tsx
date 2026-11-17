@@ -281,7 +281,7 @@ export function InvoiceView({ invoice, clinic, patient, doctor, onClose }: Props
   const fmt = (num: number) => num.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
   return (
-    <div className="flex flex-col items-center overflow-auto w-full">
+    <div className="flex flex-col items-start sm:items-center overflow-x-auto w-full max-w-full px-1 sm:px-2 py-4">
       <div 
         id="print-area" 
         className="invoice-page bg-white text-ink font-sans relative"
@@ -543,7 +543,7 @@ export function InvoiceView({ invoice, clinic, patient, doctor, onClose }: Props
       </div>
 
       {/* Actions */}
-      <div id="invoice-actions" className="flex items-center justify-center gap-3 flex-wrap print:hidden max-w-[210mm] w-full mx-auto mt-4 pb-10">
+      <div id="invoice-actions" className="flex items-center justify-center gap-2 sm:gap-3 flex-wrap print:hidden max-w-[210mm] w-full mx-auto mt-4 pb-10 px-2">
         <button 
           onClick={shareViaWhatsAppText} 
           disabled={isUploading !== null} 

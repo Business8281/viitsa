@@ -515,7 +515,7 @@ export function PatientBooking({ onTab, clinic: initialClinic, patientId, aiSumm
       {step === 'date' && (
         <div className="py-5 space-y-4 px-4">
           <h2 className="text-lg font-bold text-gray-900">Choose date and time</h2>
-          <div className="grid grid-cols-2 gap-4 pb-2">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4 pb-2">
             <div>
               <label className="block text-sm font-semibold text-gray-700 mb-2">Date *</label>
               <input

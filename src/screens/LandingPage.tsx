@@ -134,9 +134,9 @@ export function LandingPage() {
 
       {/* ── NAVIGATION ── */}
       <nav className={`fixed top-0 left-0 right-0 z-50 transition-all duration-300 ${scrolled ? 'bg-white/95 backdrop-blur-xl shadow-sm border-b border-slate-100' : 'bg-transparent'}`}>
-        <div className="w-[90%] max-w-[1600px] mx-auto px-2 sm:px-4">
-          <div className="flex items-center justify-between h-16 lg:h-20">
-            <ViitsaLogo size="md" light={!scrolled} />
+        <div className="w-full max-w-[1600px] mx-auto px-3.5 sm:px-6 lg:px-8">
+          <div className="flex items-center justify-between h-16 lg:h-20 gap-2">
+            <ViitsaLogo size="md" light={!scrolled} className="shrink-0" />
 
             {/* Desktop Nav */}
             <div className="hidden xl:flex items-center gap-1">
@@ -159,24 +159,21 @@ export function LandingPage() {
               ))}
             </div>
 
-            <div className="flex items-center gap-2 sm:gap-3">
+            <div className="flex items-center gap-2 sm:gap-3 shrink-0">
               <div className="hidden lg:flex items-center gap-1.5">
-                <button onClick={() => scrollTo('portals')} className={`px-3 py-2 text-sm font-medium transition-colors rounded-lg ${scrolled ? 'text-slate-600 hover:text-emerald-600 hover:bg-slate-50' : 'text-white/80 hover:text-white hover:bg-white/10'}`}>
+                <button onClick={() => goTo('/clinic/login')} className={`px-3 py-2 text-sm font-medium transition-colors rounded-lg ${scrolled ? 'text-slate-600 hover:text-emerald-600 hover:bg-slate-50' : 'text-white/80 hover:text-white hover:bg-white/10'}`}>
                   For Clinics
                 </button>
-                <button onClick={() => goTo('/patient')} className={`px-3 py-2 text-sm font-medium transition-colors rounded-lg ${scrolled ? 'text-slate-600 hover:text-emerald-600 hover:bg-slate-50' : 'text-white/80 hover:text-white hover:bg-white/10'}`}>
-                  For Patients
-                </button>
               </div>
-              <button onClick={() => goTo('/login')} className={`px-3.5 py-2 text-sm font-medium rounded-lg transition-all ${scrolled ? 'text-slate-700 hover:text-emerald-600 hover:bg-slate-50 border border-slate-200' : 'text-white/90 hover:text-white bg-white/10 hover:bg-white/20 border border-white/20 backdrop-blur-sm'}`}>
+              <button onClick={() => goTo('/login')} className={`hidden sm:block px-3.5 py-2 text-sm font-medium rounded-lg transition-all ${scrolled ? 'text-slate-700 hover:text-emerald-600 hover:bg-slate-50 border border-slate-200' : 'text-white/90 hover:text-white bg-white/10 hover:bg-white/20 border border-white/20 backdrop-blur-sm'}`}>
                 Login
               </button>
-              <button onClick={() => goTo('/register')} className="flex items-center gap-1.5 px-4 py-2.5 bg-gradient-to-r from-emerald-500 to-teal-500 text-white text-sm font-semibold rounded-xl shadow-lg shadow-emerald-500/25 hover:shadow-xl hover:-translate-y-0.5 transition-all shrink-0">
+              <button onClick={() => goTo('/register')} className="flex items-center gap-1.5 px-3 py-2 sm:px-4 sm:py-2.5 bg-gradient-to-r from-emerald-500 to-teal-500 text-white text-xs sm:text-sm font-semibold rounded-xl shadow-lg shadow-emerald-500/25 hover:shadow-xl hover:-translate-y-0.5 transition-all shrink-0">
                 Register
                 <ArrowRight size={14} />
               </button>
               {/* Mobile toggle */}
-              <button onClick={() => setMobileOpen(v => !v)} className={`xl:hidden p-2 rounded-lg transition-colors ${scrolled ? 'text-slate-700 hover:bg-slate-100' : 'text-white hover:bg-white/10'}`} aria-label="Toggle navigation">
+              <button onClick={() => setMobileOpen(v => !v)} className={`xl:hidden p-2 rounded-lg transition-colors shrink-0 ${scrolled ? 'text-slate-700 hover:bg-slate-100' : 'text-white hover:bg-white/10'}`} aria-label="Toggle navigation">
                 {mobileOpen ? <X size={22} /> : <Menu size={22} />}
               </button>
             </div>
@@ -197,9 +194,8 @@ export function LandingPage() {
                 <button onClick={() => goTo('/login')} className="px-4 py-3 text-sm font-semibold text-slate-700 border border-slate-200 rounded-xl hover:bg-slate-50 text-center">Login</button>
                 <button onClick={() => goTo('/register')} className="px-4 py-3 text-sm font-semibold text-white bg-gradient-to-r from-emerald-500 to-teal-500 rounded-xl text-center">Register</button>
               </div>
-              <div className="grid grid-cols-2 gap-2">
-                <button onClick={() => { scrollTo('portals'); }} className="px-4 py-3 text-sm font-semibold text-emerald-700 bg-emerald-50 rounded-xl text-center">For Clinics</button>
-                <button onClick={() => goTo('/patient')} className="px-4 py-3 text-sm font-semibold text-teal-700 bg-teal-50 rounded-xl text-center">For Patients</button>
+              <div>
+                <button onClick={() => goTo('/clinic/login')} className="w-full px-4 py-3 text-sm font-semibold text-emerald-700 bg-emerald-50 rounded-xl text-center">For Clinics</button>
               </div>
               <button onClick={() => goTo('/')} className="w-full px-4 py-3 text-sm font-semibold text-slate-500 rounded-xl hover:bg-slate-50 flex items-center justify-center gap-1.5">
                 <Home size={14} /> Home
@@ -218,7 +214,7 @@ export function LandingPage() {
           <div className="absolute inset-0 opacity-5" style={{ backgroundImage: 'radial-gradient(circle at 1px 1px, white 1px, transparent 0)', backgroundSize: '40px 40px' }} />
         </div>
 
-        <div className="relative w-[90%] max-w-[1600px] mx-auto px-2 sm:px-4 pt-28 sm:pt-32 pb-20 w-full">
+        <div className="relative w-[90%] max-w-[1600px] mx-auto px-2 sm:px-4 pt-28 sm:pt-32 pb-20">
           <div className="grid lg:grid-cols-2 gap-12 lg:gap-14 xl:gap-16 items-center">
             {/* Left: Content */}
             <div className="w-full">
@@ -236,13 +232,9 @@ export function LandingPage() {
                 VIITSA connects Patients, Clinics, Doctors, Hospitals, Diagnostic Centers & Pharmacies with AI-powered healthcare automation — making healthcare intelligent, connected, accessible and simple.
               </p>
               <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-4 mb-10">
-                <button onClick={() => goTo('/register')}
-                  className="inline-flex items-center justify-center gap-2 px-8 py-4 bg-gradient-to-r from-emerald-500 to-teal-500 text-white font-semibold rounded-xl shadow-lg shadow-emerald-500/30 hover:shadow-xl hover:-translate-y-0.5 transition-all text-center">
-                  <Building2 size={18} /> For Clinics
-                </button>
                 <button onClick={() => goTo('/patient')}
-                  className="inline-flex items-center justify-center gap-2 px-8 py-4 bg-white/10 backdrop-blur-md text-white font-semibold rounded-xl border border-white/20 hover:bg-white/20 transition-all text-center">
-                  <Calendar size={18} /> Book a Doctor
+                  className="inline-flex items-center justify-center gap-2 px-8 py-4 bg-gradient-to-r from-emerald-500 to-teal-500 text-white font-semibold rounded-xl shadow-lg shadow-emerald-500/30 hover:shadow-xl hover:-translate-y-0.5 transition-all text-center">
+                  <Calendar size={18} /> Book an Appointment
                 </button>
               </div>
               <div className="flex flex-wrap items-center gap-6 text-sm text-white/60">
@@ -684,7 +676,7 @@ export function LandingPage() {
               </button>
             </div>
             <p className="text-xs text-slate-500 mt-2 font-medium">
-              All plans include a <strong className="text-emerald-700">30-Day Free Trial</strong> with automated UPI / Card mandate renewal. Cancel anytime. Prices in INR. 18% GST applicable.
+              All clinic plans include a <strong className="text-emerald-700">30-Day Free Trial</strong> with automated UPI / Card mandate renewal. Cancel anytime. Prices in INR. 18% GST applicable. Hospital & enterprise deployments are provided via custom quote.
             </p>
           </FadeIn>
 
@@ -770,22 +762,22 @@ export function LandingPage() {
               {
                 id: 'hospital',
                 name: 'Hospital',
-                price: billingCycle === 'annual' ? '₹2,49,990' : '₹24,999',
-                period: billingCycle === 'annual' ? 'year' : 'month',
-                desc: 'Small hospitals, nursing homes, and surgical care facilities.',
-                trialBadge: 'Tailored Pilot',
-                autoDebitNote: 'Dedicated On-Premise / Cloud SLA',
+                price: 'Custom Quote',
+                period: null,
+                desc: 'Hospitals, surgical care centers, and multi-department facilities.',
+                trialBadge: 'Custom Quote',
+                autoDebitNote: 'Tailored Enterprise SLA & Deployment',
                 features: [
-                  'Up to 25 Doctors included',
-                  'Up to 60 Staff seats',
-                  '3 Locations included',
-                  '5,000 AI Intakes / month',
-                  '12,000 WhatsApp msgs / month',
-                  'Unlimited Document Storage',
+                  'Up to 25+ Doctors included',
+                  'Unlimited Staff seats',
+                  'Multi-Location / Campus support',
+                  'Custom AI Intakes & LLM Fine-tuning',
+                  'Dedicated WhatsApp Business API',
+                  'Unlimited Document & Scan Storage',
                   'Full IPD, Bed & OT Suite',
-                  '24/7 Dedicated Support Lead'
+                  '24/7 Dedicated Support Lead & SLA'
                 ],
-                cta: 'Contact Sales / Inquire',
+                cta: 'Request Custom Quote',
                 action: '/contact',
                 directLink: null,
                 directPrice: null,
@@ -832,13 +824,15 @@ export function LandingPage() {
                         >
                           {plan.price}
                         </span>
-                        <span
-                          className={`text-xs font-medium ${
-                            plan.highlight ? 'text-emerald-100' : 'text-slate-400'
-                          }`}
-                        >
-                          /{plan.period}
-                        </span>
+                        {plan.period && (
+                          <span
+                            className={`text-xs font-medium ${
+                              plan.highlight ? 'text-emerald-100' : 'text-slate-400'
+                            }`}
+                          >
+                            /{plan.period}
+                          </span>
+                        )}
                       </div>
 
                       <div className="mt-2 flex items-center gap-1.5 flex-wrap">
@@ -1020,11 +1014,8 @@ export function LandingPage() {
         <div className="w-[90%] max-w-[1600px] mx-auto px-2 sm:px-4">
           <div className="grid sm:grid-cols-2 lg:grid-cols-5 gap-8 mb-12">
             <div className="lg:col-span-2">
-              <div className="flex items-center gap-2.5 mb-4">
-                <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center">
-                  <Activity size={18} className="text-white" />
-                </div>
-                <span className="text-xl font-bold text-white">VIITSA</span>
+              <div className="mb-4">
+                <ViitsaLogo size="md" light onClick={() => scrollTo('home')} />
               </div>
               <p className="text-slate-400 text-sm mb-5 leading-relaxed max-w-xs">
                 The AI Operating System for Modern Clinics. Transforming healthcare delivery across India.

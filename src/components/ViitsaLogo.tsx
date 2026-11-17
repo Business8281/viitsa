@@ -6,10 +6,19 @@ interface ViitsaLogoProps {
   className?: string;
   showText?: boolean;
   showSlogan?: boolean;
+  hideSloganOnMobile?: boolean;
+  onClick?: () => void;
 }
 
-export function ViitsaLogo({ size = 'md', light = false, className = '', showText = true, showSlogan = true }: ViitsaLogoProps) {
+export function ViitsaLogo({ size = 'md', light = false, className = '', showText = true, showSlogan = true, hideSloganOnMobile = true, onClick }: ViitsaLogoProps) {
   const navigate = useNavigate();
+  const handleClick = () => {
+    if (onClick) {
+      onClick();
+    } else {
+      navigate('/');
+    }
+  };
   const sz = {
     sm: { box: 'w-8 h-8 rounded-lg', text: 'text-base', slogan: 'text-[8px]', gap: 'gap-2' },
     md: { box: 'w-10 h-10 rounded-xl', text: 'text-xl', slogan: 'text-[9px]', gap: 'gap-2.5' },
@@ -18,7 +27,7 @@ export function ViitsaLogo({ size = 'md', light = false, className = '', showTex
 
   return (
     <button
-      onClick={() => navigate('/')}
+      onClick={handleClick}
       className={`flex items-center ${sz.gap} group ${className}`}
       aria-label="VIITSA — Home"
     >
@@ -31,7 +40,7 @@ export function ViitsaLogo({ size = 'md', light = false, className = '', showTex
             VIITSA
           </span>
           {showSlogan && (
-            <span className={`${sz.slogan} font-medium uppercase tracking-wider whitespace-nowrap ${light ? 'text-white/50' : 'text-slate-400'}`}>
+            <span className={`${sz.slogan} font-medium uppercase tracking-wider whitespace-nowrap ${hideSloganOnMobile ? 'hidden sm:block' : ''} ${light ? 'text-white/50' : 'text-slate-400'}`}>
               Smarter Healthcare, For Everyone
             </span>
           )}

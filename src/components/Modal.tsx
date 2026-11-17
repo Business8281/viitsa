@@ -36,14 +36,14 @@ export function Modal({ open, onClose, title, subtitle, children, size = 'md', f
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 animate-fade-in print:absolute print:inset-0 print:p-0 print:bg-white print:z-[9999]">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 animate-fade-in print:absolute print:inset-0 print:p-0 print:bg-white print:z-[9999]">
       <div className="absolute inset-0 bg-ink/40 backdrop-blur-sm print:hidden" onClick={onClose} />
       <div
-        className={`relative w-full ${sizes[size]} bg-white rounded-2xl shadow-card-hover max-h-[90vh] flex flex-col animate-slide-up print:absolute print:inset-0 print:max-w-none print:max-h-none print:shadow-none print:rounded-none print:w-[100vw]`}
+        className={`relative w-full ${sizes[size]} bg-white rounded-2xl shadow-card-hover max-h-[92vh] sm:max-h-[90vh] flex flex-col animate-slide-up print:absolute print:inset-0 print:max-w-none print:max-h-none print:shadow-none print:rounded-none print:w-[100vw]`}
         role="dialog"
         aria-modal="true"
       >
-        <div className="flex items-start justify-between p-5 border-b border-black/5 print:hidden">
+        <div className="flex items-start justify-between p-4 sm:p-5 border-b border-black/5 print:hidden">
           <div>
             <h2 className="text-lg font-semibold text-ink">{title}</h2>
             {subtitle ? <p className="text-sm text-ink-muted mt-0.5">{subtitle}</p> : null}
@@ -57,7 +57,7 @@ export function Modal({ open, onClose, title, subtitle, children, size = 'md', f
             <X size={18} />
           </button>
         </div>
-        <div className="overflow-y-auto p-5 flex-1 print:overflow-visible print:p-0">{children}</div>
+        <div className="overflow-y-auto overflow-x-auto p-3.5 sm:p-5 flex-1 print:overflow-visible print:p-0">{children}</div>
         {footer ? <div className="border-t border-black/5 p-4 flex justify-end gap-2 print:hidden">{footer}</div> : null}
       </div>
     </div>

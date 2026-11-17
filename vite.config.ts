@@ -52,7 +52,6 @@ export default defineConfig({
     },
   },
   server: {
-    historyApiFallback: true,
     headers: {
       'Cache-Control': 'no-store, no-cache, must-revalidate',
     },

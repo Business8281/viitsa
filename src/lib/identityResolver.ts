@@ -852,7 +852,7 @@ async function createNewCanonicalUser(
   isClinicPortal: boolean = false,
   isAdminPortal: boolean = false
 ): Promise<IdentityResult> {
-  let role: Role = onboardingData?.role === 'patient'
+  const role: Role = onboardingData?.role === 'patient'
     ? 'patient'
     : (onboardingData?.role as any) === 'unassigned'
       ? (isAdminPortal ? 'company_admin' : (isClinicPortal ? 'clinic_admin' : 'patient'))

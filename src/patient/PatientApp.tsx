@@ -174,7 +174,7 @@ function PatientInner() {
   }
 
   return (
-    <div className="relative">
+    <div className="relative min-h-screen max-w-full overflow-x-hidden">
       <Routes>
         <Route path="dashboard" element={
           <SectionErrorBoundary sectionName="Patient Home" fallbackUrl="/patient/dashboard">
