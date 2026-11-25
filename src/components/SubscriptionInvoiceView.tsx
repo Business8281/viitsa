@@ -13,12 +13,29 @@ interface Props {
 
 export function SubscriptionInvoiceView({ subscription, clinic, onClose }: Props) {
   const [isDownloading, setIsDownloading] = useState<'download' | 'whatsapp' | 'email' | null>(null);
-  const rawDate = subscription.created_at || subscription.date;
+  const rawDate = subscription?.created_at || subscription?.date;
   const parsedDate = parseDateArg(rawDate);
   const invoiceDate = !isNaN(parsedDate.getTime()) ? parsedDate : new Date();
   const invoiceDateDisplay = formatDate(rawDate || invoiceDate);
-  const idStr = subscription.id || 'UNKNOWN';
-  const amountStr = "2,999.00";
+  const idStr = subscription?.id || subscription?.invoice_number || 'SUB-INV-001';
+
+  // Dynamic plan details based on what the clinic actually chose
+  const planCode = (subscription?.plan_code || subscription?.plan || subscription?.plan_id || clinic?.subscription_plan || 'clinic').toLowerCase();
+  const planName = subscription?.plan_name || (
+    planCode === 'solo' ? 'Solo Doctor Plan' :
+    planCode === 'multispecialty' || planCode === 'multi_speciality' ? 'Multi-Speciality Clinic Plan' :
+    planCode === 'hospital' ? 'Hospital Enterprise Plan' :
+    'Small Clinic Plan'
+  );
+  const cycle = subscription?.billing_cycle || subscription?.cycle || clinic?.subscription_billing_cycle || 'monthly';
+  const rawAmount = subscription?.amount != null ? Number(subscription.amount) : (
+    subscription?.total != null ? Number(subscription.total) : (
+      planCode === 'solo' ? (cycle === 'annual' ? 9999 : 999) :
+      planCode === 'multispecialty' ? (cycle === 'annual' ? 39999 : 3999) :
+      (cycle === 'annual' ? 19999 : 1999)
+    )
+  );
+  const amountStr = rawAmount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
   const generateBlob = async (): Promise<Blob> => {
     const element = document.getElementById('sub-print-area');
@@ -127,7 +144,7 @@ export function SubscriptionInvoiceView({ subscription, clinic, onClose }: Props
             {isDownloading === 'email' ? <Loader2 size={16} className="animate-spin" /> : <Mail size={16} />}
             Email
           </button>
-          <button onClick={downloadPDF} disabled={isDownloading !== null} className="btn-primary px-6 bg-[#05C994] hover:bg-[#04b081] text-white border-transparent disabled:opacity-50 flex items-center gap-2">
+          <button onClick={downloadPDF} disabled={isDownloading !== null} className="btn-primary px-6 bg-[#059669] hover:bg-[#047857] text-white border-transparent disabled:opacity-50 flex items-center gap-2 shadow-sm">
             {isDownloading === 'download' ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />} 
             Download
           </button>
@@ -136,108 +153,201 @@ export function SubscriptionInvoiceView({ subscription, clinic, onClose }: Props
 
       <div 
         id="sub-print-area" 
-        className="invoice-page bg-white text-ink font-sans relative mt-8 print:mt-0 shadow-xl print:shadow-none"
+        className="invoice-page bg-white text-ink font-sans relative mt-8 print:mt-0 shadow-xl print:shadow-none rounded-2xl border border-slate-100 overflow-hidden"
         style={{ width: '210mm', minHeight: '297mm', padding: '0' }}
       >
-        <div className="bg-[url('https://www.transparenttextures.com/patterns/clean-gray-paper.png')] absolute inset-0 opacity-[0.03] pointer-events-none mix-blend-multiply"></div>
         <div className="relative z-10 p-0 m-0 w-full h-full">
 
-          {/* Top Accent Bar */}
-          <div className="h-4 w-full bg-gradient-to-r from-[#05C994] via-[#04b081] to-teal-800"></div>
-
-          {/* Header Section */}
-          <div className="px-12 pt-12 pb-8 flex justify-between items-start">
+          {/* Top Header Section */}
+          <div className="px-10 pt-10 pb-6 flex justify-between items-start">
             <div className="flex flex-col">
-              <div className="flex items-center gap-3 mb-2">
-                <div className="w-14 h-14 bg-gradient-to-br from-[#05C994] to-teal-700 rounded-xl flex items-center justify-center shadow-lg shadow-[#05C994]/20 text-white font-black text-2xl tracking-tighter">
-                  V
-                </div>
-                <div className="flex flex-col">
-                  <h1 className="text-3xl font-black text-ink tracking-tight uppercase" style={{ color: '#05C994' }}>VIITSA</h1>
-                  <p className="text-sm font-semibold tracking-widest text-ink-muted uppercase -mt-1">Clinic Pro</p>
-                </div>
-              </div>
+              <h1 className="text-3xl font-black tracking-tight" style={{ color: '#059669' }}>VIITSA</h1>
+              <p className="text-xs font-bold tracking-tight text-[#059669] mt-0.5">Clinic-paid Healthcare SaaS</p>
+              <p className="text-[11px] italic text-slate-400 font-medium">Simplifying Care. Stronger Patients.</p>
             </div>
             
             <div className="text-right flex flex-col items-end">
-              <h2 className="text-4xl font-black text-ink/10 tracking-widest uppercase mb-4">Invoice</h2>
-              <div className="bg-slate-50 px-5 py-3 rounded-xl border border-slate-100 flex flex-col gap-1 text-right min-w-[200px]">
-                <div className="flex justify-between items-center text-sm">
-                  <span className="text-ink-muted font-medium">Invoice No</span>
-                  <span className="font-bold text-ink">#{idStr.substring(0, 8).toUpperCase()}</span>
+              <div className="text-[9.5px] font-bold tracking-widest text-slate-500 uppercase leading-snug">
+                <div>CONNECTED CLINICS</div>
+                <div>HEALTHIER PATIENTS</div>
+                <div>BRIGHTER TOMORROW</div>
+              </div>
+              <div className="h-0.5 w-12 bg-[#059669] mt-1.5 rounded-full"></div>
+            </div>
+          </div>
+
+          {/* Title */}
+          <div className="px-10 pb-6">
+            <h2 className="text-2xl font-black text-slate-900 tracking-tight">Subscription Tax Invoice</h2>
+            <p className="text-[10px] font-bold tracking-widest text-slate-400 uppercase mt-0.5">OFFICIAL SAAS BILLING STATEMENT</p>
+          </div>
+
+          {/* Two Side-by-Side Profile & Metadata Cards */}
+          <div className="px-10 pb-6 grid grid-cols-12 gap-5">
+            {/* Left Card: Clinic Profile */}
+            <div className="col-span-7 bg-white rounded-2xl p-5 border border-slate-200/90 shadow-sm flex flex-col justify-between">
+              <div className="flex items-start gap-3.5">
+                <div className="w-12 h-12 rounded-xl bg-[#059669] text-white flex items-center justify-center font-black text-xl shrink-0 shadow-md shadow-[#059669]/20">
+                  {(clinic?.name || 'V').trim().charAt(0).toUpperCase()}
                 </div>
-                <div className="flex justify-between items-center text-sm">
-                  <span className="text-ink-muted font-medium">Date</span>
-                  <span className="font-bold text-ink">{invoiceDateDisplay}</span>
+                <div className="min-w-0">
+                  <h3 className="text-base font-bold text-slate-900 truncate">{clinic?.name || 'Clinic Partner'}</h3>
+                  <p className="text-xs text-slate-500 line-clamp-2 mt-0.5">{clinic?.address || 'Registered Medical Practice Partner'}</p>
                 </div>
-                <div className="flex justify-between items-center text-sm">
-                  <span className="text-ink-muted font-medium">Status</span>
-                  <span className="font-bold text-emerald-600 flex items-center gap-1 bg-emerald-50 px-2 py-0.5 rounded-full text-xs">
-                    <CheckCircle2 size={12} /> PAID
+              </div>
+              <div className="border-t border-slate-100 pt-3.5 mt-3 flex items-center gap-4 text-xs text-slate-600">
+                <div className="flex items-center gap-1.5 truncate">
+                  <Phone size={13} className="text-[#059669] shrink-0" />
+                  <span className="truncate">{clinic?.phone || '—'}</span>
+                </div>
+                <div className="flex items-center gap-1.5 truncate">
+                  <Mail size={13} className="text-[#059669] shrink-0" />
+                  <span className="truncate">{clinic?.email || '—'}</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Right Card: Metadata */}
+            <div className="col-span-5 bg-slate-50/70 rounded-2xl p-5 border border-slate-200/90 shadow-sm flex flex-col justify-between">
+              <div className="space-y-1.5 text-xs">
+                <div className="flex justify-between items-center">
+                  <span className="text-slate-500 font-medium">Invoice No.</span>
+                  <span className="font-bold text-slate-900">#{idStr.substring(0, 14).toUpperCase()}</span>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-slate-500 font-medium">Date</span>
+                  <span className="font-bold text-slate-900">{invoiceDateDisplay}</span>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-slate-500 font-medium">Time</span>
+                  <span className="text-slate-700 font-medium">{invoiceDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-slate-500 font-medium">Receipt No.</span>
+                  <span className="font-bold text-slate-900">RCP-{idStr.replace(/\D/g, '').slice(-4) || '8921'}</span>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-slate-500 font-medium">Payment Mode</span>
+                  <span className="font-bold text-slate-900">UPI / ONLINE</span>
+                </div>
+                <div className="flex justify-between items-center pt-0.5">
+                  <span className="text-slate-500 font-medium">Status</span>
+                  <span className="font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2.5 py-0.5 rounded-full text-[11px] flex items-center gap-1">
+                    <CheckCircle2 size={11} /> PAID
                   </span>
                 </div>
               </div>
             </div>
           </div>
 
-          {/* Billed To */}
-          <div className="px-12 pb-10 flex gap-12">
-            <div className="flex-1">
-              <div className="inline-block bg-slate-900 text-white text-xs font-bold uppercase tracking-wider px-3 py-1 rounded-full mb-4">Billed To</div>
-              <h3 className="text-xl font-bold text-ink mb-1">{clinic?.name || 'Clinic Name'}</h3>
-              <p className="text-ink-muted text-sm">{clinic?.address || 'Clinic Address'}</p>
-              <div className="mt-3 flex flex-col gap-1">
-                <div className="flex items-center gap-2 text-sm text-ink-muted">
-                  <Phone size={14} className="text-[#05C994]" /> 
-                  <span className="font-medium text-ink">{clinic?.phone || 'Phone'}</span>
+          {/* Subscription & Account Information Block */}
+          <div className="px-10 pb-6">
+            <div className="bg-white rounded-2xl border border-slate-200/90 shadow-sm overflow-hidden">
+              <div className="px-5 py-3 border-b border-slate-100 flex justify-between items-center bg-slate-50/40">
+                <div className="flex items-center gap-2 text-xs font-bold text-slate-800">
+                  <span className="text-[#059669]">👤</span> Subscription & Account Information
                 </div>
-                <div className="flex items-center gap-2 text-sm text-ink-muted">
-                  <Mail size={14} className="text-[#05C994]" /> 
-                  <span className="font-medium text-ink">{clinic?.email || 'Email'}</span>
+                <div className="text-[11px] font-mono text-slate-400">
+                  UHID: <span className="font-bold text-slate-700">UHID-{idStr.replace(/\D/g, '').slice(-6) || '2026-918'}</span>
+                </div>
+              </div>
+              <div className="p-5 grid grid-cols-2 gap-x-8 gap-y-2.5 text-xs">
+                <div className="flex items-center">
+                  <span className="w-32 text-slate-500 font-medium">Clinic Name</span>
+                  <span className="text-slate-900 font-bold">: {clinic?.name || 'Clinic Partner'}</span>
+                </div>
+                <div className="flex items-center">
+                  <span className="w-32 text-slate-500 font-medium">Attending Doctor</span>
+                  <span className="text-slate-900 font-bold">: Dr. {(clinic?.name || 'Admin').replace(/^(Dr\.?|Doctor)\s+/i, '')}</span>
+                </div>
+                <div className="flex items-center">
+                  <span className="w-32 text-slate-500 font-medium">Attending Doctor</span>
+                  <span className="text-slate-900 font-bold">: Dr. {(clinic?.name || 'Admin').replace(/^(Dr\.?|Doctor)\s+/i, '')}</span>
+                </div>
+                <div className="flex items-center">
+                  <span className="w-32 text-slate-500 font-medium">Specialization</span>
+                  <span className="text-slate-700 font-medium">: Internal Medicine & Healthcare</span>
+                </div>
+                <div className="flex items-center">
+                  <span className="w-32 text-slate-500 font-medium">Contact Phone</span>
+                  <span className="text-slate-700 font-medium">: {clinic?.phone || '—'}</span>
+                </div>
+                <div className="flex items-center">
+                  <span className="w-32 text-slate-500 font-medium">Visit Category</span>
+                  <span className="text-[#059669] font-bold">: {planName} ({cycle.toUpperCase()} Tier)</span>
                 </div>
               </div>
             </div>
           </div>
 
-          {/* Line Items */}
-          <div className="px-12 pb-12">
-            <div className="border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
+          {/* Line Items Table with Medical Emerald Header Banner */}
+          <div className="px-10 pb-6">
+            <div className="border border-slate-200/90 rounded-2xl overflow-hidden shadow-sm">
+              {/* Solid Medical Emerald Header */}
+              <div className="bg-[#059669] px-6 py-3 flex justify-between items-center text-white">
+                <span className="text-xs font-black tracking-wider uppercase">SERVICE & SUBSCRIPTION CHARGES</span>
+                <span className="text-xs font-bold tracking-wide">Cur: INR (₹)</span>
+              </div>
               <table className="w-full text-left border-collapse">
                 <thead>
-                  <tr className="bg-slate-50 border-b border-slate-200">
-                    <th className="py-4 px-6 text-xs font-bold text-ink-muted uppercase tracking-wider">Description</th>
-                    <th className="py-4 px-6 text-xs font-bold text-ink-muted uppercase tracking-wider text-right w-32">Amount</th>
+                  <tr className="bg-slate-50/80 border-b border-slate-200/80 text-[11px] font-bold text-slate-500 uppercase tracking-wider">
+                    <th className="py-3 px-6 w-12 text-center">#</th>
+                    <th className="py-3 px-6 w-36">Category</th>
+                    <th className="py-3 px-6">Item Description</th>
+                    <th className="py-3 px-4 w-16 text-center">Qty</th>
+                    <th className="py-3 px-6 w-28 text-right">Unit Price</th>
+                    <th className="py-3 px-6 w-32 text-right">Total Amount</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-100 bg-white">
+                <tbody className="divide-y divide-slate-100 bg-white text-xs">
                   <tr className="hover:bg-slate-50/50">
-                    <td className="py-4 px-6 text-sm text-ink">
-                      <div className="font-bold text-base mb-1">Viitsa Clinic Pro Subscription</div>
-                      <div className="text-ink-muted">Monthly access to all premium clinic management tools and AI features.</div>
+                    <td className="py-4 px-6 text-center font-bold text-slate-400">1</td>
+                    <td className="py-4 px-6 font-bold text-[#059669]">
+                      <div className="flex items-center gap-1.5">
+                        <span className="w-2 h-2 rounded-full bg-[#059669]"></span>
+                        Subscription
+                      </div>
                     </td>
-                    <td className="py-4 px-6 text-right font-bold text-ink whitespace-nowrap">Rs. {amountStr}</td>
+                    <td className="py-4 px-6 text-slate-900">
+                      <div className="font-bold text-sm text-slate-900">Viitsa Clinic — {planName}</div>
+                      <div className="text-slate-500 text-[11px] mt-0.5 capitalize">{cycle} recurring clinic software access, AI patient triage, and unlimited doctor seats.</div>
+                    </td>
+                    <td className="py-4 px-4 text-center font-bold text-slate-700">1</td>
+                    <td className="py-4 px-6 text-right font-medium text-slate-700">₹{amountStr}</td>
+                    <td className="py-4 px-6 text-right font-black text-slate-900">₹{amountStr}</td>
                   </tr>
                 </tbody>
               </table>
               
-              <div className="bg-slate-50/50 p-6 flex justify-between items-center border-t border-slate-200">
-                <div className="text-ink-muted text-sm flex items-center gap-1">
-                  <ShieldCheck size={16} className="text-[#05C994]" />
-                  Secure Payment Processed
+              {/* Summary Bottom Bar */}
+              <div className="bg-slate-50/60 p-6 flex justify-between items-center border-t border-slate-200/90">
+                <div className="text-xs text-slate-500 flex items-center gap-1.5 font-medium">
+                  <ShieldCheck size={16} className="text-[#059669]" />
+                  Secure Payment Processed via Razorpay Subscriptions
                 </div>
-                <div className="flex items-center gap-8">
-                  <span className="text-lg font-medium text-ink-muted">Total Paid</span>
-                  <span className="text-3xl font-black text-[#05C994] tracking-tight">Rs. {amountStr}</span>
+                <div className="flex items-center gap-6">
+                  <div className="text-right">
+                    <div className="text-[11px] text-slate-400 uppercase font-bold tracking-wider">Total Paid</div>
+                    <div className="text-2xl font-black tracking-tight" style={{ color: '#059669' }}>₹{amountStr}</div>
+                  </div>
                 </div>
               </div>
             </div>
           </div>
 
+          {/* Terms & Notes */}
+          <div className="px-10 pb-16">
+            <div className="bg-slate-50/60 rounded-xl p-4 border border-slate-200/80 text-[11px] text-slate-500 leading-relaxed">
+              <strong className="text-slate-700 block mb-1">TERMS & MANDATE INSTRUCTIONS:</strong>
+              Payment received successfully. Your clinic operational quotas, AI triage, and doctor seats are live across all connected devices in real time. Auto-renews per {cycle} cycle.
+            </div>
+          </div>
+
           {/* Footer */}
-          <div className="absolute bottom-12 left-12 right-12 text-center border-t border-slate-200 pt-8">
-            <p className="text-sm font-medium text-ink-muted mb-1">Thank you for choosing Viitsa to manage your practice.</p>
-            <p className="text-xs text-ink-muted/70 flex items-center justify-center gap-1">
-              <ShieldCheck size={12} /> This is a computer-generated invoice and does not require a physical signature.
+          <div className="absolute bottom-8 left-10 right-10 text-center border-t border-slate-200 pt-6">
+            <p className="text-xs font-semibold text-slate-700 mb-1">Thank you for choosing Viitsa to manage your practice.</p>
+            <p className="text-[11px] text-slate-400 flex items-center justify-center gap-1">
+              <ShieldCheck size={12} className="text-[#059669]" /> Computer-generated official SaaS tax invoice • Does not require physical signature
             </p>
           </div>
         

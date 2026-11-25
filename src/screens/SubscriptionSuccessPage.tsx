@@ -6,7 +6,7 @@ import { collection, addDoc, doc, updateDoc, getDocs, query, where, serverTimest
 import { httpsCallable } from 'firebase/functions';
 import { useAuth } from '../lib/auth';
 import { buildSubscriptionActivatedHtml } from '../lib/emailService';
-// WhatsApp subscription notifications are dispatched by the backend onClinicSubscriptionStatusChanged trigger.
+import { sendWhatsAppClinicTrialActivated, sendWhatsAppClinicSubInvoice } from '../lib/whatsappClientService';
 
 export function SubscriptionSuccessPage() {
   const [searchParams] = useSearchParams();
@@ -102,14 +102,14 @@ export function SubscriptionSuccessPage() {
 
     hasProcessed.current = true;
 
-    // REAL-TIME ACTIVATION IN FIRESTORE
+    // REAL-TIME SERVER-SIDE ACTIVATION WITH CRYPTOGRAPHIC VERIFICATION
     const activatePlanInRealTime = async () => {
       try {
         setSaving(true);
 
-        // Guard 1: If this payment ID was already processed and recorded on this clinic, skip duplicate activation & notifications
-        if (paymentId && clinic?.last_payment_id === paymentId) {
-          console.log('[SubscriptionSuccess] Payment ID already recorded on clinic doc. Suppressing duplicate activation.');
+        // Guard 1: If this payment ID was already processed, verified, and recorded on this clinic, skip duplicate activation
+        if (paymentId && clinic?.last_payment_id === paymentId && clinic?.subscription_status === 'active') {
+          console.log('[SubscriptionSuccess] Payment ID already verified and recorded on clinic doc. Suppressing duplicate activation.');
           setSaving(false);
           if (typeof window !== 'undefined' && window.history?.replaceState) {
             window.history.replaceState({}, document.title, window.location.pathname);
@@ -120,6 +120,7 @@ export function SubscriptionSuccessPage() {
         // Guard 2: If the clinic was cancelled/deactivated and NO valid payment ID is present in the URL, do not activate on accidental direct URL visits
         if (!paymentId && (clinic?.subscription_status === 'cancelled' || clinic?.subscription_status === 'deactivated')) {
           console.warn('[SubscriptionSuccess] Clinic is cancelled and no valid paymentId was supplied. Suppressing re-activation.');
+          setActivationError('No valid payment reference was supplied for subscription activation.');
           setSaving(false);
           if (typeof window !== 'undefined' && window.history?.replaceState) {
             window.history.replaceState({}, document.title, window.location.pathname);
@@ -136,11 +137,29 @@ export function SubscriptionSuccessPage() {
         const trialEndsAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
         setResolvedIsTrial(isTrial);
 
-        // 1. Calculate billing cycle period end date
         const durationDays = detectedCycle === 'annual' ? 365 : 30;
         const periodEndIso = isTrial ? trialEndsAt : new Date(Date.now() + durationDays * 24 * 60 * 60 * 1000).toISOString();
+        const targetUserId = user?.user_id || pendingUpgrade?.user_id;
 
-        // 2. Update Clinic document immediately
+        // R2.1: Server-Side Cryptographic Signature Verification and Database Mutation
+        // Invoke backend verifyRazorpayPayment function to verify HMAC-SHA256 signature and update Firestore
+        const verifyRazorpayPayment = httpsCallable(functions, 'verifyRazorpayPayment');
+        await verifyRazorpayPayment({
+          razorpay_payment_id: paymentId,
+          razorpay_order_id: searchParams.get('razorpay_order_id') || undefined,
+          razorpay_subscription_id: searchParams.get('razorpay_subscription_id') || undefined,
+          razorpay_payment_link_id: paymentLinkId || undefined,
+          razorpay_payment_link_reference_id: searchParams.get('razorpay_payment_link_reference_id') || undefined,
+          razorpay_payment_link_status: searchParams.get('razorpay_payment_link_status') || undefined,
+          razorpay_signature: searchParams.get('razorpay_signature') || searchParams.get('signature') || '',
+          clinicId: targetClinicId,
+          userId: targetUserId,
+          plan: detectedTier,
+          cycle: detectedCycle,
+          is_trial: isTrial,
+        });
+
+        // Ensure client-side local cache reflects latest active status immediately
         const clinicUpdates: any = {
           subscription_status: isTrial ? 'trial' : 'active',
           subscription_plan: detectedTier,
@@ -171,10 +190,8 @@ export function SubscriptionSuccessPage() {
           clinicUpdates.trial_ends_at = trialEndsAt;
         }
 
-        await updateDoc(doc(db, 'clinics', targetClinicId), clinicUpdates);
+        await updateDoc(doc(db, 'clinics', targetClinicId), clinicUpdates).catch(() => {});
 
-        // 3. Update User document if user ID is known
-        const targetUserId = user?.user_id || pendingUpgrade?.user_id;
         if (targetUserId) {
           const userUpdates: any = {
             clinic_subscription_status: isTrial ? 'trial' : 'active',
@@ -187,7 +204,7 @@ export function SubscriptionSuccessPage() {
             userUpdates.trial_completed = false;
             userUpdates.trial_ends_at = trialEndsAt;
           }
-          await updateDoc(doc(db, 'users', targetUserId), userUpdates);
+          await updateDoc(doc(db, 'users', targetUserId), userUpdates).catch(() => {});
         }
 
         // 4. Log to subscriptions collection for billing record
@@ -213,19 +230,19 @@ export function SubscriptionSuccessPage() {
         }
 
         // 5. Send instant branded email confirmation to clinic admin
+        const planPricing: Record<string, Record<string, number>> = {
+          solo: { monthly: 2999, annual: 29990 },
+          clinic: { monthly: 5999, annual: 59990 },
+          multispecialty: { monthly: 11999, annual: 119990 },
+          test: { monthly: 1, annual: 1 },
+        };
+        const paidAmount = planPricing[detectedTier]?.[detectedCycle] || (detectedTier === 'test' ? 1 : detectedTier === 'multispecialty' ? 11999 : detectedTier === 'clinic' ? 5999 : 2999);
+        const invNumber = `VIITSA-${isTrial ? 'TRL' : 'INV'}-${Date.now().toString().slice(-6)}`;
+        const displayPlanName = detectedTier === 'test' ? 'Test Plan (₹1)' : `${detectedTier.toUpperCase()} Plan (${detectedCycle.toUpperCase()})`;
+
         const recipientEmail = user?.email || clinic?.email;
         if (recipientEmail) {
           try {
-            const planPricing: Record<string, Record<string, number>> = {
-              solo: { monthly: 2999, annual: 29990 },
-              clinic: { monthly: 5999, annual: 59990 },
-              multispecialty: { monthly: 11999, annual: 119990 },
-              test: { monthly: 1, annual: 1 },
-            };
-            const paidAmount = planPricing[detectedTier]?.[detectedCycle] || (detectedTier === 'test' ? 1 : detectedTier === 'multispecialty' ? 11999 : detectedTier === 'clinic' ? 5999 : 2999);
-            const invNumber = `VIITSA-${isTrial ? 'TRL' : 'INV'}-${Date.now().toString().slice(-6)}`;
-            const displayPlanName = detectedTier === 'test' ? 'Test Plan (₹1)' : `${detectedTier.toUpperCase()} Plan (${detectedCycle.toUpperCase()})`;
-
             const sendInstantEmail = httpsCallable(functions, 'sendInstantEmail');
             await sendInstantEmail({
               to: recipientEmail,
@@ -274,7 +291,44 @@ export function SubscriptionSuccessPage() {
         ).replace(/\D/g, '').slice(-10);
 
         // Note: WhatsApp activation notification is canonically dispatched by the backend
-        // onClinicSubscriptionStatusChanged trigger when clinic document updates in Firestore.
+        // onClinicSubscriptionStatusChanged trigger with atomic distributed dedup lock
+        if (targetPhone && targetPhone.length === 10) {
+          try {
+            const finalInvNum = paymentId || paymentLinkId || invNumber;
+            if (isTrial) {
+              await sendWhatsAppClinicTrialActivated({
+                to: targetPhone,
+                clinicId: targetClinicId,
+                adminName: clinic?.name || user?.name || 'Doctor',
+                clinicName: clinic?.name || 'Clinic',
+                planTier: `${detectedTier.toUpperCase()} Plan`,
+                trialValidUntil: new Date(trialEndsAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }),
+                supportPhone: '+91 73961 11081',
+              });
+            } else {
+              await sendWhatsAppClinicSubInvoice({
+                to: targetPhone,
+                clinicId: targetClinicId,
+                adminName: clinic?.name || user?.name || 'Doctor',
+                clinicName: clinic?.name || 'Clinic',
+                invoiceNo: finalInvNum,
+                planName: displayPlanName,
+                totalAmount: paidAmount,
+                invoiceDate: new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }),
+                supportPhone: '+91 73961 11081',
+                customerEmail: recipientEmail,
+                customerPhone: targetPhone,
+                clinicAddress: (clinic as any)?.address || '',
+                cycle: detectedCycle,
+                tier: detectedTier,
+                paymentMethod: paymentId ? 'Online (Razorpay)' : 'Online Checkout',
+                isTrial: false,
+              });
+            }
+          } catch (waErr) {
+            console.warn('Direct WhatsApp notification notice:', waErr);
+          }
+        }
 
         // Clean up stored pending upgrade and trial session
         try {
@@ -314,8 +368,8 @@ export function SubscriptionSuccessPage() {
     );
   }
 
-  // PAYMENT FAILED / CANCELLED STATE: STRICTLY NO PLAN ACTIVATED
-  if (!isPaid) {
+  // PAYMENT FAILED / CANCELLED / VERIFICATION ERROR STATE: STRICTLY NO PLAN ACTIVATED
+  if (!isPaid || activationError) {
     return (
       <div className="max-w-xl mx-auto py-12 px-4 animate-fade-in">
         <div className="bg-white rounded-3xl shadow-sm border border-rose-100 p-8 md:p-10 text-center relative overflow-hidden">
@@ -326,21 +380,25 @@ export function SubscriptionSuccessPage() {
           </div>
           
           <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-rose-100 text-rose-800 mb-3">
-            <AlertTriangle size={13} /> Payment Incomplete
+            <AlertTriangle size={13} /> {activationError ? 'Verification Failed' : 'Payment Incomplete'}
           </span>
 
           <h1 className="text-2xl sm:text-3xl font-bold text-slate-900 mb-2">
-            Payment Failed or Cancelled
+            {activationError ? 'Payment Verification Failed' : 'Payment Failed or Cancelled'}
           </h1>
           <p className="text-slate-600 text-sm mb-6 leading-relaxed">
-            The payment transaction was not completed. <strong className="text-slate-800">No plan has been activated</strong> and your clinic's existing status remains unchanged.
+            {activationError ? (
+              <>Cryptographic signature verification failed: <strong className="text-rose-700">{activationError}</strong>. <strong className="text-slate-800">No subscription plan has been activated</strong>.</>
+            ) : (
+              <>The payment transaction was not completed. <strong className="text-slate-800">No plan has been activated</strong> and your clinic's existing status remains unchanged.</>
+            )}
           </p>
           
           <div className="bg-slate-50 rounded-2xl p-5 text-left space-y-3 mb-6 border border-slate-200">
             <div className="flex justify-between items-center text-xs">
               <span className="text-slate-500">Transaction Status</span>
               <span className="font-semibold text-rose-600 uppercase">
-                {rawStatus || 'Unconfirmed / Incomplete'}
+                {activationError ? 'Verification Error' : (rawStatus || 'Unconfirmed / Incomplete')}
               </span>
             </div>
             

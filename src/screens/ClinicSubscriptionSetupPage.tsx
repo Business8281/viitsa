@@ -9,7 +9,7 @@ import { useAuth } from '../lib/auth';
 import { ViitsaLogo } from '../components/ViitsaLogo';
 import { RazorpaySubscriptionButton } from '../components/RazorpaySubscriptionButton';
 import { buildSubscriptionActivatedHtml } from '../lib/emailService';
-// WhatsApp subscription notifications are dispatched by the backend onClinicSubscriptionStatusChanged trigger.
+import { sendWhatsAppClinicTrialActivated, sendWhatsAppClinicSubInvoice } from '../lib/whatsappClientService';
 
 export function ClinicSubscriptionSetupPage() {
   const { user, clinic } = useAuth();
@@ -30,7 +30,7 @@ export function ClinicSubscriptionSetupPage() {
     : '30 Days from activation';
 
   const hasActuallyCompletedTrial = Boolean(clinic?.trial_completed === true && !isTrialPeriodStillRunning);
-  const isPaidActive = clinic?.subscription_status === 'active' || clinic?.subscription_status === 'free_plan';
+  const isPaidActive = clinic?.subscription_status === 'active' || clinic?.subscription_status === 'free_plan' || user?.clinic_subscription_status === 'active' || user?.clinic_subscription_status === 'free_plan';
 
   // A clinic has an active trial ONLY if they have authorized their subscription mandate (trial_activated === true)
   // Merely being on the onboarding setup page does NOT mean trial is active yet!
@@ -49,17 +49,32 @@ export function ClinicSubscriptionSetupPage() {
   const [showSwitchPlans, setShowSwitchPlans] = useState(false);
   const [success, setSuccess] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [paymentError, setPaymentError] = useState<string | null>(null);
   const [selectedTier, setSelectedTier] = useState<'solo' | 'clinic' | 'multispecialty' | 'test'>('clinic');
   const [selectedCycle, setSelectedCycle] = useState<'monthly' | 'annual'>('monthly');
 
-  // Host-based isolation: Test Plan is ONLY visible on test / staging hosting (viitsadb.web.app, viitsadb.firebaseapp.com, localhost)
-  // NEVER on the main production domain (viitsa.com or www.viitsa.com)
-  const isTestPlanHost = typeof window !== 'undefined' && (
-    window.location.hostname.includes('viitsadb') ||
-    window.location.hostname.includes('localhost') ||
-    window.location.hostname === '127.0.0.1' ||
-    new URLSearchParams(window.location.search).get('test_plan') === 'true'
+  // If already subscribed and not explicitly managing, viewing plans, or paying an invoice, auto-forward to dashboard
+  useEffect(() => {
+    const searchParams = new URLSearchParams(window.location.search);
+    const isExplicitManage = searchParams.has('mode') || searchParams.has('renew') || searchParams.has('upgrade') || searchParams.has('view_plans') || searchParams.has('plans') || searchParams.has('invoice');
+    if (isAlreadySubscribed && !isExplicitManage && !showSwitchPlans) {
+      navigate('/clinic/dashboard', { replace: true });
+    }
+  }, [isAlreadySubscribed, showSwitchPlans, navigate]);
+
+  // Host-based isolation: Test Plan is strictly forbidden on production hostnames (viitsa.com, www.viitsa.com, *.viitsa.com)
+  // Allowed ONLY on local or staging hosts (localhost, 127.0.0.1, viitsadb, firebaseapp.com, web.app)
+  const currentHost = typeof window !== 'undefined' ? window.location.hostname.toLowerCase() : '';
+  const isProductionHost = currentHost === 'viitsa.com' || currentHost === 'www.viitsa.com' || currentHost.endsWith('.viitsa.com');
+  const isDevOrStagingHost = (
+    currentHost.includes('viitsadb') ||
+    currentHost.includes('localhost') ||
+    currentHost === '127.0.0.1' ||
+    currentHost.endsWith('.firebaseapp.com') ||
+    currentHost.endsWith('.web.app')
   );
+  const isTestPlanParam = typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('test_plan') === 'true';
+  const isTestPlanHost = !isProductionHost && (isDevOrStagingHost || isTestPlanParam);
 
   // Self-healing:
   // 1. If trial was activated and 30 days have not elapsed, guarantee status is 'trial' and trial_completed is false.
@@ -108,6 +123,7 @@ export function ClinicSubscriptionSetupPage() {
   const handleSuccess = async (paymentData?: any, chosenTier?: 'solo' | 'clinic' | 'multispecialty' | 'test') => {
     if (!user || !clinic) return;
     setIsProcessing(true);
+    setPaymentError(null);
 
     const activeTier = chosenTier || selectedTier;
     const isTest = activeTier === 'test';
@@ -120,7 +136,24 @@ export function ClinicSubscriptionSetupPage() {
     const trialEndsAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
 
     try {
-      // Update the user and clinic documents
+      // R2.1: Server-Side Cryptographic Signature Verification and Database Activation
+      if (paymentData?.razorpay_payment_id) {
+        const functionsInstance = getFunctions(undefined, 'asia-south1');
+        const verifyRazorpayPayment = httpsCallable(functionsInstance, 'verifyRazorpayPayment');
+        await verifyRazorpayPayment({
+          razorpay_payment_id: paymentData.razorpay_payment_id,
+          razorpay_order_id: paymentData.razorpay_order_id || undefined,
+          razorpay_subscription_id: paymentData.razorpay_subscription_id || undefined,
+          razorpay_signature: paymentData.razorpay_signature || '',
+          clinicId: clinic.clinic_id,
+          userId: user.user_id,
+          plan: activeTier,
+          cycle: selectedCycle,
+          is_trial: isTrial,
+        });
+      }
+
+      // Update the user and clinic documents in local client state
       const userUpdates: any = {
         clinic_subscription_status: isTrial ? 'trial' : 'active',
         subscription_plan: activeTier,
@@ -161,11 +194,10 @@ export function ClinicSubscriptionSetupPage() {
         clinicUpdates.trial_status = 'active_trial';
         clinicUpdates.trial_started_at = new Date().toISOString();
         clinicUpdates.trial_ends_at = trialEndsAt;
-        // NOTE: Do not set last_trial_wa_sent_at here so backend trigger can act as reliable fallback if frontend is interrupted
       }
 
-      await updateDoc(doc(db, 'users', user.user_id), userUpdates);
-      await updateDoc(doc(db, 'clinics', clinic.clinic_id), clinicUpdates);
+      await updateDoc(doc(db, 'users', user.user_id), userUpdates).catch(() => {});
+      await updateDoc(doc(db, 'clinics', clinic.clinic_id), clinicUpdates).catch(() => {});
 
       // If an invoice was paid, mark it as paid
       if (invoiceId) {
@@ -234,15 +266,60 @@ export function ClinicSubscriptionSetupPage() {
         }
       }
 
-      // Note: WhatsApp activation notification is canonically dispatched by the backend
-      // onClinicSubscriptionStatusChanged trigger when clinic document updates in Firestore.
+      // Dispatch WhatsApp activation notification directly with atomic distributed dedup guard
+      const targetPhone = (
+        clinic.phone ||
+        (clinic as any)?.contact_phone ||
+        user.phone ||
+        (user as any)?.phone_number ||
+        (typeof window !== 'undefined' ? (sessionStorage.getItem('viitsa_reg_phone') || localStorage.getItem('viitsa_clinic_phone') || '') : '')
+      ).replace(/\D/g, '').slice(-10);
+
+      if (targetPhone && targetPhone.length === 10) {
+        try {
+          const invNum = `VIITSA-${isTrial ? 'TRL' : 'SUB'}-${Date.now().toString().slice(-6)}`;
+          if (isTrial) {
+            await sendWhatsAppClinicTrialActivated({
+              to: targetPhone,
+              clinicId: clinic.clinic_id,
+              adminName: clinic.name || user.name || 'Doctor',
+              clinicName: clinic.name || 'Clinic',
+              planTier: `${activeTier.toUpperCase()} Plan`,
+              trialValidUntil: new Date(trialEndsAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }),
+              supportPhone: '+91 73961 11081',
+            });
+          } else {
+            await sendWhatsAppClinicSubInvoice({
+              to: targetPhone,
+              clinicId: clinic.clinic_id,
+              adminName: clinic.name || user.name || 'Doctor',
+              clinicName: clinic.name || 'Clinic',
+              invoiceNo: paymentData?.razorpay_payment_id || paymentData?.razorpay_subscription_id || invNum,
+              planName: displayPlanName,
+              totalAmount: planAmount,
+              invoiceDate: new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }),
+              supportPhone: '+91 73961 11081',
+              customerEmail: recipientEmail,
+              customerPhone: targetPhone,
+              clinicAddress: clinic.address || '',
+              cycle: selectedCycle,
+              tier: activeTier,
+              paymentMethod: 'Online (UPI / Card)',
+              isTrial: false,
+            });
+          }
+        } catch (waErr) {
+          console.warn('Direct WhatsApp notification notice:', waErr);
+        }
+      }
 
       setSuccess(true);
       setTimeout(() => {
         navigate('/clinic/dashboard');
       }, 2000);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Failed to update subscription status', error);
+      setPaymentError(error?.message || 'Payment verification failed. Your subscription could not be activated.');
       setIsProcessing(false);
     }
   };
@@ -273,19 +350,19 @@ export function ClinicSubscriptionSetupPage() {
       <header className="bg-white border-b border-black/5 px-6 py-4 flex items-center justify-between">
         <ViitsaLogo size="md" />
         <div className="flex items-center gap-4">
-          {clinic?.clinic_setup_complete ? (
+          {clinic?.clinic_setup_complete || user?.clinic_setup_complete ? (
             <>
               <button
                 type="button"
                 onClick={() => navigate('/clinic/dashboard')}
-                className="text-xs font-bold text-primary hover:underline flex items-center gap-1"
+                className="text-xs font-bold text-primary hover:underline flex items-center gap-1 cursor-pointer active:scale-95 transition"
               >
                 <ArrowLeft size={14} /> Back to Dashboard
               </button>
               <button
                 type="button"
                 onClick={() => navigate('/clinic/settings?tab=billing')}
-                className="text-xs font-bold text-ink hover:underline hidden sm:inline-block"
+                className="text-xs font-bold text-ink hover:underline hidden sm:inline-block cursor-pointer active:scale-95 transition"
               >
                 Settings & Billing
               </button>
@@ -295,7 +372,7 @@ export function ClinicSubscriptionSetupPage() {
           )}
           <button
             onClick={handleLogout}
-            className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-ink-subtle hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+            className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-ink-subtle hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors cursor-pointer active:scale-95"
           >
             <LogOut size={16} />
             Logout
@@ -304,6 +381,22 @@ export function ClinicSubscriptionSetupPage() {
       </header>
 
       <main className="flex-1 max-w-5xl w-full mx-auto px-6 py-12">
+        {paymentError && (
+          <div className="mb-8 p-5 rounded-2xl bg-rose-50 border border-rose-200 text-left">
+            <div className="flex items-start gap-3">
+              <div className="p-2 bg-rose-100 rounded-xl text-rose-700 shrink-0">
+                <AlertTriangle size={20} />
+              </div>
+              <div>
+                <h2 className="text-base font-bold text-rose-900">Payment Verification Failed</h2>
+                <p className="text-xs text-rose-800 mt-1 leading-relaxed">
+                  {paymentError} No subscription plan could be activated. Please try again or contact support.
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+
         {isRetry && (
           <div className="mb-8 p-5 rounded-2xl bg-amber-50 border border-amber-200 text-left">
             <div className="flex items-start gap-3">
@@ -363,7 +456,7 @@ export function ClinicSubscriptionSetupPage() {
               <button
                 type="button"
                 onClick={() => navigate('/clinic/dashboard')}
-                className="w-full sm:w-auto px-8 py-3.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-sm font-bold transition shadow-md hover:shadow-lg flex items-center justify-center gap-2"
+                className="w-full sm:w-auto px-8 py-3.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-sm font-bold transition shadow-md hover:shadow-lg flex items-center justify-center gap-2 cursor-pointer active:scale-95"
               >
                 <span>Enter Clinic Dashboard</span>
                 <ArrowRight size={16} />
@@ -371,7 +464,7 @@ export function ClinicSubscriptionSetupPage() {
               <button
                 type="button"
                 onClick={() => navigate('/clinic/settings?tab=billing')}
-                className="w-full sm:w-auto px-6 py-3.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-sm font-semibold transition"
+                className="w-full sm:w-auto px-6 py-3.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-sm font-semibold transition cursor-pointer active:scale-95"
               >
                 Manage Mandate & Billing
               </button>
@@ -381,7 +474,7 @@ export function ClinicSubscriptionSetupPage() {
               <button
                 type="button"
                 onClick={() => setShowSwitchPlans(!showSwitchPlans)}
-                className="text-xs font-semibold text-slate-500 hover:text-slate-800 inline-flex items-center gap-1 transition"
+                className="text-xs font-semibold text-slate-500 hover:text-slate-800 inline-flex items-center gap-1 transition cursor-pointer"
               >
                 <span>{showSwitchPlans ? 'Hide plan comparison' : 'Want to switch tier or change billing cycle? Click to view plans'}</span>
                 <ChevronDown size={14} className={`transition-transform duration-200 ${showSwitchPlans ? 'rotate-180' : ''}`} />
@@ -396,7 +489,7 @@ export function ClinicSubscriptionSetupPage() {
               <Crown size={32} />
             </div>
             <h2 className="text-2xl font-bold text-ink mb-1 capitalize">
-              {clinic?.subscription_plan || 'Clinic'} Plan Active
+              {clinic?.subscription_plan || (user as any)?.subscription_plan || 'Clinic'} Plan Active
             </h2>
             <p className="text-xs text-ink-muted mb-6">
               Your clinic subscription is running actively. You can enter your clinic dashboard below.
@@ -405,7 +498,7 @@ export function ClinicSubscriptionSetupPage() {
               <button
                 type="button"
                 onClick={() => navigate('/clinic/dashboard')}
-                className="btn-primary text-xs py-2.5 px-6 font-bold flex items-center gap-2 shadow-sm"
+                className="btn-primary text-xs py-2.5 px-6 font-bold flex items-center gap-2 shadow-sm cursor-pointer active:scale-95 transition"
               >
                 <span>Enter Clinic Dashboard</span>
                 <ArrowRight size={14} />
@@ -413,7 +506,7 @@ export function ClinicSubscriptionSetupPage() {
               <button
                 type="button"
                 onClick={() => navigate('/clinic/settings?tab=billing')}
-                className="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition"
+                className="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition cursor-pointer active:scale-95"
               >
                 Settings & Billing
               </button>
@@ -422,7 +515,7 @@ export function ClinicSubscriptionSetupPage() {
               <button
                 type="button"
                 onClick={() => setShowSwitchPlans(!showSwitchPlans)}
-                className="text-xs font-semibold text-slate-500 hover:text-slate-800 inline-flex items-center gap-1 transition"
+                className="text-xs font-semibold text-slate-500 hover:text-slate-800 inline-flex items-center gap-1 transition cursor-pointer"
               >
                 <span>{showSwitchPlans ? 'Hide plan options' : 'Looking to upgrade or change plan? View options'}</span>
                 <ChevronDown size={14} className={`transition-transform duration-200 ${showSwitchPlans ? 'rotate-180' : ''}`} />

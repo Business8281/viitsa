@@ -14,7 +14,6 @@ import {
   buildSubscriptionActivatedHtml,
   buildSubscriptionPlanChangeScheduledHtml,
   buildSubscriptionCancelledHtml,
-  buildGenericHtml,
 } from '../lib/emailService';
 
 export type TemplateId =
@@ -137,6 +136,10 @@ export function EmailTemplatePreviewPage() {
       targetLink: 'https://viitsa.com/clinic/login',
       html: buildClinicApprovedHtml({
         clinicName: 'Apollo Health Center',
+        clinicEmail: 'contact@apollohealth.org',
+        phone: '+91 98765 43210',
+        address: 'Plot 42, Hitech City',
+        city: 'Hyderabad',
       }),
     },
     clinic_rejected: {
@@ -147,6 +150,10 @@ export function EmailTemplatePreviewPage() {
       targetLink: 'https://viitsa.com/clinic/login',
       html: buildClinicRejectedHtml({
         clinicName: 'Apollo Health Center',
+        clinicEmail: 'contact@apollohealth.org',
+        phone: '+91 98765 43210',
+        address: 'Plot 42, Hitech City',
+        city: 'Hyderabad',
         rejectionReason: 'Medical establishment certificate illegible. Please submit a high-resolution PDF or scan showing official seal.',
       }),
     },
@@ -159,11 +166,21 @@ export function EmailTemplatePreviewPage() {
       html: buildAppointmentHtml({
         type: 'confirmed',
         patientName: 'Alex Morgan',
-        doctorName: 'Dr. Sarah Jenkins (Cardiology)',
+        uhid: 'UHID-2026-918',
+        age: '34 Y',
+        gender: 'Male',
+        contactPhone: '+91 98765 43210',
+        doctorName: 'Dr. Sarah Jenkins',
+        doctorSpecialization: 'Internal Medicine & Cardiology',
         clinicName: 'Apollo Health Center',
+        clinicAddress: 'Plot 42, Road No. 36, Jubilee Hills, Hyderabad',
+        clinicPhone: '+91 90148 65154',
+        clinicEmail: 'care@apollohealth.com',
         date: '28 Oct 2026',
         time: '10:30 AM',
         token: 'ON-014',
+        department: 'General Medicine / OPD',
+        room: 'Consultation Room 3 (OPD Wing)',
       }),
     },
     appt_rescheduled: {
@@ -175,11 +192,21 @@ export function EmailTemplatePreviewPage() {
       html: buildAppointmentHtml({
         type: 'rescheduled',
         patientName: 'Alex Morgan',
-        doctorName: 'Dr. Sarah Jenkins (Cardiology)',
+        uhid: 'UHID-2026-918',
+        age: '34 Y',
+        gender: 'Male',
+        contactPhone: '+91 98765 43210',
+        doctorName: 'Dr. Sarah Jenkins',
+        doctorSpecialization: 'Internal Medicine & Cardiology',
         clinicName: 'Apollo Health Center',
+        clinicAddress: 'Plot 42, Road No. 36, Jubilee Hills, Hyderabad',
+        clinicPhone: '+91 90148 65154',
+        clinicEmail: 'care@apollohealth.com',
         date: '30 Oct 2026',
         time: '11:15 AM',
         token: 'ON-022',
+        department: 'General Medicine / OPD',
+        room: 'Consultation Room 3 (OPD Wing)',
       }),
     },
     appt_cancelled: {
@@ -191,11 +218,21 @@ export function EmailTemplatePreviewPage() {
       html: buildAppointmentHtml({
         type: 'cancelled',
         patientName: 'Alex Morgan',
-        doctorName: 'Dr. Sarah Jenkins (Cardiology)',
+        uhid: 'UHID-2026-918',
+        age: '34 Y',
+        gender: 'Male',
+        contactPhone: '+91 98765 43210',
+        doctorName: 'Dr. Sarah Jenkins',
+        doctorSpecialization: 'Internal Medicine & Cardiology',
         clinicName: 'Apollo Health Center',
+        clinicAddress: 'Plot 42, Road No. 36, Jubilee Hills, Hyderabad',
+        clinicPhone: '+91 90148 65154',
+        clinicEmail: 'care@apollohealth.com',
         date: '28 Oct 2026',
         time: '10:30 AM',
         token: 'ON-014',
+        department: 'General Medicine / OPD',
+        room: 'Consultation Room 3 (OPD Wing)',
       }),
     },
     prescription: {
@@ -206,67 +243,172 @@ export function EmailTemplatePreviewPage() {
       targetLink: 'https://viitsa.com/login',
       html: buildPrescriptionHtml({
         patientName: 'Alex Morgan',
+        uhid: 'UHID-2026-918',
+        age: '34 Y',
+        gender: 'Male',
+        contactPhone: '+91 98765 43210',
         doctorName: 'Dr. Sarah Jenkins',
+        doctorSpecialization: 'Consultant Pulmonologist & General Physician',
+        doctorRegNo: 'MCI-2018-84920',
         clinicName: 'Apollo Health Center',
+        clinicAddress: 'Plot 42, Road No. 36, Jubilee Hills, Hyderabad',
+        clinicPhone: '+91 90148 65154',
+        clinicEmail: 'care@apollohealth.com',
         prescriptionNo: 'RX-9042',
         date: '27 Oct 2026',
+        time: '10:15 AM',
+        department: 'Pulmonology / OPD',
         diagnosis: 'Acute Bronchitis & Seasonal Allergies',
+        chiefComplaint: 'Persistent dry cough & mild fever for 3 days',
+        vitals: {
+          temperature: '98.6°F',
+          bloodPressure: '120/80 mmHg',
+          pulse: '74 bpm',
+          spo2: '99%',
+        },
+        medicines: [
+          {
+            category: 'Antibiotic',
+            name: 'Tab. Augmentin 625mg (Amoxicillin + Clavulanic Acid)',
+            dose: '625 mg',
+            timesPerDay: '1 - 0 - 1',
+            intakeTime: 'Morning & Night',
+            duration: '5 Days',
+            foodInstruction: 'After Food',
+            instructions: 'Take with full glass of water after food',
+          },
+          {
+            category: 'Analgesic / Antipyretic',
+            name: 'Tab. Dolo 650mg (Paracetamol)',
+            dose: '650 mg',
+            timesPerDay: '1 - 0 - 1',
+            intakeTime: 'SOS / If Fever',
+            duration: '3 Days',
+            foodInstruction: 'After Food',
+            instructions: 'Take only in case of fever or body ache',
+          },
+          {
+            category: 'Antiallergic',
+            name: 'Tab. Montair-LC (Montelukast + Levocetirizine)',
+            dose: '10mg / 5mg',
+            timesPerDay: '0 - 0 - 1',
+            intakeTime: 'Night only',
+            duration: '7 Days',
+            foodInstruction: 'Before Bedtime',
+            instructions: 'Take at night before sleep; may cause slight drowsiness',
+          },
+          {
+            category: 'Cough Relief',
+            name: 'Syp. Ascoril-D Cough Relief (Sugar Free)',
+            dose: '10 ml',
+            timesPerDay: '1 - 1 - 1',
+            intakeTime: 'Thrice Daily',
+            duration: '5 Days',
+            foodInstruction: 'After Meals',
+            instructions: 'Do not drink cold water for 15 minutes after taking syrup',
+          },
+        ],
+        advice: [
+          'Drink 2.5 - 3 liters of warm water daily to stay well hydrated.',
+          'Complete the full 5-day antibiotic course; do not stop early.',
+          'Avoid cold beverages, deep-fried food, and direct exposure to air conditioning.',
+          'Perform warm saline water gargles and steam inhalation twice daily.',
+        ],
+        tests: [
+          'Complete Blood Count (CBC) with Platelet Indices & ESR',
+          'Chest X-Ray (PA View if cough persists beyond 5 days)',
+        ],
+        followUpDate: '02 Nov 2026',
+        pdfUrl: 'https://viitsa.com/login',
       }),
     },
     invoice: {
       id: 'invoice',
-      name: 'Payment Receipt / Invoice',
+      name: 'Patient Invoice',
       category: 'clinical',
-      subject: 'Invoice & Receipt - INV-8491 | Apollo Health Center',
+      subject: 'Medical Invoice & Receipt - INV-2026-08492 | XR Clinic',
       targetLink: 'https://viitsa.com/login',
       html: buildInvoiceHtml({
-        patientName: 'Alex Morgan',
-        clinicName: 'Apollo Health Center',
-        invoiceNo: 'INV-8491',
-        date: '27 Oct 2026',
-        amount: 850.0,
+        patientName: 'Aarav Sharma',
+        clinicName: 'XR',
+        clinicAddress: 'Kukatpally',
+        clinicPhone: '7075545960',
+        clinicEmail: 'business8281@gmail.com',
+        doctorName: 'Dr. XR',
+        doctorSpecialization: 'Internal Medicine & Cardiology',
+        uhid: 'UHID-2026-918',
+        invoiceNo: 'INV-2026-08492',
+        receiptNo: 'RCP-8921',
+        date: '20 Nov 2026',
+        time: '09:49',
+        amount: 1350.0,
+        subtotal: 1350.0,
+        pdfUrl: 'https://viitsa.com/api/invoice/download/INV-2026-08492',
       }),
     },
     sub_activated: {
       id: 'sub_activated',
-      name: 'Subscription / Trial Active',
+      name: 'Subscription Tax Invoice',
       category: 'billing',
-      subject: '30-Day Free Trial Activated: CLINIC Plan | Viitsa Healthcare',
+      subject: 'Subscription Tax Invoice INV-2026-08492 — Viitsa Clinic Pro | XR Clinic',
       targetLink: 'https://viitsa.com/clinic/dashboard',
       html: buildSubscriptionActivatedHtml({
-        clinicName: 'Apollo Health Center',
-        planName: 'CLINIC Plan',
+        clinicName: 'XR',
+        clinicAddress: 'Kukatpally',
+        clinicPhone: '7075545960',
+        clinicEmail: 'business8281@gmail.com',
+        doctorName: 'Dr. XR',
+        doctorSpecialization: 'Internal Medicine & Cardiology',
+        uhid: 'UHID-2026-918',
+        invoiceNo: 'INV-2026-08492',
+        receiptNo: 'RCP-8921',
+        date: '20 Nov 2026',
+        time: '09:49',
+        paymentMethod: 'UPI',
+        planName: 'Small Clinic Tier',
         cycle: 'monthly',
-        isTrial: true,
-        trialEndsAt: '26 Nov 2026',
+        isTrial: false,
+        amount: 1999,
         paymentId: 'mandate_9941a82e',
-        amount: 0,
       }),
     },
     sub_change: {
       id: 'sub_change',
       name: 'Plan Change Scheduled',
       category: 'billing',
-      subject: 'Plan Change Scheduled - MULTISPECIALTY Plan',
+      subject: 'Plan Change Scheduled - MULTISPECIALTY Plan | Apollo Health Center',
       targetLink: 'https://viitsa.com/clinic/settings?tab=billing',
       html: buildSubscriptionPlanChangeScheduledHtml({
         clinicName: 'Apollo Health Center',
+        clinicAddress: 'Plot 42, Road No. 36, Jubilee Hills, Hyderabad',
+        clinicPhone: '+91 90148 65154',
+        clinicEmail: 'billing@apollohealth.com',
         currentPlan: 'CLINIC Plan',
         newPlan: 'MULTISPECIALTY Plan',
         cycle: 'annual',
         effectiveDate: '26 Nov 2026',
+        requestDate: '20 Nov 2026',
+        scheduleId: 'SCHED-2026-9482',
+        newAmount: 119990,
+        paymentMethod: 'UPI Auto-Pay',
+        transitionType: 'TIER UPGRADE & EXPANSION',
       }),
     },
     sub_cancelled: {
       id: 'sub_cancelled',
       name: 'Cancellation Scheduled',
       category: 'billing',
-      subject: 'Subscription Cancellation Scheduled - CLINIC Plan',
+      subject: 'Subscription Cancellation Scheduled - CLINIC Plan | Apollo Health Center',
       targetLink: 'https://viitsa.com/clinic/settings?tab=billing',
       html: buildSubscriptionCancelledHtml({
         clinicName: 'Apollo Health Center',
+        clinicAddress: 'Plot 42, Road No. 36, Jubilee Hills, Hyderabad',
+        clinicPhone: '+91 90148 65154',
+        clinicEmail: 'billing@apollohealth.com',
         planName: 'CLINIC Plan',
         effectiveDate: '26 Nov 2026',
+        requestDate: '20 Nov 2026',
+        scheduleId: 'SCHED-CANC-2026-8812',
         reason: 'Temporary restructuring of satellite clinic operations.',
       }),
     },
@@ -299,7 +441,7 @@ export function EmailTemplatePreviewPage() {
       <header className="bg-white border-b border-slate-200 px-6 py-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 sticky top-0 z-20 shadow-xs">
         <div className="flex items-center gap-4">
           <Link
-            to="/forgot-password"
+            to="/clinic/dashboard"
             className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-600 hover:text-slate-900 bg-slate-50 border border-slate-200 px-3 py-1.5 rounded-lg transition"
           >
             <ArrowLeft className="w-3.5 h-3.5" /> Back to App
@@ -342,7 +484,7 @@ export function EmailTemplatePreviewPage() {
           </div>
           <button
             onClick={handleCopyHtml}
-            className="inline-flex items-center gap-1.5 text-xs font-bold bg-[#0F6E56] hover:bg-[#0c5945] text-white px-3.5 py-2 rounded-xl shadow-xs transition"
+            className="inline-flex items-center gap-1.5 text-xs font-bold bg-[#059669] hover:bg-[#047857] text-white px-3.5 py-2 rounded-xl shadow-xs transition"
           >
             {copied ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-200" /> : <Copy className="w-3.5 h-3.5" />}
             {copied ? 'Copied HTML' : 'Copy HTML'}
@@ -425,7 +567,7 @@ export function EmailTemplatePreviewPage() {
                   key={current.id}
                   title="Email Template Live Preview"
                   srcDoc={current.html}
-                  className="w-full max-w-[620px] h-[640px] border-0 rounded-2xl bg-white shadow-md"
+                  className="w-full max-w-[720px] h-[900px] border-0 rounded-2xl bg-white shadow-md"
                 />
               </div>
             </div>

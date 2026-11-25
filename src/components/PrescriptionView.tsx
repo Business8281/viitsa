@@ -463,13 +463,38 @@ export function PrescriptionView({
         subject: `Doctor Prescription - ${prescriptionNo} | ${clinicInfo.name}`,
         data: {
           patientName: patientInfo.name,
-          patientAge: patientInfo.age,
+          uhid: patientInfo.uhid,
+          age: patientInfo.age,
+          gender: patientInfo.gender,
+          contactPhone: patientInfo.mobile,
           patientDob: patientInfo.dob ? formatDate(patientInfo.dob) : '',
           clinicName: clinicInfo.name,
+          clinicAddress: clinicInfo.address,
+          clinicPhone: clinicInfo.phone,
+          clinicEmail: clinicInfo.email,
           doctorName: doctorInfo.name,
+          doctorSpecialization: doctorInfo.specialization,
+          doctorRegNo: doctorInfo.regNo,
           prescriptionNo,
           date: presDate,
+          time: presTime,
+          department,
           diagnosis: clinicalNotes.diagnosis,
+          chiefComplaint: clinicalNotes.chiefComplaint,
+          vitals: clinicalNotes.vitals,
+          medicines: parsedMedicines.map((m: any) => ({
+            category: 'Oral Medication',
+            name: m.name,
+            dose: m.dose,
+            timesPerDay: m.timesPerDay,
+            intakeTime: m.intakeTime,
+            duration: m.duration,
+            foodInstruction: m.foodInstruction,
+            instructions: m.instructions,
+          })),
+          advice: adviceList,
+          tests: testsList,
+          followUpDate,
           pdfUrl,
           loginUrl
         },
@@ -586,7 +611,7 @@ export function PrescriptionView({
         <div className="flex items-start justify-between pb-2">
           {/* Top Left Branding */}
           <div>
-            <h1 className="text-3xl font-black tracking-tight text-[#0F6E56] leading-none">
+            <h1 className="text-3xl font-black tracking-tight text-[#059669] leading-none">
               VIITSA
             </h1>
             <p className="text-[11.5px] font-semibold text-slate-900 mt-1 leading-none">
@@ -608,7 +633,7 @@ export function PrescriptionView({
             <p className="text-[8.5px] font-semibold tracking-wider text-slate-500 uppercase leading-tight">
               BRIGHTER TOMORROW
             </p>
-            <div className="w-8 h-[2.5px] bg-[#0F6E56] rounded-full ml-auto mt-1" />
+            <div className="w-8 h-[2.5px] bg-[#059669] rounded-full ml-auto mt-1" />
           </div>
         </div>
 
@@ -629,9 +654,9 @@ export function PrescriptionView({
         {/* --------------------------------------------------------------------- */}
         <div className="grid grid-cols-12 gap-2.5 mb-2.5">
           {/* Left Card: Clinic Details (~55% width) */}
-          <div className="col-span-7 bg-[#F2F9F7] border border-[#0F6E56]/15 rounded-xl p-2.5 flex flex-col justify-between shadow-2xs">
+          <div className="col-span-7 bg-[#F2F9F7] border border-[#059669]/15 rounded-xl p-2.5 flex flex-col justify-between shadow-2xs">
             <div className="flex items-start gap-2.5">
-              <div className="w-10 h-10 rounded-lg bg-white border border-[#0F6E56]/20 flex items-center justify-center text-[#0F6E56] shrink-0 shadow-2xs">
+              <div className="w-10 h-10 rounded-lg bg-white border border-[#059669]/20 flex items-center justify-center text-[#059669] shrink-0 shadow-2xs">
                 <Building2 size={20} />
               </div>
               <div className="min-w-0 flex-1">
@@ -644,14 +669,14 @@ export function PrescriptionView({
               </div>
             </div>
 
-            <div className="pt-1.5 mt-1.5 border-t border-[#0F6E56]/10 space-y-1">
+            <div className="pt-1.5 mt-1.5 border-t border-[#059669]/10 space-y-1">
               <div className="flex items-center gap-2 text-[10px] text-slate-700 flex-wrap">
                 <span className="flex items-center gap-1 font-medium">
-                  <Phone size={10} className="text-[#0F6E56]" /> {clinicInfo.phone}
+                  <Phone size={10} className="text-[#059669]" /> {clinicInfo.phone}
                 </span>
                 <span className="text-slate-300">|</span>
                 <span className="flex items-center gap-1 font-medium">
-                  <Mail size={10} className="text-[#0F6E56]" /> {clinicInfo.email}
+                  <Mail size={10} className="text-[#059669]" /> {clinicInfo.email}
                 </span>
               </div>
               <div className="flex items-center gap-2 text-[9.5px] text-slate-500">
@@ -663,7 +688,7 @@ export function PrescriptionView({
           </div>
 
           {/* Right Card: Prescription Info (~45% width) */}
-          <div className="col-span-5 bg-[#F2F9F7] border border-[#0F6E56]/15 rounded-xl p-2.5 flex flex-col justify-between shadow-2xs text-[10px]">
+          <div className="col-span-5 bg-[#F2F9F7] border border-[#059669]/15 rounded-xl p-2.5 flex flex-col justify-between shadow-2xs text-[10px]">
             <div className="space-y-0.5">
               <div className="grid grid-cols-12 py-0.5">
                 <span className="col-span-5 text-slate-500 font-medium">Prescription No.</span>
@@ -696,10 +721,10 @@ export function PrescriptionView({
         {/* --------------------------------------------------------------------- */}
         {/* 4. PATIENT DETAILS CARD */}
         {/* --------------------------------------------------------------------- */}
-        <div className="border border-[#0F6E56]/15 rounded-xl overflow-hidden mb-2.5 shadow-2xs">
+        <div className="border border-[#059669]/15 rounded-xl overflow-hidden mb-2.5 shadow-2xs">
           {/* Header Strip */}
-          <div className="bg-[#EAF5F2] px-3 py-1 flex items-center gap-1.5 border-b border-[#0F6E56]/10">
-            <User size={13} className="text-[#0F6E56]" />
+          <div className="bg-[#EAF5F2] px-3 py-1 flex items-center gap-1.5 border-b border-[#059669]/10">
+            <User size={13} className="text-[#059669]" />
             <h4 className="text-[11.5px] font-bold text-slate-900">
               Patient Details
             </h4>
@@ -767,10 +792,10 @@ export function PrescriptionView({
         {/* --------------------------------------------------------------------- */}
         {/* 5. CLINICAL NOTES CARD */}
         {/* --------------------------------------------------------------------- */}
-        <div className="border border-[#0F6E56]/15 rounded-xl overflow-hidden mb-2.5 shadow-2xs">
+        <div className="border border-[#059669]/15 rounded-xl overflow-hidden mb-2.5 shadow-2xs">
           {/* Header Strip */}
-          <div className="bg-[#EAF5F2] px-3 py-1 flex items-center gap-1.5 border-b border-[#0F6E56]/10">
-            <ClipboardList size={13} className="text-[#0F6E56]" />
+          <div className="bg-[#EAF5F2] px-3 py-1 flex items-center gap-1.5 border-b border-[#059669]/10">
+            <ClipboardList size={13} className="text-[#059669]" />
             <h4 className="text-[11.5px] font-bold text-slate-900">
               Clinical Notes
             </h4>
@@ -812,9 +837,9 @@ export function PrescriptionView({
         {/* --------------------------------------------------------------------- */}
         {/* 6. PRESCRIPTION MEDICINE TABLE */}
         {/* --------------------------------------------------------------------- */}
-        <div className="mb-2.5 overflow-hidden rounded-xl border border-[#0F6E56]/20 shadow-2xs">
+        <div className="mb-2.5 overflow-hidden rounded-xl border border-[#059669]/20 shadow-2xs">
           {/* Top Primary Bar with Rx Symbol */}
-          <div className="bg-[#0F6E56] px-3.5 py-1.5 flex items-center gap-2 text-white">
+          <div className="bg-[#059669] px-3.5 py-1.5 flex items-center gap-2 text-white">
             <span className="font-serif italic font-black text-sm tracking-normal leading-none select-none">
               ℞
             </span>
@@ -877,9 +902,9 @@ export function PrescriptionView({
         {/* --------------------------------------------------------------------- */}
         <div className="grid grid-cols-2 gap-2.5 mb-2.5">
           {/* Left Card: Advice / Lifestyle Recommendations */}
-          <div className="border border-[#0F6E56]/15 rounded-xl overflow-hidden shadow-2xs flex flex-col">
-            <div className="bg-[#EAF5F2] px-3 py-1 flex items-center gap-1.5 border-b border-[#0F6E56]/10">
-              <FileText size={13} className="text-[#0F6E56]" />
+          <div className="border border-[#059669]/15 rounded-xl overflow-hidden shadow-2xs flex flex-col">
+            <div className="bg-[#EAF5F2] px-3 py-1 flex items-center gap-1.5 border-b border-[#059669]/10">
+              <FileText size={13} className="text-[#059669]" />
               <h4 className="text-[11px] font-bold text-slate-900">
                 Advice / Lifestyle Recommendations
               </h4>
@@ -887,7 +912,7 @@ export function PrescriptionView({
             <div className="p-2.5 flex-1 bg-white text-[9.5px] text-slate-700 space-y-1">
               {adviceList.map((adv: any, i: number) => (
                 <div key={i} className="flex items-start gap-1.5 leading-snug">
-                  <span className="text-[#0F6E56] font-black text-xs leading-none shrink-0">•</span>
+                  <span className="text-[#059669] font-black text-xs leading-none shrink-0">•</span>
                   <span>{adv}</span>
                 </div>
               ))}
@@ -895,9 +920,9 @@ export function PrescriptionView({
           </div>
 
           {/* Right Card: Recommended Tests / Follow-up */}
-          <div className="border border-[#0F6E56]/15 rounded-xl overflow-hidden shadow-2xs flex flex-col">
-            <div className="bg-[#EAF5F2] px-3 py-1 flex items-center gap-1.5 border-b border-[#0F6E56]/10">
-              <FlaskConical size={13} className="text-[#0F6E56]" />
+          <div className="border border-[#059669]/15 rounded-xl overflow-hidden shadow-2xs flex flex-col">
+            <div className="bg-[#EAF5F2] px-3 py-1 flex items-center gap-1.5 border-b border-[#059669]/10">
+              <FlaskConical size={13} className="text-[#059669]" />
               <h4 className="text-[11px] font-bold text-slate-900">
                 Recommended Tests / Follow-up
               </h4>
@@ -905,7 +930,7 @@ export function PrescriptionView({
             <div className="p-2.5 flex-1 bg-white text-[9.5px] text-slate-700 space-y-1">
               {testsList.map((test: any, i: number) => (
                 <div key={i} className="flex items-start gap-1.5 leading-snug">
-                  <span className="text-[#0F6E56] font-black text-xs leading-none shrink-0">•</span>
+                  <span className="text-[#059669] font-black text-xs leading-none shrink-0">•</span>
                   <span>{test}</span>
                 </div>
               ))}
@@ -958,7 +983,7 @@ export function PrescriptionView({
             <p className="text-[8.5px] text-slate-500 leading-tight">
               Thank you for choosing
             </p>
-            <h6 className="text-[15px] font-black tracking-tight text-[#0F6E56] leading-tight">
+            <h6 className="text-[15px] font-black tracking-tight text-[#059669] leading-tight">
               VIITSA
             </h6>
             <p className="text-[7.5px] font-bold tracking-wider text-slate-500 uppercase leading-tight">
@@ -969,17 +994,17 @@ export function PrescriptionView({
           {/* Footer Center: Benefits Pillars */}
           <div className="col-span-6 flex items-center justify-center gap-3">
             <div className="flex flex-col items-center text-center">
-              <ShieldCheck size={13} className="text-[#0F6E56] mb-0.5" />
+              <ShieldCheck size={13} className="text-[#059669] mb-0.5" />
               <span className="text-[7.5px] font-bold text-slate-700 leading-tight">Secure<br />Patient Records</span>
             </div>
             <div className="w-px h-5 bg-slate-200" />
             <div className="flex flex-col items-center text-center">
-              <Users size={13} className="text-[#0F6E56] mb-0.5" />
+              <Users size={13} className="text-[#059669] mb-0.5" />
               <span className="text-[7.5px] font-bold text-slate-700 leading-tight">Seamless<br />Clinic Experience</span>
             </div>
             <div className="w-px h-5 bg-slate-200" />
             <div className="flex flex-col items-center text-center">
-              <TrendingUp size={13} className="text-[#0F6E56] mb-0.5" />
+              <TrendingUp size={13} className="text-[#059669] mb-0.5" />
               <span className="text-[7.5px] font-bold text-slate-700 leading-tight">Better<br />Health Outcomes</span>
             </div>
           </div>
@@ -992,7 +1017,7 @@ export function PrescriptionView({
             <p className="text-[7.5px] text-slate-500 leading-tight mt-0.5">
               Clinic Management & Patient Engagement Platform
             </p>
-            <p className="text-[7.5px] text-[#0F6E56] font-semibold leading-tight mt-0.5">
+            <p className="text-[7.5px] text-[#059669] font-semibold leading-tight mt-0.5">
               www.viitsa.com
             </p>
           </div>
@@ -1005,7 +1030,7 @@ export function PrescriptionView({
           <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 animate-scale-in">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100">
               <div className="flex items-center gap-2.5">
-                <div className="h-9 w-9 rounded-xl bg-teal-50 border border-teal-200 flex items-center justify-center text-[#0F6E56]">
+                <div className="h-9 w-9 rounded-xl bg-teal-50 border border-teal-200 flex items-center justify-center text-[#059669]">
                   <Mail size={18} />
                 </div>
                 <div>

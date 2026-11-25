@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useMemo } from 'react';
-import { useSearchParams, Navigate, useNavigate } from 'react-router-dom';
+import { useSearchParams, Navigate, useNavigate, Link } from 'react-router-dom';
 import { 
   Save, Building2, Clock, Stethoscope, Users, Bell, Plus, AlertCircle, 
   RefreshCw, QrCode, Link2, Share2, FileText, Download, Eye, EyeOff, ExternalLink, 
@@ -7,7 +7,8 @@ import {
   Mail, Award, Briefcase, IndianRupee, MapPin, GraduationCap, Search, 
   FileCheck, Check, Upload, X, ShieldCheck, Copy, Printer, Smartphone,
   Crown, Sparkles, Zap, Lock, MessageSquare, HardDrive, AlertTriangle, HelpCircle,
-  DollarSign, PauseCircle, ArrowLeftRight, ArrowUpRight, ArrowDownRight, TrendingUp, TrendingDown
+  DollarSign, PauseCircle, ArrowLeftRight, ArrowUpRight, ArrowDownRight, TrendingUp, TrendingDown,
+  Palette
 } from 'lucide-react';
 import { DEFAULT_PLANS, getUsageCounter, getEffectiveLimits } from '../lib/entitlementsService';
 import type { UsageCounter, PlanLimits } from '../lib/types';
@@ -87,6 +88,29 @@ const CANCELLATION_REASONS = [
 type Tab = 'profile' | 'hours' | 'doctors' | 'staff' | 'notifications' | 'patient-access' | 'billing';
 const VALID_TABS: Tab[] = ['profile', 'hours', 'doctors', 'staff', 'notifications', 'patient-access', 'billing'];
 
+export function getStaffDocuments(u: Partial<User> | null | undefined): { name: string; url: string; type?: string; uploaded_at?: string; source?: string }[] {
+  if (!u) return [];
+  const rawList = [
+    ...(u.certificates || []).map(c => ({ ...c, source: c.type || 'Certificate' })),
+    ...(u.onboarding_documents || []).map(c => ({ ...c, source: c.type || 'Onboarding Document' })),
+    ...(u.documents || []).map(c => ({ ...c, source: c.type || 'Credential' }))
+  ];
+
+  const seen = new Set<string>();
+  const uniqueDocs: typeof rawList = [];
+
+  for (const doc of rawList) {
+    if (!doc || !doc.url) continue;
+    const normUrl = doc.url.trim().toLowerCase();
+    if (!seen.has(normUrl)) {
+      seen.add(normUrl);
+      uniqueDocs.push(doc);
+    }
+  }
+
+  return uniqueDocs;
+}
+
 export function SettingsScreen() {
   const { clinic, user, logout } = useAuth();
   const navigate = useNavigate();
@@ -111,6 +135,7 @@ export function SettingsScreen() {
   const [clinicSpeciality, setClinicSpeciality] = useState('');
   const [clinicPhone, setClinicPhone] = useState('');
   const [clinicEmail, setClinicEmail] = useState('');
+  const [clinicConsultationFee, setClinicConsultationFee] = useState('');
   const [logoUrl, setLogoUrl] = useState('');
   const [uploadingLogo, setUploadingLogo] = useState(false);
   const [openHours, setOpenHours] = useState('09:00');
@@ -299,6 +324,7 @@ export function SettingsScreen() {
     setClinicSpeciality(clinic.speciality ?? '');
     setClinicPhone(clinic.phone ?? '');
     setClinicEmail(clinic.email ?? '');
+    setClinicConsultationFee(clinic.consultation_fee != null ? String(clinic.consultation_fee) : '');
     setLogoUrl(clinic.logo_url ?? '');
     if (clinic.working_hours) {
       setOpenHours(clinic.working_hours.open ?? '09:00');
@@ -314,6 +340,9 @@ export function SettingsScreen() {
         setLiveClinic(cData);
         if (cData.city !== undefined) setClinicCity(cData.city || '');
         if (cData.speciality !== undefined) setClinicSpeciality(cData.speciality || '');
+        if (cData.consultation_fee !== undefined && cData.consultation_fee !== null) {
+          setClinicConsultationFee(String(cData.consultation_fee));
+        }
         if (cData.working_hours) {
           if (cData.working_hours.open) setOpenHours(cData.working_hours.open);
           if (cData.working_hours.close) setCloseHours(cData.working_hours.close);
@@ -333,6 +362,9 @@ export function SettingsScreen() {
       if (settingsData) {
         setSlotDuration(settingsData.slot_duration_minutes ?? 20);
         setUpiId((settingsData as any).upi_id ?? '');
+        if ((settingsData as any).consultation_fee !== undefined && (settingsData as any).consultation_fee !== null) {
+          setClinicConsultationFee(prev => prev || String((settingsData as any).consultation_fee));
+        }
       }
     });
     unsubs.push(unsubSettings);
@@ -391,6 +423,7 @@ export function SettingsScreen() {
   const saveProfile = async () => {
     setSavingProfile(true);
     try {
+      const feeNum = clinicConsultationFee ? Number(clinicConsultationFee) : null;
       await updateDoc(doc(db, 'clinics', clinic!.clinic_id), {
         name: clinicName,
         address: clinicAddress,
@@ -398,8 +431,20 @@ export function SettingsScreen() {
         speciality: clinicSpeciality,
         phone: clinicPhone,
         email: clinicEmail,
+        consultation_fee: feeNum,
         logo_url: logoUrl
       });
+      // Synchronize consultation fee with clinic_settings
+      await setDoc(doc(db, 'clinic_settings', clinic!.clinic_id), {
+        clinic_id: clinic!.clinic_id,
+        consultation_fee: feeNum,
+        updated_at: new Date().toISOString()
+      }, { merge: true });
+      if (user?.role === 'clinic_admin') {
+        updateDoc(doc(db, 'users', user.user_id), {
+          consultation_fee: feeNum
+        }).catch(() => {});
+      }
       toast('Clinic profile updated.', 'success');
     } catch(error) {
       toast('Unable to update clinic profile. Please try again.', 'error');
@@ -605,23 +650,31 @@ export function SettingsScreen() {
   const handleDeleteDocument = async (targetUser: User, docItem: { name: string; url: string }) => {
     if (!window.confirm(`Are you sure you want to remove the document "${docItem.name}"?`)) return;
     try {
+      const updatedCerts = (targetUser.certificates || []).filter(c => c.url !== docItem.url);
+      const updatedOnboarding = (targetUser.onboarding_documents || []).filter(c => c.url !== docItem.url);
+      const updatedDocs = (targetUser.documents || []).filter(c => c.url !== docItem.url);
+
       await updateDoc(doc(db, 'users', targetUser.user_id), {
-        certificates: arrayRemove(docItem),
-        onboarding_documents: arrayRemove(docItem)
+        certificates: updatedCerts,
+        onboarding_documents: updatedOnboarding,
+        documents: updatedDocs,
+        updated_at: new Date().toISOString()
       });
       setUsers(prev => prev.map(u => {
         if (u.user_id !== targetUser.user_id) return u;
         return {
           ...u,
-          certificates: (u.certificates || []).filter(c => c.url !== docItem.url),
-          onboarding_documents: (u.onboarding_documents || []).filter(c => c.url !== docItem.url)
+          certificates: updatedCerts,
+          onboarding_documents: updatedOnboarding,
+          documents: updatedDocs
         };
       }));
       if (detailsUser && detailsUser.user_id === targetUser.user_id) {
         setDetailsUser(prev => prev ? {
           ...prev,
-          certificates: (prev.certificates || []).filter(c => c.url !== docItem.url),
-          onboarding_documents: (prev.onboarding_documents || []).filter(c => c.url !== docItem.url)
+          certificates: updatedCerts,
+          onboarding_documents: updatedOnboarding,
+          documents: updatedDocs
         } : null);
       }
       toast(`Document "${docItem.name}" removed.`, 'success');
@@ -724,6 +777,37 @@ export function SettingsScreen() {
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div><label className="label">Address</label><input className="input" value={clinicAddress} onChange={e => setClinicAddress(e.target.value)} /></div>
               <div><label className="label">City</label><input className="input" value={clinicCity} onChange={e => setClinicCity(e.target.value)} placeholder="e.g. Bangalore" /></div>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="label">Standard Consultation Fee (₹)</label>
+                <input
+                  type="number"
+                  min="0"
+                  className="input"
+                  value={clinicConsultationFee}
+                  onChange={e => setClinicConsultationFee(e.target.value)}
+                  placeholder="e.g. 500"
+                />
+                <p className="text-[11px] text-ink-subtle mt-1">Default fee pre-filled when creating patient bills.</p>
+              </div>
+
+              <div>
+                <label className="label">Invoice Template & Design</label>
+                <div className="bg-slate-50 border border-slate-200 rounded-xl p-2.5 flex items-center justify-between">
+                  <div>
+                    <p className="text-xs font-bold text-slate-800">4 Template Styles</p>
+                    <p className="text-[11px] text-slate-500">Pick layouts, colors, and legal terms</p>
+                  </div>
+                  <Link
+                    to="/invoice-preview"
+                    className="btn-outline text-xs py-1.5 px-3 flex items-center gap-1.5 font-bold hover:text-teal-800 hover:border-teal-600 bg-white"
+                  >
+                    <Palette size={13} className="text-teal-700" /> Customize
+                  </Link>
+                </div>
+                <p className="text-[11px] text-ink-subtle mt-1">Live visual editor for your clinic bills and A4 PDFs.</p>
+              </div>
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
@@ -1978,16 +2062,23 @@ export function SettingsScreen() {
           onSuccess={(newDocs) => {
             setUsers(prev => prev.map(u => {
               if (u.user_id !== uploadDocUser.user_id) return u;
+              const existingUrls = new Set((u.certificates || []).map(c => c.url));
+              const toAdd = newDocs.filter(d => !existingUrls.has(d.url));
               return {
                 ...u,
-                certificates: [...(u.certificates || []), ...newDocs]
+                certificates: [...(u.certificates || []), ...toAdd]
               };
             }));
             if (detailsUser && detailsUser.user_id === uploadDocUser.user_id) {
-              setDetailsUser(prev => prev ? {
-                ...prev,
-                certificates: [...(prev.certificates || []), ...newDocs]
-              } : null);
+              setDetailsUser(prev => {
+                if (!prev) return null;
+                const existingUrls = new Set((prev.certificates || []).map(c => c.url));
+                const toAdd = newDocs.filter(d => !existingUrls.has(d.url));
+                return {
+                  ...prev,
+                  certificates: [...(prev.certificates || []), ...toAdd]
+                };
+              });
             }
             setUploadDocUser(null);
           }} 
@@ -2802,7 +2893,7 @@ function UserManagement({
   }, [users, tab, searchTerm]);
 
   const activeCount = filtered.filter(u => u.active).length;
-  const docsCount = filtered.reduce((acc, u) => acc + (u.certificates?.length || 0) + (u.onboarding_documents?.length || 0), 0);
+  const docsCount = filtered.reduce((acc, u) => acc + getStaffDocuments(u).length, 0);
 
   return (
     <div className="space-y-4">
@@ -2887,11 +2978,7 @@ function UserManagement({
       ) : (
         <div className="space-y-3">
           {filtered.map(u => {
-            const allDocs = [
-              ...(u.certificates || []).map(c => ({ ...c, source: 'Certificate' })),
-              ...(u.onboarding_documents || []).map(c => ({ ...c, source: 'Onboarding' })),
-              ...(u.documents || []).map(c => ({ ...c, source: 'Credential' }))
-            ];
+            const allDocs = getStaffDocuments(u);
 
             const displayId = u.display_id || u.id_number || (u.user_id ? `${tab === 'doctors' ? 'DOC' : 'STF'}-${u.user_id.slice(0, 6).toUpperCase()}` : 'ID');
             const isRoleAdmin = u.role === 'clinic_admin' || u.role === 'admin';
@@ -3010,7 +3097,7 @@ function UserManagement({
                       <IndianRupee size={11} className="text-primary" /> Consultation Fee
                     </span>
                     <span className="font-semibold text-ink">
-                      {u.consultation_fee ? `₹${u.consultation_fee} per visit` : (tab === 'doctors' ? 'Standard Clinic Fee' : 'N/A')}
+                      {u.consultation_fee ? `₹${u.consultation_fee} per visit` : (tab === 'doctors' ? (clinic?.consultation_fee ? `Standard Clinic Fee (₹${clinic.consultation_fee})` : 'Standard Clinic Fee') : 'N/A')}
                     </span>
                   </div>
 
@@ -3241,10 +3328,9 @@ function UploadStaffDocsModal({
         });
       }
 
-      // Batch save to Firestore user doc
+      // Batch save to Firestore user doc (saved cleanly to certificates without duplicate entries)
       await updateDoc(doc(db, 'users', user.user_id), {
         certificates: arrayUnion(...uploadedList),
-        onboarding_documents: arrayUnion(...uploadedList),
         updated_at: new Date().toISOString()
       });
 
@@ -3269,7 +3355,10 @@ function UploadStaffDocsModal({
           accept=".pdf,.png,.jpg,.jpeg,.webp,.doc,.docx" 
           className="hidden" 
           id="staff-docs-multi-input"
-          onChange={(e) => handleFilesAdded(e.target.files)} 
+          onChange={(e) => {
+            handleFilesAdded(e.target.files);
+            e.target.value = '';
+          }} 
         />
 
         {queuedFiles.length === 0 ? (
@@ -3547,7 +3636,10 @@ function UploadClinicDocsModal({
           accept=".pdf,.png,.jpg,.jpeg,.webp,.doc,.docx" 
           className="hidden" 
           id="clinic-docs-multi-input"
-          onChange={(e) => handleFilesAdded(e.target.files)} 
+          onChange={(e) => {
+            handleFilesAdded(e.target.files);
+            e.target.value = '';
+          }} 
         />
 
         {queuedFiles.length === 0 ? (
@@ -3797,11 +3889,7 @@ function UserDetailsModal({
   onUploadDoc: () => void;
   onDeleteDoc: (doc: { name: string; url: string }) => void;
 }) {
-  const allDocs = [
-    ...(user.certificates || []).map(c => ({ ...c, source: 'Certificate' })),
-    ...(user.onboarding_documents || []).map(c => ({ ...c, source: 'Onboarding Document' })),
-    ...(user.documents || []).map(c => ({ ...c, source: 'Credential' }))
-  ];
+  const allDocs = getStaffDocuments(user);
 
   const displayId = user.display_id || user.id_number || (user.user_id ? `DOC-${user.user_id.slice(0, 6).toUpperCase()}` : '—');
 
@@ -3867,7 +3955,7 @@ function UserDetailsModal({
 
           <div className="bg-white p-3 rounded-lg border border-black/10">
             <span className="text-[10px] text-ink-subtle uppercase font-bold block mb-0.5">Consultation Fee</span>
-            <span className="font-semibold text-ink">{user.consultation_fee ? `₹${user.consultation_fee}` : 'Standard Clinic Fee'}</span>
+            <span className="font-semibold text-ink">{user.consultation_fee ? `₹${user.consultation_fee}` : (clinic?.consultation_fee ? `Standard Clinic Fee (₹${clinic.consultation_fee})` : 'Standard Clinic Fee')}</span>
           </div>
 
           <div className="bg-white p-3 rounded-lg border border-black/10">

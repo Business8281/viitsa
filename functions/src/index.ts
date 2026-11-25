@@ -1226,6 +1226,13 @@ export const onClinicSubscriptionStatusChanged = onDocumentUpdated(
         invoiceDate: formatDisplayDate(new Date()),
         supportPhone: '+91 73961 11081',
         clinicId,
+        customerEmail: afterData.email || '',
+        customerPhone: clinicPhone,
+        clinicAddress: afterData.address || '',
+        cycle,
+        tier,
+        paymentMethod: 'Online (UPI / Card)',
+        isTrial: false,
       });
     }
 
@@ -1365,7 +1372,24 @@ export const createRazorpayOrder = onCall(async (request) => {
 });
 
 export const verifyRazorpayPayment = onCall(async (request) => {
-  const { razorpay_order_id, razorpay_subscription_id, razorpay_payment_id, razorpay_signature } = request.data || {};
+  const {
+    razorpay_order_id,
+    razorpay_subscription_id,
+    razorpay_payment_id,
+    razorpay_signature,
+    razorpay_payment_link_id,
+    razorpay_payment_link_reference_id,
+    razorpay_payment_link_status,
+    clinicId,
+    clinic_id,
+    userId,
+    user_id,
+    plan,
+    tier,
+    cycle,
+    billing_cycle,
+    is_trial
+  } = request.data || {};
   
   if (!request.auth) {
     throw new HttpsError("unauthenticated", "User must be logged in to verify payment.");
@@ -1375,31 +1399,173 @@ export const verifyRazorpayPayment = onCall(async (request) => {
     throw new HttpsError("invalid-argument", "Missing payment ID or signature.");
   }
 
-  if (!razorpay_order_id && !razorpay_subscription_id) {
-    throw new HttpsError("invalid-argument", "Missing order ID or subscription ID.");
+  if (!razorpay_order_id && !razorpay_subscription_id && !razorpay_payment_link_id) {
+    throw new HttpsError("invalid-argument", "Missing order ID, subscription ID, or payment link ID.");
   }
   
   const keySecret = process.env.RAZORPAY_KEY_SECRET || "";
-  
-  let body = "";
-  if (razorpay_subscription_id) {
-    body = razorpay_payment_id + "|" + razorpay_subscription_id;
-  } else {
-    body = razorpay_order_id + "|" + razorpay_payment_id;
+  if (!keySecret) {
+    console.error("[verifyRazorpayPayment] RAZORPAY_KEY_SECRET is not configured.");
+    throw new HttpsError("internal", "Payment gateway configuration error.");
   }
   
-  const expectedSignature = crypto
-    .createHmac("sha256", keySecret)
-    .update(body.toString())
-    .digest("hex");
-    
-  const expBuf = Buffer.from(expectedSignature, "utf-8");
-  const actBuf = Buffer.from(razorpay_signature, "utf-8");
-  if (expBuf.length === actBuf.length && crypto.timingSafeEqual(expBuf, actBuf)) {
-    return { success: true };
-  } else {
+  // Verify HMAC-SHA256 signature using timingSafeEqual
+  let isValidSignature = false;
+
+  const checkSignature = (payload: string): boolean => {
+    try {
+      const expected = crypto.createHmac("sha256", keySecret).update(payload).digest("hex");
+      const expBuf = Buffer.from(expected, "utf-8");
+      const actBuf = Buffer.from(razorpay_signature, "utf-8");
+      return expBuf.length === actBuf.length && crypto.timingSafeEqual(expBuf, actBuf);
+    } catch (_e) {
+      return false;
+    }
+  };
+
+  if (razorpay_subscription_id) {
+    isValidSignature = checkSignature(`${razorpay_payment_id}|${razorpay_subscription_id}`);
+  } else if (razorpay_order_id) {
+    isValidSignature = checkSignature(`${razorpay_order_id}|${razorpay_payment_id}`);
+  } else if (razorpay_payment_link_id) {
+    const status = razorpay_payment_link_status || "paid";
+    if (razorpay_payment_link_reference_id) {
+      isValidSignature = checkSignature(`${razorpay_payment_link_id}|${razorpay_payment_link_reference_id}|${status}|${razorpay_payment_id}`);
+    }
+    if (!isValidSignature) {
+      isValidSignature = checkSignature(`${razorpay_payment_link_id}|${status}|${razorpay_payment_id}`);
+    }
+    if (!isValidSignature) {
+      isValidSignature = checkSignature(`${razorpay_payment_link_id}|${razorpay_payment_id}`);
+    }
+  }
+
+  if (!isValidSignature) {
+    console.warn("[verifyRazorpayPayment] Cryptographic signature mismatch for payment:", razorpay_payment_id);
     throw new HttpsError("invalid-argument", "Invalid signature.");
   }
+
+  // Resolve target clinic and user
+  let targetClinicId = clinicId || clinic_id;
+  const targetUserId = userId || user_id || request.auth.uid;
+  const db = admin.firestore();
+
+  if (!targetClinicId && targetUserId) {
+    const userDoc = await db.collection("users").doc(targetUserId).get();
+    if (userDoc.exists) {
+      targetClinicId = userDoc.data()?.clinic_id;
+    }
+  }
+
+  if (!targetClinicId) {
+    throw new HttpsError("invalid-argument", "Unable to resolve target clinic ID for subscription activation.");
+  }
+
+  // Caller tenant authorization check
+  if (request.auth.uid !== targetUserId) {
+    const callerDoc = await db.collection("users").doc(request.auth.uid).get();
+    const callerData = callerDoc.data() || {};
+    if (callerData.clinic_id !== targetClinicId && callerData.role !== "superadmin") {
+      throw new HttpsError("permission-denied", "Unauthorized to activate subscription for this clinic.");
+    }
+  }
+
+  // Calculate plan details and period end
+  const activePlan = (plan || tier || "clinic").toLowerCase();
+  const activeCycle = (billing_cycle || cycle || "monthly").toLowerCase();
+  const isTrial = Boolean(is_trial);
+  const durationDays = isTrial ? 30 : activeCycle === "annual" ? 365 : 30;
+  const now = new Date();
+  const nowIso = now.toISOString();
+  const periodEndIso = new Date(now.getTime() + durationDays * 24 * 60 * 60 * 1000).toISOString();
+
+  // Perform genuine server-side activation in clinics/{clinicId}
+  const clinicUpdates: Record<string, any> = {
+    subscription_status: isTrial ? "trial" : "active",
+    subscription_plan: activePlan,
+    subscription_billing_cycle: activeCycle,
+    plan: activePlan,
+    billing_cycle: activeCycle,
+    subscription_id: razorpay_subscription_id || null,
+    razorpay_subscription_id: razorpay_subscription_id || null,
+    razorpay_order_id: razorpay_order_id || null,
+    last_payment_id: razorpay_payment_id,
+    last_payment_status: "paid",
+    subscription_activated_at: nowIso,
+    subscription_period_end: periodEndIso,
+    subscription_updated_at: nowIso,
+    cancel_at_period_end: false,
+    cancel_effective_date: null,
+    change_scheduled: false,
+    scheduled_plan: null,
+    scheduled_billing_cycle: null,
+    scheduled_effective_date: null,
+    scheduled_change_type: null,
+    subscription_auto_renew: true,
+    updated_at: nowIso,
+  };
+
+  if (isTrial) {
+    clinicUpdates.trial_used = true;
+    clinicUpdates.has_used_trial = true;
+    clinicUpdates.trial_activated = true;
+    clinicUpdates.trial_completed = false;
+    clinicUpdates.trial_status = "active_trial";
+    clinicUpdates.trial_started_at = nowIso;
+    clinicUpdates.trial_ends_at = periodEndIso;
+  }
+
+  await db.collection("clinics").doc(targetClinicId).set(clinicUpdates, { merge: true });
+
+  // Update users/{userId} if resolved
+  if (targetUserId) {
+    const userUpdates: Record<string, any> = {
+      clinic_subscription_status: isTrial ? "trial" : "active",
+      subscription_plan: activePlan,
+      subscription_billing_cycle: activeCycle,
+      plan: activePlan,
+      billing_cycle: activeCycle,
+      updated_at: nowIso,
+    };
+    if (isTrial) {
+      userUpdates.trial_used = true;
+      userUpdates.has_used_trial = true;
+      userUpdates.trial_completed = false;
+      userUpdates.trial_ends_at = periodEndIso;
+    }
+    await db.collection("users").doc(targetUserId).set(userUpdates, { merge: true });
+  }
+
+  // Record in subscriptions collection for persistent billing audit trail
+  await db.collection("subscriptions").add({
+    clinic_id: targetClinicId,
+    user_id: targetUserId || null,
+    tier: activePlan,
+    plan_name: isTrial ? `${activePlan.toUpperCase()} Plan (30-Day Free Trial)` : `${activePlan.toUpperCase()} Plan`,
+    billing_cycle: activeCycle,
+    status: isTrial ? "trial" : "active",
+    is_trial: isTrial,
+    trial_ends_at: isTrial ? periodEndIso : null,
+    payment_id: razorpay_payment_id,
+    order_id: razorpay_order_id || null,
+    subscription_id: razorpay_subscription_id || null,
+    payment_status: "paid",
+    verified_server_side: true,
+    created_at: admin.firestore.FieldValue.serverTimestamp(),
+    updated_at: admin.firestore.FieldValue.serverTimestamp(),
+  });
+
+  console.log(`[verifyRazorpayPayment] Successfully verified payment ${razorpay_payment_id} and activated clinic ${targetClinicId} (${activePlan}/${activeCycle}).`);
+
+  return {
+    success: true,
+    clinicId: targetClinicId,
+    userId: targetUserId,
+    status: isTrial ? "trial" : "active",
+    plan: activePlan,
+    billing_cycle: activeCycle,
+    subscription_period_end: periodEndIso,
+  };
 });
 
 

@@ -12,7 +12,6 @@ import {
 import { useAuth } from '../lib/auth';
 import { ViitsaLogo } from '../components/ViitsaLogo';
 import { type Role, ADMIN_ROLES, CLINIC_ROLES } from '../lib/types';
-import { checkRegistrationConflict } from '../lib/emailService';
 
 function GoogleIcon({ className = "w-5 h-5" }: { className?: string }) {
   return (
@@ -162,14 +161,6 @@ export function AuthLoginPage() {
     }
 
     setLoading(true);
-
-    // Upfront Role Check: Block Clinic and Admin accounts from logging in at the Patient portal
-    const conflictCheck = await checkRegistrationConflict(cleanPhone, undefined, 'patient', 'login', 'patient');
-    if (!conflictCheck.allowed || conflictCheck.hasConflict) {
-      setLoading(false);
-      setLocalError(conflictCheck.conflictMessage || 'This mobile number cannot be used on the Patient Portal.');
-      return;
-    }
 
     const res = await sendWhatsAppLoginOtp(cleanPhone, 'patient', 'login');
     setLoading(false);

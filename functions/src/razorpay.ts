@@ -3,8 +3,7 @@ import * as admin from "firebase-admin";
 import Razorpay from "razorpay";
 import * as crypto from "crypto";
 import * as nodemailer from "nodemailer";
-import PDFDocument from "pdfkit";
-import { generateSubscriptionInvoicePdf } from "./invoicePdf";
+import { generateSubscriptionInvoicePdf, ensureSubscriptionInvoicePdfUrl } from "./invoicePdf";
 import {
   sendClinicPaymentFailed,
   sendClinicSubCancelled,
@@ -61,7 +60,7 @@ function buildRazorpayEmailHtml(options: {
       <td align="center" style="padding: 36px 16px;">
         <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%" style="max-width: 580px; background-color: #ffffff; border-radius: 16px; overflow: hidden; border: 1px solid #e2e8f0; box-shadow: 0 10px 25px -5px rgba(15, 23, 42, 0.05), 0 8px 10px -6px rgba(15, 23, 42, 0.03);">
           <tr>
-            <td style="background: linear-gradient(135deg, #063229 0%, #0F6E56 50%, #128064 100%); padding: 28px 24px; text-align: center;">
+            <td style="background: linear-gradient(135deg, #047857 0%, #059669 50%, #10b981 100%); padding: 28px 24px; text-align: center;">
               <div style="font-size: 22px; font-weight: 800; letter-spacing: 2.5px; color: #ffffff; text-transform: uppercase; margin: 0 0 6px 0;">VIITSA</div>
               <div style="font-size: 11px; font-weight: 600; color: #bbf7d0; letter-spacing: 1.2px; text-transform: uppercase;">${options.subtitle}</div>
             </td>
@@ -87,7 +86,7 @@ function buildRazorpayEmailHtml(options: {
 
               ${options.buttonText && options.buttonUrl ? `
               <div style="text-align: center; margin: 28px 0 12px 0;">
-                <a href="${options.buttonUrl}" target="_blank" style="display: inline-block; background-color: #0F6E56; color: #ffffff; padding: 14px 34px; font-size: 14px; font-weight: 700; text-decoration: none; border-radius: 10px; box-shadow: 0 4px 12px rgba(15, 110, 86, 0.25);">
+                <a href="${options.buttonUrl}" target="_blank" style="display: inline-block; background-color: #059669; color: #ffffff; padding: 14px 34px; font-size: 14px; font-weight: 700; text-decoration: none; border-radius: 10px; box-shadow: 0 4px 12px rgba(5, 150, 105, 0.25);">
                   ${options.buttonText}
                 </a>
               </div>
@@ -104,7 +103,7 @@ function buildRazorpayEmailHtml(options: {
             <td style="padding: 24px 28px 28px 28px; background-color: #f8fafc; border-top: 1px solid #e2e8f0; text-align: center;">
               <p style="margin: 0 0 8px 0; font-size: 12px; color: #64748b; line-height: 1.5;">
                 This is an official automated notification from <strong>Viitsa Healthcare</strong>.<br/>
-                For billing support, reach out to us at <a href="mailto:support@viitsa.com" style="color: #0F6E56; font-weight: 600; text-decoration: none;">support@viitsa.com</a>
+                For billing support, reach out to us at <a href="mailto:support@viitsa.com" style="color: #059669; font-weight: 600; text-decoration: none;">support@viitsa.com</a>
               </p>
               <p style="margin: 10px 0 0 0; font-size: 11px; color: #94a3b8;">
                 © ${currentYear} Viitsa Healthcare Technologies. All rights reserved.
@@ -131,33 +130,42 @@ function buildRazorpayEmailHtml(options: {
 async function resolveClinicAdminPhone(clinicId?: string, fallbackPhone?: string): Promise<string | null> {
   if (clinicId) {
     try {
-      const cDoc = await getDb().collection("clinics").doc(clinicId).get();
+      let cDoc = await getDb().collection("clinics").doc(clinicId).get();
+      let actualClinicId = clinicId;
+      if (!cDoc.exists) {
+        // Self-healing: if clinicId passed was a clinic name, query clinics collection by name
+        const byNameSnap = await getDb().collection("clinics").where("name", "==", clinicId.trim()).limit(1).get();
+        if (!byNameSnap.empty) {
+          cDoc = byNameSnap.docs[0];
+          actualClinicId = cDoc.id;
+        }
+      }
       if (cDoc.exists) {
         const cData = cDoc.data() || {};
         const cp = cData.phone || cData.contact_phone || cData.reception_phone || cData.mobile || cData.whatsapp_phone;
-        if (cp) return cp;
+        if (cp) return String(cp).trim();
         const ownerId = cData.owner_user_id || cData.admin_user_id;
         if (ownerId) {
           const uDoc = await getDb().collection("users").doc(ownerId).get();
           if (uDoc.exists) {
             const uData = uDoc.data() || {};
             const up = uData.phone || uData.phone_number || uData.phoneNumber || uData.contact_phone || uData.mobile;
-            if (up) return up;
+            if (up) return String(up).trim();
           }
         }
       }
-      const usersSnap = await getDb().collection("users").where("clinic_id", "==", clinicId).get();
+      const usersSnap = await getDb().collection("users").where("clinic_id", "==", actualClinicId).get();
       for (const uDoc of usersSnap.docs) {
         const uData = uDoc.data();
         if (uData.role === "clinic_admin") {
           const up = uData.phone || uData.phone_number || uData.phoneNumber || uData.contact_phone || uData.mobile;
-          if (up) return up;
+          if (up) return String(up).trim();
         }
       }
       for (const uDoc of usersSnap.docs) {
         const uData = uDoc.data();
         const up = uData.phone || uData.phone_number || uData.phoneNumber || uData.contact_phone || uData.mobile;
-        if (up) return up;
+        if (up) return String(up).trim();
       }
     } catch (e) {
       console.warn("Error resolving clinic admin phone from database:", e);
@@ -785,7 +793,7 @@ export const razorpayWebhook = onRequest(async (req, res) => {
                 subtitle: isTrial ? "Free Trial Activated" : "Subscription Active",
                 badgeIcon: "✓",
                 badgeBg: "#ecfdf5",
-                badgeColor: "#0F6E56",
+                badgeColor: "#059669",
                 heading: isTrial ? "30-Day Free Trial Activated!" : "Subscription Confirmed",
                 recipientName: "Doctor / Clinic Administrator",
                 leadText: isTrial 
@@ -972,7 +980,7 @@ export const razorpayWebhook = onRequest(async (req, res) => {
                   subtitle: "Subscription Renewed",
                   badgeIcon: "✓",
                   badgeBg: "#ecfdf5",
-                  badgeColor: "#0F6E56",
+                  badgeColor: "#059669",
                   heading: "Subscription Renewed Successfully",
                   recipientName: "Doctor / Clinic Administrator",
                   leadText: `Your recurring subscription payment for the <strong>${tier.toUpperCase()} Plan (${cycle.toUpperCase()})</strong> has been successfully processed.`,
@@ -1271,7 +1279,7 @@ export const razorpayWebhook = onRequest(async (req, res) => {
                 subtitle: "Subscription Confirmed",
                 badgeIcon: "✓",
                 badgeBg: "#ecfdf5",
-                badgeColor: "#0F6E56",
+                badgeColor: "#059669",
                 heading: "Subscription Payment Confirmed",
                 recipientName: "Doctor / Clinic Administrator",
                 leadText: `We have received payment for your <strong>${tier.toUpperCase()} Plan (${cycle.toUpperCase()})</strong>. Your clinic is active and synchronized in real time.`,
@@ -1327,12 +1335,75 @@ export const razorpayWebhook = onRequest(async (req, res) => {
       const amountStr = (invoice.amount / 100).toFixed(2);
       const invoiceId = invoice.invoice_number || invoice.id || "UNKNOWN";
       
-      const clinicId = invoice.notes?.clinic_id || event.payload.subscription?.entity?.notes?.clinic_id || invoice.customer_details?.name || "";
+      // Robust clinic ID resolution to genuine Firestore document ID
+      let resolvedClinicId = invoice.notes?.clinic_id || event.payload.subscription?.entity?.notes?.clinic_id || "";
+
+      // Validate candidate doc ID against clinics collection
+      if (resolvedClinicId) {
+        try {
+          const cCheck = await getDb().collection("clinics").doc(resolvedClinicId).get();
+          if (!cCheck.exists) {
+            resolvedClinicId = "";
+          }
+        } catch (_e) {
+          resolvedClinicId = "";
+        }
+      }
+
+      // Query clinics by customer email if notes did not provide a valid ID
+      if (!resolvedClinicId && email) {
+        try {
+          const cleanEmail = email.toLowerCase().trim();
+          const snap = await getDb().collection("clinics").where("email", "==", cleanEmail).limit(1).get();
+          if (!snap.empty) {
+            resolvedClinicId = snap.docs[0].id;
+          } else {
+            const userSnap = await getDb().collection("users").where("email", "==", cleanEmail).limit(1).get();
+            if (!userSnap.empty && userSnap.docs[0].data()?.clinic_id) {
+              resolvedClinicId = userSnap.docs[0].data()?.clinic_id;
+            }
+          }
+        } catch (err) {
+          console.warn("[RazorpayWebhook] Error querying clinic by email:", err);
+        }
+      }
+
+      // Query clinics by customer name if still not resolved
+      if (!resolvedClinicId && invoice.customer_details?.name) {
+        try {
+          const candidateName = invoice.customer_details.name.trim();
+          const snap = await getDb().collection("clinics").where("name", "==", candidateName).limit(1).get();
+          if (!snap.empty) {
+            resolvedClinicId = snap.docs[0].id;
+          }
+        } catch (err) {
+          console.warn("[RazorpayWebhook] Error querying clinic by name:", err);
+        }
+      }
+
+      // Query clinics by customer phone if still not resolved
+      if (!resolvedClinicId && invoice.customer_details?.contact) {
+        try {
+          const rawDigits = invoice.customer_details.contact.replace(/\D/g, "").slice(-10);
+          if (rawDigits) {
+            const snap = await getDb().collection("clinics").where("phone", "==", rawDigits).limit(1).get();
+            if (!snap.empty) {
+              resolvedClinicId = snap.docs[0].id;
+            }
+          }
+        } catch (err) {
+          console.warn("[RazorpayWebhook] Error querying clinic by phone:", err);
+        }
+      }
+
+      if (!resolvedClinicId) {
+        console.error(`[RazorpayWebhook] Unable to resolve authentic clinic document ID for invoice ${invoiceId} (customer: ${invoice.customer_details?.name}, email: ${email}). Falling back gracefully without corrupting document ID.`);
+      }
 
       try {
         await getDb().collection("invoices").doc(invoiceId).set({
           invoice_number: invoiceId,
-          clinic_id: clinicId,
+          clinic_id: resolvedClinicId || null,
           clinic_name: invoice.customer_details?.name || 'Clinic',
           amount: invoice.amount / 100,
           status: 'paid',
@@ -1349,56 +1420,67 @@ export const razorpayWebhook = onRequest(async (req, res) => {
         console.error("Failed to save invoice to db:", e);
       }
 
-      if (email) {
+      // Determine subscription plan name
+      let invoicePlanName = 'Viitsa Clinic Pro - Subscription Plan';
+      const invoiceSubId = invoice.subscription_id || event.payload.subscription?.entity?.id;
+      if (invoiceSubId) {
         try {
-          // Generate Beautiful PDF
-          const pdfBuffer = await new Promise<Buffer>((resolve) => {
-            const doc = new PDFDocument({ margin: 0, size: 'A4' });
-            const buffers: Buffer[] = [];
-            doc.on('data', buffers.push.bind(buffers));
-            doc.on('end', () => resolve(Buffer.concat(buffers)));
+          const subDoc = await getDb().collection("subscriptions").doc(invoiceSubId).get();
+          if (subDoc.exists) {
+            const sData = subDoc.data() || {};
+            if (sData.tier === 'test') {
+              invoicePlanName = 'Test Plan (₹1)';
+            } else if (sData.plan_name) {
+              invoicePlanName = sData.plan_name;
+            }
+          }
+        } catch (sErr) {
+          console.warn('[razorpayWebhook] Failed to read subscription tier:', sErr);
+        }
+      }
 
-            // Top Banner
-            doc.rect(0, 0, 595.28, 10).fill('#05C994');
+      // Unified Canonical Emerald Invoice PDF Generation
+      let pdfBuffer: Buffer | null = null;
+      let canonicalPdfUrl: string | null = null;
+      try {
+        const invoiceDetails = {
+          invoiceNumber: invoiceId,
+          invoiceDate: new Date(invoice.issued_at * 1000 || Date.now()).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }),
+          status: 'PAID' as const,
+          clinicName: invoice.customer_details?.name || 'Clinic Partner',
+          customerEmail: email || '',
+          customerPhone: invoice.customer_details?.contact || '',
+          planName: invoicePlanName,
+          tier: (invoicePlanName.toLowerCase().includes('solo') ? 'solo' : invoicePlanName.toLowerCase().includes('multi') ? 'multispecialty' : invoicePlanName.toLowerCase().includes('test') ? 'test' : 'clinic'),
+          cycle: 'monthly',
+          amount: invoice.amount / 100,
+          paymentId: invoice.payment_id || invoice.id || invoiceId,
+          paymentMethod: 'Razorpay Auto-Debit / Mandate',
+          isTrial: false,
+          notes: 'Official subscription invoice generated upon payment confirmation.',
+        };
 
-            // Header
-            doc.fontSize(24).fillColor('#0f6e56').text('VIITSA', 40, 40);
-            doc.fontSize(10).fillColor('#64748b').text('Smarter Healthcare, For Everyone', 40, 70);
-            
-            doc.fontSize(20).fillColor('#0f172a').text('SUBSCRIPTION INVOICE', 300, 40, { align: 'right' });
-            
-            // Meta details
-            doc.fontSize(10).fillColor('#475569');
-            doc.text(`Invoice No: ${invoiceId}`, 300, 70, { align: 'right' });
-            doc.text(`Date: ${new Date(invoice.issued_at * 1000 || Date.now()).toLocaleDateString()}`, 300, 85, { align: 'right' });
-            doc.text(`Status: PAID`, 300, 100, { align: 'right' });
+        // Canonical Emerald (#059669) PDF generation
+        pdfBuffer = await generateSubscriptionInvoicePdf(invoiceDetails);
 
-            // Billed To
-            doc.fontSize(12).fillColor('#0f172a').text('Billed To:', 40, 120);
-            doc.fontSize(10).fillColor('#475569').text(invoice.customer_details?.name || 'Clinic', 40, 140);
-            doc.text(email, 40, 155);
-            doc.text(invoice.customer_details?.contact || '', 40, 170);
+        // Upload canonical PDF to Firebase Storage and persist public signed/download URL
+        try {
+          canonicalPdfUrl = await ensureSubscriptionInvoicePdfUrl(invoiceDetails, resolvedClinicId || undefined);
+          if (canonicalPdfUrl) {
+            await getDb().collection("invoices").doc(invoiceId).set({
+              pdf_url: canonicalPdfUrl,
+              updated_at: new Date().toISOString(),
+            }, { merge: true });
+          }
+        } catch (uploadErr) {
+          console.warn('[RazorpayWebhook] Notice storing canonical invoice PDF to storage:', uploadErr);
+        }
+      } catch (pdfGenErr) {
+        console.error('[RazorpayWebhook] Failed to generate canonical subscription invoice PDF:', pdfGenErr);
+      }
 
-            // Table Header
-            doc.rect(40, 210, 515.28, 30).fill('#f1f5f9');
-            doc.fontSize(10).fillColor('#0f172a').text('Description', 50, 220);
-            doc.text('Amount', 450, 220, { width: 90, align: 'right' });
-
-            // Table Row
-            doc.rect(40, 240, 515.28, 40).stroke('#e2e8f0');
-            doc.fillColor('#334155').text('Viitsa Clinic Pro - Subscription Plan', 50, 255);
-            doc.text(`Rs. ${amountStr}`, 450, 255, { width: 90, align: 'right' });
-
-            // Total
-            doc.fontSize(14).fillColor('#0f172a').text('Total Paid:', 350, 310);
-            doc.fillColor('#05C994').text(`Rs. ${amountStr}`, 450, 310, { width: 90, align: 'right' });
-
-            // Footer
-            doc.fontSize(10).fillColor('#94a3b8').text('Thank you for choosing Viitsa. This is a computer-generated invoice.', 40, 800, { align: 'center', width: 515.28 });
-            
-            doc.end();
-          });
-
+      if (email && pdfBuffer) {
+        try {
           await getTransporter().sendMail({
             from: `"Viitsa Admin" <${process.env.TITAN_EMAIL || "support@viitsa.com"}>`,
             to: email,
@@ -1407,7 +1489,7 @@ export const razorpayWebhook = onRequest(async (req, res) => {
               subtitle: "Invoice & Receipt",
               badgeIcon: "🧾",
               badgeBg: "#ecfdf5",
-              badgeColor: "#0F6E56",
+              badgeColor: "#059669",
               heading: "Payment Receipt & Invoice",
               recipientName: "Doctor / Clinic Administrator",
               leadText: `Thank you for your payment. Your subscription renewal invoice <strong>#${invoiceId}</strong> has been processed successfully.`,
@@ -1429,40 +1511,26 @@ export const razorpayWebhook = onRequest(async (req, res) => {
               }
             ]
           });
-
-          let invoicePlanName = 'Clinic Pro Subscription';
-          const invoiceSubId = invoice.subscription_id || event.payload.subscription?.entity?.id;
-          if (invoiceSubId) {
-            try {
-              const subDoc = await getDb().collection("subscriptions").doc(invoiceSubId).get();
-              if (subDoc.exists) {
-                const sData = subDoc.data() || {};
-                if (sData.tier === 'test') {
-                  invoicePlanName = 'Test Plan (₹1)';
-                } else if (sData.plan_name) {
-                  invoicePlanName = sData.plan_name;
-                }
-              }
-            } catch (sErr) {
-              console.warn('[razorpayWebhook] Failed to read subscription tier:', sErr);
-            }
-          }
-
-          // Dispatch WhatsApp template viitsa_clinic_sub_invoice to Clinic Admin AND payer (if different)
-          await dispatchSubscriptionInvoiceToRecipients({
-            clinicId,
-            payerContact: invoice.customer_details?.contact,
-            adminName: invoice.customer_details?.name || 'Doctor',
-            clinicName: invoice.customer_details?.name || 'Clinic',
-            invoiceNo: invoice.payment_id || invoiceId,
-            planName: invoicePlanName,
-            totalAmount: amountStr,
-            invoiceDate: new Date(invoice.issued_at * 1000 || Date.now()).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }),
-            supportPhone: '+91 73961 11081',
-          });
         } catch (e) {
           console.error("Error sending invoice email", e);
         }
+      }
+
+      // Dispatch WhatsApp template viitsa_clinic_sub_invoice to Clinic Admin AND payer (if different)
+      try {
+        await dispatchSubscriptionInvoiceToRecipients({
+          clinicId: resolvedClinicId || undefined,
+          payerContact: invoice.customer_details?.contact,
+          adminName: invoice.customer_details?.name || 'Doctor',
+          clinicName: invoice.customer_details?.name || 'Clinic',
+          invoiceNo: invoice.payment_id || invoiceId,
+          planName: invoicePlanName,
+          totalAmount: amountStr,
+          invoiceDate: new Date(invoice.issued_at * 1000 || Date.now()).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }),
+          supportPhone: '+91 73961 11081',
+        });
+      } catch (dispErr) {
+        console.warn("[RazorpayWebhook] Notice dispatching WhatsApp subscription invoice:", dispErr);
       }
     }
 

@@ -125,6 +125,7 @@ const PressKitPage = lazyWithRetry(() => import('./screens/PressKitPage').then(m
 const HIPAAPage = lazyWithRetry(() => import('./screens/HIPAAPage').then(m => ({ default: m.HIPAAPage })));
 const PrescriptionPreviewPage = lazyWithRetry(() => import('./screens/PrescriptionPreviewPage').then(m => ({ default: m.PrescriptionPreviewPage })));
 const EmailTemplatePreviewPage = lazyWithRetry(() => import('./screens/EmailTemplatePreviewPage').then(m => ({ default: m.EmailTemplatePreviewPage })));
+const InvoicePreviewPage = lazyWithRetry(() => import('./screens/InvoicePreviewPage').then(m => ({ default: m.InvoicePreviewPage })));
 
 function PageLoader() {
   return (
@@ -140,6 +141,18 @@ function PageLoader() {
 const ADMIN_ROLES = ['company_admin', 'company_manager', 'company_staff', 'admin'];
 const CLINIC_ROLES = ['clinic_admin', 'clinic_doctor', 'clinic_staff', 'doctor', 'staff'];
 const PATIENT_ROLES = ['patient', 'patient_attendant'];
+
+// Helpers for resilient clinic verification & onboarding checks across user and clinic documents
+const isClinicSetupComplete = (u?: any, c?: any) => Boolean(u?.clinic_setup_complete || c?.clinic_setup_complete);
+const isClinicDocsUploaded = (u?: any, c?: any) => Boolean(u?.clinic_documents_uploaded || c?.documents_uploaded);
+const isClinicVerified = (u?: any, c?: any) => {
+  const status = c?.verification_status || u?.clinic_verification_status || 'unverified';
+  return status === 'approved' || status === 'verified';
+};
+const isClinicSubActive = (u?: any, c?: any) => {
+  const status = c?.subscription_status || u?.clinic_subscription_status;
+  return status === 'active' || status === 'free_plan' || status === 'trial';
+};
 
 /** Redirects unauthenticated or unapproved clinic users */
 function ClinicProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -158,25 +171,27 @@ function ClinicProtectedRoute({ children }: { children: React.ReactNode }) {
     return <Navigate to="/doctor/dashboard" replace />;
   }
 
+  // Wait for clinic data to be hydrated if user belongs to a clinic
+  if (user.clinic_id && !clinic) return <PageLoader />;
+
   // Clinic admin setup & approval progression
   if (user.role === 'clinic_admin') {
-    if (user.clinic_setup_complete !== true) {
+    if (!isClinicSetupComplete(user, clinic)) {
       return <Navigate to="/clinic/setup" replace />;
     }
-    if (user.clinic_documents_uploaded !== true) {
+    if (!isClinicDocsUploaded(user, clinic)) {
       return <Navigate to="/clinic/upload-documents" replace />;
     }
-    const verificationStatus = clinic?.verification_status || user.clinic_verification_status || 'unverified';
-    if (verificationStatus !== 'approved') {
+    if (!isClinicVerified(user, clinic)) {
       return <Navigate to="/clinic/pending-approval" replace />;
     }
-    if (clinic && (clinic.subscription_status === 'deactivated' || clinic.subscription_status === 'cancelled')) {
+    const subStatus = clinic?.subscription_status || user.clinic_subscription_status;
+    if (subStatus === 'deactivated' || subStatus === 'cancelled' || subStatus === 'payment_failed') {
       return <Navigate to="/clinic/subscription-setup" replace />;
     }
   } else if (CLINIC_ROLES.includes(user.role)) {
     // Doctors and staff
-    const verificationStatus = clinic?.verification_status;
-    if (verificationStatus && verificationStatus !== 'approved') {
+    if (!isClinicVerified(user, clinic)) {
       return <Navigate to="/clinic/pending-approval" replace />;
     }
   }
@@ -221,16 +236,17 @@ function ClinicSetupRoute() {
   if (PATIENT_ROLES.includes(user.role)) return <Navigate to="/patient/dashboard" replace />;
   if (user.role !== 'clinic_admin') return <Navigate to="/clinic/dashboard" replace />;
 
+  if (user.clinic_id && !clinic) return <PageLoader />;
+
   // If already completed setup, proceed to next step in onboarding progression
-  if (user.clinic_setup_complete === true) {
-    if (user.clinic_documents_uploaded !== true) {
+  if (isClinicSetupComplete(user, clinic)) {
+    if (!isClinicDocsUploaded(user, clinic)) {
       return <Navigate to="/clinic/upload-documents" replace />;
     }
-    const verificationStatus = clinic?.verification_status || user.clinic_verification_status || 'unverified';
-    if (verificationStatus !== 'approved') {
+    if (!isClinicVerified(user, clinic)) {
       return <Navigate to="/clinic/pending-approval" replace />;
     }
-    if (clinic?.subscription_status !== 'active' && clinic?.subscription_status !== 'free_plan' && clinic?.subscription_status !== 'trial') {
+    if (!isClinicSubActive(user, clinic)) {
       return <Navigate to="/clinic/subscription-setup" replace />;
     }
     return <Navigate to="/clinic/dashboard" replace />;
@@ -249,16 +265,17 @@ function ClinicDocumentUploadRoute() {
   if (PATIENT_ROLES.includes(user.role)) return <Navigate to="/patient/dashboard" replace />;
   if (user.role !== 'clinic_admin') return <Navigate to="/clinic/dashboard" replace />;
 
+  if (user.clinic_id && !clinic) return <PageLoader />;
+
   // Must complete setup form first before uploading documents
-  if (user.clinic_setup_complete !== true) return <Navigate to="/clinic/setup" replace />;
+  if (!isClinicSetupComplete(user, clinic)) return <Navigate to="/clinic/setup" replace />;
   
   // If already uploaded documents, proceed to pending approval or dashboard
-  if (user.clinic_documents_uploaded === true) {
-    const verificationStatus = clinic?.verification_status || user.clinic_verification_status || 'unverified';
-    if (verificationStatus !== 'approved') {
+  if (isClinicDocsUploaded(user, clinic)) {
+    if (!isClinicVerified(user, clinic)) {
       return <Navigate to="/clinic/pending-approval" replace />;
     }
-    if (clinic?.subscription_status !== 'active' && clinic?.subscription_status !== 'free_plan' && clinic?.subscription_status !== 'trial') {
+    if (!isClinicSubActive(user, clinic)) {
       return <Navigate to="/clinic/subscription-setup" replace />;
     }
     return <Navigate to="/clinic/dashboard" replace />;
@@ -276,16 +293,17 @@ function ClinicPendingApprovalRoute() {
   if (!user) return <Navigate to="/clinic/login" replace />;
   if (PATIENT_ROLES.includes(user.role)) return <Navigate to="/patient/dashboard" replace />;
 
+  if (user.clinic_id && !clinic) return <PageLoader />;
+
   if (user.role === 'clinic_admin') {
     // Basic clinic info form must be completed first
-    if (user.clinic_setup_complete !== true) return <Navigate to="/clinic/setup" replace />;
+    if (!isClinicSetupComplete(user, clinic)) return <Navigate to="/clinic/setup" replace />;
     // Documents must be uploaded before showing pending approval
-    if (user.clinic_documents_uploaded !== true) return <Navigate to="/clinic/upload-documents" replace />;
+    if (!isClinicDocsUploaded(user, clinic)) return <Navigate to="/clinic/upload-documents" replace />;
   }
 
-  const verificationStatus = clinic?.verification_status || user.clinic_verification_status || 'pending';
-  if (verificationStatus === 'approved') {
-    if (clinic?.subscription_status !== 'active' && clinic?.subscription_status !== 'free_plan' && clinic?.subscription_status !== 'trial') return <Navigate to="/clinic/subscription-setup" replace />;
+  if (isClinicVerified(user, clinic)) {
+    if (!isClinicSubActive(user, clinic)) return <Navigate to="/clinic/subscription-setup" replace />;
     return <Navigate to="/clinic/dashboard" replace />;
   }
   
@@ -302,17 +320,29 @@ function ClinicSubscriptionRoute() {
   if (loading) return <PageLoader />;
   if (!user) return <Navigate to={`/clinic/login?returnUrl=${encodeURIComponent(location.pathname + location.search)}`} replace />;
   if (PATIENT_ROLES.includes(user.role)) return <Navigate to="/patient/dashboard" replace />;
+  if (user.role === 'clinic_doctor' || user.role === 'doctor') return <Navigate to="/doctor/dashboard" replace />;
+  if (user.role === 'clinic_staff' || user.role === 'staff') return <Navigate to="/clinic/dashboard" replace />;
+
+  if (user.clinic_id && !clinic) return <PageLoader />;
   
   if (user.role === 'clinic_admin') {
-    if (user.clinic_setup_complete !== true) return <Navigate to="/clinic/setup" replace />;
-    if (user.clinic_documents_uploaded !== true) return <Navigate to="/clinic/upload-documents" replace />;
+    if (!isClinicSetupComplete(user, clinic)) return <Navigate to="/clinic/setup" replace />;
+    if (!isClinicDocsUploaded(user, clinic)) return <Navigate to="/clinic/upload-documents" replace />;
   }
   
-  const isPayingInvoice = new URLSearchParams(location.search).has('invoice');
-  const isRetryOrSetup = new URLSearchParams(location.search).has('mode') || new URLSearchParams(location.search).has('renew');
-  if (!isPayingInvoice && !isRetryOrSetup && clinic?.subscription_status !== 'deactivated' && clinic?.subscription_status !== 'cancelled' && clinic?.subscription_status !== 'payment_failed') {
-    if (clinic?.verification_status !== 'approved' && clinic?.verification_status !== 'verified') {
+  const searchParams = new URLSearchParams(location.search);
+  const isPayingInvoice = searchParams.has('invoice');
+  const isExplicitManage = searchParams.has('mode') || searchParams.has('renew') || searchParams.has('upgrade') || searchParams.has('view_plans') || searchParams.has('plans');
+  const subStatus = clinic?.subscription_status || user.clinic_subscription_status;
+  const isDeactivatedOrFailed = subStatus === 'deactivated' || subStatus === 'cancelled' || subStatus === 'payment_failed';
+
+  if (!isPayingInvoice && !isExplicitManage && !isDeactivatedOrFailed) {
+    if (!isClinicVerified(user, clinic)) {
       return <Navigate to="/clinic/pending-approval" replace />;
+    }
+    // If clinic subscription is already active, direct them directly to clinic dashboard!
+    if (isClinicSubActive(user, clinic)) {
+      return <Navigate to="/clinic/dashboard" replace />;
     }
   }
   
@@ -389,20 +419,21 @@ function ClinicPublicRoute({ children }: { children: React.ReactNode }) {
     if (ADMIN_ROLES.includes(user.role as Role)) {
       return <Navigate to="/admin/dashboard" replace />;
     }
+
+    if (user.clinic_id && !clinic) return <PageLoader />;
     
     // For clinic admin:
     if (user.role === 'clinic_admin') {
-      if (user.clinic_setup_complete !== true) {
+      if (!isClinicSetupComplete(user, clinic)) {
         return <Navigate to="/clinic/setup" replace />;
       }
-      if (user.clinic_documents_uploaded !== true) {
+      if (!isClinicDocsUploaded(user, clinic)) {
         return <Navigate to="/clinic/upload-documents" replace />;
       }
-      const verificationStatus = clinic?.verification_status || user.clinic_verification_status || 'unverified';
-      if (verificationStatus !== 'approved') {
+      if (!isClinicVerified(user, clinic)) {
         return <Navigate to="/clinic/pending-approval" replace />;
       }
-      if (clinic?.subscription_status !== 'active' && clinic?.subscription_status !== 'free_plan' && clinic?.subscription_status !== 'trial') {
+      if (!isClinicSubActive(user, clinic)) {
         return <Navigate to="/clinic/subscription-setup" replace />;
       }
       return <Navigate to="/clinic/dashboard" replace />;
@@ -410,7 +441,7 @@ function ClinicPublicRoute({ children }: { children: React.ReactNode }) {
 
     // Doctors
     if (user.role === 'clinic_doctor' || user.role === 'doctor') {
-      if (clinic && clinic.verification_status !== 'approved') {
+      if (!isClinicVerified(user, clinic)) {
         return <Navigate to="/clinic/pending-approval" replace />;
       }
       return <Navigate to="/doctor/dashboard" replace />;
@@ -418,7 +449,7 @@ function ClinicPublicRoute({ children }: { children: React.ReactNode }) {
 
     // Staff
     if (user.role === 'clinic_staff' || user.role === 'staff') {
-      if (clinic && clinic.verification_status !== 'approved') {
+      if (!isClinicVerified(user, clinic)) {
         return <Navigate to="/clinic/pending-approval" replace />;
       }
       return <Navigate to="/clinic/dashboard" replace />;
@@ -439,8 +470,9 @@ function DoctorProtectedRoute({ children }: { children: React.ReactNode }) {
   if (ADMIN_ROLES.includes(user.role)) return <Navigate to="/admin/dashboard" replace />;
   if (user.role === 'clinic_admin') return <Navigate to="/clinic/dashboard" replace />;
 
-  const verificationStatus = clinic?.verification_status || user.clinic_verification_status;
-  if (verificationStatus && verificationStatus !== 'approved') {
+  if (user.clinic_id && !clinic) return <PageLoader />;
+
+  if (!isClinicVerified(user, clinic)) {
     return <Navigate to="/clinic/pending-approval" replace />;
   }
 
@@ -455,8 +487,9 @@ function DoctorLayout() {
   if (ADMIN_ROLES.includes(user.role)) return <Navigate to="/admin/dashboard" replace />;
   if (user.role === 'clinic_admin') return <Navigate to="/clinic/dashboard" replace />;
 
-  const verificationStatus = clinic?.verification_status || user.clinic_verification_status;
-  if (verificationStatus && verificationStatus !== 'approved') {
+  if (user.clinic_id && !clinic) return <PageLoader />;
+
+  if (!isClinicVerified(user, clinic)) {
     return <Navigate to="/clinic/pending-approval" replace />;
   }
 
@@ -485,18 +518,19 @@ function ClinicLayout() {
   if (!CLINIC_ROLES.includes(user.role as Role) && !ADMIN_ROLES.includes(user.role as Role)) {
     return <Navigate to="/clinic/login" replace />;
   }
+
+  if (user.clinic_id && !clinic) return <PageLoader />;
   
   // Clinic admin setup guard
   if (user.role === 'clinic_admin') {
-    if (user.clinic_setup_complete !== true) return <Navigate to="/clinic/setup" replace />;
-    if (user.clinic_documents_uploaded !== true) return <Navigate to="/clinic/upload-documents" replace />;
-    const verificationStatus = clinic?.verification_status || user.clinic_verification_status || 'unverified';
-    if (verificationStatus !== 'approved') return <Navigate to="/clinic/pending-approval" replace />;
-    if (clinic?.subscription_status !== 'active' && clinic?.subscription_status !== 'free_plan' && clinic?.subscription_status !== 'trial') {
+    if (!isClinicSetupComplete(user, clinic)) return <Navigate to="/clinic/setup" replace />;
+    if (!isClinicDocsUploaded(user, clinic)) return <Navigate to="/clinic/upload-documents" replace />;
+    if (!isClinicVerified(user, clinic)) return <Navigate to="/clinic/pending-approval" replace />;
+    if (!isClinicSubActive(user, clinic)) {
       return <Navigate to="/clinic/subscription-setup" replace />;
     }
   } else if (user.role === 'clinic_staff' || user.role === 'staff') {
-    if (clinic && clinic.verification_status !== 'approved') {
+    if (!isClinicVerified(user, clinic)) {
       return <Navigate to="/clinic/pending-approval" replace />;
     }
   }
@@ -574,6 +608,7 @@ function AppRoutes() {
           <Route path="billing"      element={<BillingScreen />} />
           <Route path="ai-navigator" element={<AINavigatorScreen />} />
           <Route path="prescription" element={<PrescriptionPreviewPage />} />
+          <Route path="invoice-preview" element={<InvoicePreviewPage />} />
         </Route>
 
         {/* Clinic-only login */}
@@ -591,6 +626,9 @@ function AppRoutes() {
         <Route path="/clinic/upload-documents" element={<ClinicDocumentUploadRoute />} />
         <Route path="/clinic/pending-approval" element={<ClinicPendingApprovalRoute />} />
         <Route path="/clinic/subscription-setup" element={<ClinicSubscriptionRoute />} />
+        <Route path="/clinic/plans" element={<Navigate to="/clinic/subscription-setup?plans=true" replace />} />
+        <Route path="/plans" element={<Navigate to="/clinic/subscription-setup?plans=true" replace />} />
+        <Route path="/pricing" element={<Navigate to="/#pricing" replace />} />
 
         {/* Authentication & Portal Aliases */}
         <Route path="/register" element={<Navigate to="/login?mode=register" replace />} />
@@ -626,6 +664,7 @@ function AppRoutes() {
           <Route path="ai-navigator" element={<AINavigatorScreen />} />
           <Route path="analytics"    element={<AnalyticsScreen />} />
           <Route path="settings"     element={<SettingsScreen />} />
+          <Route path="invoice-preview" element={<InvoicePreviewPage />} />
           <Route path="subscription-success" element={<SubscriptionSuccessPage />} />
         </Route>
 
@@ -670,6 +709,12 @@ function AppRoutes() {
         <Route path="/email-preview" element={<Suspense fallback={<PageLoader />}><EmailTemplatePreviewPage /></Suspense>} />
         <Route path="/email-template" element={<Navigate to="/email-preview" replace />} />
         <Route path="/email-templates" element={<Navigate to="/email-preview" replace />} />
+
+        {/* Interactive Invoice Template Preview & Customizer */}
+        <Route path="/invoice-preview" element={<Suspense fallback={<PageLoader />}><InvoicePreviewPage /></Suspense>} />
+        <Route path="/invoice-template" element={<Navigate to="/invoice-preview" replace />} />
+        <Route path="/invoice-templates" element={<Navigate to="/invoice-preview" replace />} />
+        <Route path="/invoice" element={<Suspense fallback={<PageLoader />}><InvoicePreviewPage /></Suspense>} />
 
         {/* Forgot Password — universal, all user types */}
         <Route path="/forgot-password" element={<ForgotPasswordPage />} />

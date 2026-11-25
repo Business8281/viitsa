@@ -14,6 +14,7 @@ import {
   Plus,
   X,
   User,
+  IndianRupee,
 } from 'lucide-react';
 import { db, firebaseConfig } from '../lib/firebase';
 import { updateDoc, doc, setDoc } from 'firebase/firestore';
@@ -60,6 +61,7 @@ export function SetupWizardPage() {
     phone: clinic?.phone || '',
     email: clinic?.email || '',
     website: '',
+    consultation_fee: clinic?.consultation_fee ? String(clinic.consultation_fee) : '',
     departments: [] as string[],
   });
 
@@ -174,14 +176,29 @@ export function SetupWizardPage() {
 
     try {
       // Update clinic details
+      const feeNum = clinicDetails.consultation_fee ? Number(clinicDetails.consultation_fee) : null;
       await updateDoc(doc(db, 'clinics', user.clinic_id), {
         address: clinicDetails.address,
         city: clinicDetails.city,
         phone: clinicDetails.phone,
         email: clinicDetails.email,
+        consultation_fee: feeNum,
         working_hours: workingHours,
         departments: clinicDetails.departments.length > 0 ? clinicDetails.departments : null,
       });
+
+      // Also sync to clinic_settings collection
+      await setDoc(doc(db, 'clinic_settings', user.clinic_id), {
+        clinic_id: user.clinic_id,
+        consultation_fee: feeNum,
+        updated_at: new Date().toISOString(),
+      }, { merge: true });
+
+      if (user.user_id) {
+        updateDoc(doc(db, 'users', user.user_id), {
+          consultation_fee: feeNum,
+        }).catch(() => {});
+      }
 
       // Use a secondary app to create users without logging out
       const secondaryApp = initializeApp(firebaseConfig, "Secondary");
@@ -391,6 +408,22 @@ export function SetupWizardPage() {
                       />
                     </div>
                   </div>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1.5">Standard Consultation Fee (₹)</label>
+                  <div className="relative">
+                    <IndianRupee className="absolute left-3.5 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
+                    <input
+                      type="number"
+                      min="0"
+                      value={clinicDetails.consultation_fee}
+                      onChange={(e) => updateClinicDetails('consultation_fee', e.target.value)}
+                      className="w-full pl-11 pr-4 py-3 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
+                      placeholder="e.g. 500"
+                    />
+                  </div>
+                  <p className="text-xs text-slate-500 mt-1">Default consultation fee autofilled in patient billing.</p>
                 </div>
 
                 <div>

@@ -14,7 +14,7 @@ export function generateProgrammaticInvoiceBlob(invoice: any, clinic: any, patie
   const amountStr = formatRs(Number(invoice.total || invoice.amount || 0));
 
   // Brand / Clinic Header
-  doc.setFillColor(15, 110, 86); // #0F6E56 Brand Green
+  doc.setFillColor(5, 150, 105); // #059669 Medical Emerald
   doc.rect(0, 0, 210, 28, 'F');
 
   doc.setFont('helvetica', 'bold');
@@ -103,7 +103,7 @@ export function generateProgrammaticInvoiceBlob(invoice: any, clinic: any, patie
     head: [['#', 'Item / Service Description', 'Qty', 'Amount']],
     body: tableBody,
     headStyles: {
-      fillColor: [15, 110, 86],
+      fillColor: [5, 150, 105], // #059669 Medical Emerald
       textColor: [255, 255, 255],
       fontStyle: 'bold',
       fontSize: 9

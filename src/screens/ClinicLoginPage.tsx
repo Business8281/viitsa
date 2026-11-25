@@ -405,10 +405,12 @@ export function ClinicLoginPage() {
   }, [showVerificationModal, refreshSession, navigate]);
 
   const routeClinicUser = (u: any, clinicObj?: any) => {
+    const c = clinicObj || clinic;
+
     // 1. Doctor role: always route directly to Doctor Home Dashboard (/doctor/dashboard)
     if (u.role === 'clinic_doctor' || u.role === 'doctor') {
-      const verificationStatus = clinicObj?.verification_status || clinic?.verification_status;
-      if (verificationStatus && verificationStatus !== 'approved') {
+      const verificationStatus = c?.verification_status || u.clinic_verification_status;
+      if (verificationStatus && verificationStatus !== 'approved' && verificationStatus !== 'verified') {
         navigate('/clinic/pending-approval', { replace: true });
         return;
       }
@@ -425,30 +427,41 @@ export function ClinicLoginPage() {
     // 2. Safe returnUrl handling for non-doctor clinic users (do not route clinic staff/admins to /doctor)
     if (returnUrl) {
       if (!returnUrl.startsWith('/doctor')) {
-        navigate(returnUrl, { replace: true });
-        return;
+        // If returnUrl points to subscription setup, but the clinic's subscription is already active,
+        // and it's not a special invoice/upgrade mode, DO NOT trap them in subscription setup!
+        const isSubUrl = returnUrl.includes('/clinic/subscription-setup');
+        const isSpecialSubAction = returnUrl.includes('invoice=') || returnUrl.includes('mode=') || returnUrl.includes('renew=') || returnUrl.includes('upgrade=') || returnUrl.includes('view_plans=');
+        const subStatus = c?.subscription_status || u.clinic_subscription_status;
+        const activeSub = subStatus === 'active' || subStatus === 'free_plan' || subStatus === 'trial';
+        
+        if (!(isSubUrl && activeSub && !isSpecialSubAction)) {
+          navigate(returnUrl, { replace: true });
+          return;
+        }
       }
     }
 
     if (u.role === 'clinic_admin') {
       // 1. Basic clinic info onboarding form must be completed first
-      if (u.clinic_setup_complete !== true) {
+      const isSetupDone = u.clinic_setup_complete === true || c?.clinic_setup_complete === true;
+      if (!isSetupDone) {
         navigate('/clinic/setup', { replace: true });
         return;
       }
       // 2. Verification documents upload must be completed second
-      if (u.clinic_documents_uploaded !== true) {
+      const isDocsDone = u.clinic_documents_uploaded === true || c?.clinic_documents_uploaded === true;
+      if (!isDocsDone) {
         navigate('/clinic/upload-documents', { replace: true });
         return;
       }
       // 3. If setup & documents uploaded, check platform verification status
-      const verificationStatus = clinicObj?.verification_status || clinic?.verification_status || u.clinic_verification_status || 'unverified';
-      if (verificationStatus !== 'approved') {
+      const verificationStatus = c?.verification_status || u.clinic_verification_status || 'unverified';
+      if (verificationStatus !== 'approved' && verificationStatus !== 'verified') {
         navigate('/clinic/pending-approval', { replace: true });
         return;
       }
       // 4. Check subscription status
-      const subStatus = clinicObj?.subscription_status || clinic?.subscription_status;
+      const subStatus = c?.subscription_status || u.clinic_subscription_status;
       if (subStatus !== 'active' && subStatus !== 'free_plan' && subStatus !== 'trial') {
         navigate('/clinic/subscription-setup', { replace: true });
         return;
@@ -459,8 +472,8 @@ export function ClinicLoginPage() {
     }
 
     if (u.role === 'clinic_staff' || u.role === 'staff') {
-      const verificationStatus = clinicObj?.verification_status || clinic?.verification_status;
-      if (verificationStatus && verificationStatus !== 'approved') {
+      const verificationStatus = c?.verification_status || u.clinic_verification_status;
+      if (verificationStatus && verificationStatus !== 'approved' && verificationStatus !== 'verified') {
         navigate('/clinic/pending-approval', { replace: true });
         return;
       }
@@ -479,6 +492,10 @@ export function ClinicLoginPage() {
     }
     if (ADMIN_ROLES.includes(user.role)) {
       navigate('/admin/dashboard', { replace: true });
+      return;
+    }
+    // Wait for clinic to hydrate if user belongs to a clinic
+    if (user.clinic_id && !clinic) {
       return;
     }
     routeClinicUser(user, clinic);
@@ -555,14 +572,6 @@ export function ClinicLoginPage() {
       }
 
       setLoading(true);
-      // Upfront Role Check: Block patient or admin from logging in at clinic portal
-      const conflictCheck = await checkRegistrationConflict(undefined, cleanEmail, 'clinic_admin', 'login', 'clinic');
-      if (!conflictCheck.allowed || conflictCheck.hasConflict) {
-        setLoading(false);
-        setLocalError(conflictCheck.conflictMessage || 'This email address is not registered as a clinic account.');
-        return;
-      }
-
       const res = await loginWithEmail(cleanEmail, password, 'clinic_admin');
       setLoading(false);
       if (res.ok && res.user) {
@@ -592,14 +601,6 @@ export function ClinicLoginPage() {
     }
 
     setLoading(true);
-    // Upfront Role Check: NEVER send OTP if number is registered for patient, admin, or not a clinic account
-    const conflictCheck = await checkRegistrationConflict(cleanPhone, undefined, 'clinic_admin', 'login', 'clinic');
-    if (!conflictCheck.allowed || conflictCheck.hasConflict) {
-      setLoading(false);
-      setLocalError(conflictCheck.conflictMessage || 'This mobile number is not registered as a clinic account.');
-      return;
-    }
-
     const res = await sendWhatsAppLoginOtp(cleanPhone, 'clinic', 'login');
     setLoading(false);
     if (res.ok) {

@@ -128,23 +128,51 @@ export function getCachedIdentity(uid: string): IdentityResult | null {
   return null;
 }
 
-export function saveCachedIdentity(res: IdentityResult) {
+export function saveCachedIdentity(res: IdentityResult, firebaseUid?: string) {
   try {
-    localStorage.setItem(`viitsa_user_${res.user.user_id}`, JSON.stringify(res.user));
-    if (res.clinic) {
-      localStorage.setItem(`viitsa_clinic_${res.user.user_id}`, JSON.stringify(res.clinic));
-    }
-    if (res.patientAccount) {
-      localStorage.setItem(`viitsa_pat_${res.user.user_id}`, JSON.stringify(res.patientAccount));
+    const uStr = JSON.stringify(res.user);
+    const cStr = res.clinic ? JSON.stringify(res.clinic) : null;
+    const pStr = res.patientAccount ? JSON.stringify(res.patientAccount) : null;
+
+    localStorage.setItem(`viitsa_user_${res.user.user_id}`, uStr);
+    if (cStr) localStorage.setItem(`viitsa_clinic_${res.user.user_id}`, cStr);
+    if (pStr) localStorage.setItem(`viitsa_pat_${res.user.user_id}`, pStr);
+
+    if (firebaseUid && firebaseUid !== res.user.user_id) {
+      localStorage.setItem(`viitsa_user_${firebaseUid}`, uStr);
+      if (cStr) localStorage.setItem(`viitsa_clinic_${firebaseUid}`, cStr);
+      if (pStr) localStorage.setItem(`viitsa_pat_${firebaseUid}`, pStr);
     }
   } catch {}
 }
+
+// In-flight deduplication to prevent duplicate parallel Firestore roundtrips during authentication
+const inFlightResolutions = new Map<string, Promise<IdentityResult>>();
 
 /**
  * Resolves a Firebase Authenticated identity to the canonical application user.
  * Built with full defensive error handling to prevent Firestore permission errors from blocking login.
  */
 export async function resolveCanonicalIdentity(
+  firebaseUser: FirebaseUser,
+  onboardingData?: OnboardingData
+): Promise<IdentityResult> {
+  const cacheKey = `${firebaseUser.uid}_${onboardingData?.role || ''}`;
+  if (inFlightResolutions.has(cacheKey)) {
+    return inFlightResolutions.get(cacheKey)!;
+  }
+
+  const promise = doResolveCanonicalIdentity(firebaseUser, onboardingData);
+  inFlightResolutions.set(cacheKey, promise);
+
+  try {
+    return await promise;
+  } finally {
+    inFlightResolutions.delete(cacheKey);
+  }
+}
+
+async function doResolveCanonicalIdentity(
   firebaseUser: FirebaseUser,
   onboardingData?: OnboardingData
 ): Promise<IdentityResult> {
@@ -193,7 +221,7 @@ export async function resolveCanonicalIdentity(
     const userDocSnap = await getDoc(doc(db, 'users', uid));
     if (userDocSnap.exists()) {
       const res = await handleExistingUser(userDocSnap.data() as User, userDocSnap.id, firebaseUser, isGoogleProvider, providerId, isClinicPortal, isPatientPortal, isAdminPortal, onboardingData);
-      saveCachedIdentity(res);
+      saveCachedIdentity(res, uid);
       return res;
     }
   } catch (err) {
@@ -207,7 +235,7 @@ export async function resolveCanonicalIdentity(
     if (!linkedSnap.empty) {
       const d = linkedSnap.docs[0];
       const res = await handleExistingUser(d.data() as User, d.id, firebaseUser, isGoogleProvider, providerId, isClinicPortal, isPatientPortal, isAdminPortal, onboardingData);
-      saveCachedIdentity(res);
+      saveCachedIdentity(res, uid);
       return res;
     }
   } catch (e) {
@@ -222,7 +250,7 @@ export async function resolveCanonicalIdentity(
       if (!emailSnap.empty) {
         const d = emailSnap.docs[0];
         const res = await handleExistingUser(d.data() as User, d.id, firebaseUser, isGoogleProvider, providerId, isClinicPortal, isPatientPortal, isAdminPortal, onboardingData);
-        saveCachedIdentity(res);
+        saveCachedIdentity(res, uid);
         return res;
       }
     } catch (e) {
@@ -238,7 +266,7 @@ export async function resolveCanonicalIdentity(
       if (!phoneSnap.empty) {
         const d = phoneSnap.docs[0];
         const res = await handleExistingUser(d.data() as User, d.id, firebaseUser, isGoogleProvider, providerId, isClinicPortal, isPatientPortal, isAdminPortal, onboardingData);
-        saveCachedIdentity(res);
+        saveCachedIdentity(res, uid);
         return res;
       }
     } catch (e) {
@@ -253,7 +281,7 @@ export async function resolveCanonicalIdentity(
         if (!attSnap.empty) {
           const d = attSnap.docs[0];
           const res = await handleExistingUser(d.data() as User, d.id, firebaseUser, isGoogleProvider, providerId, isClinicPortal, isPatientPortal, isAdminPortal, { ...onboardingData, role: 'patient_attendant' });
-          saveCachedIdentity(res);
+          saveCachedIdentity(res, uid);
           return res;
         }
       } catch (e) {
@@ -266,7 +294,7 @@ export async function resolveCanonicalIdentity(
         if (!emSnap.empty) {
           const d = emSnap.docs[0];
           const res = await handleExistingUser(d.data() as User, d.id, firebaseUser, isGoogleProvider, providerId, isClinicPortal, isPatientPortal, isAdminPortal, { ...onboardingData, role: 'patient_attendant' });
-          saveCachedIdentity(res);
+          saveCachedIdentity(res, uid);
           return res;
         }
       } catch (e) {
@@ -404,7 +432,7 @@ export async function resolveCanonicalIdentity(
       patientAccount: { ...patData, account_id: patientAccountId, id_number: patientCode, display_id: patientCode, patient_code: patientCode, profile_completed: true },
       isNewUser: false,
     };
-    saveCachedIdentity(res);
+    saveCachedIdentity(res, uid);
     return res;
   }
 
@@ -418,7 +446,7 @@ export async function resolveCanonicalIdentity(
 
   // 7. Completely new user registration
   const newRes = await createNewCanonicalUser(firebaseUser, isGoogleProvider, providerId, email, phone, onboardingData, isClinicPortal, isAdminPortal);
-  saveCachedIdentity(newRes);
+  saveCachedIdentity(newRes, uid);
   return newRes;
 }
 
@@ -532,20 +560,25 @@ async function handleExistingUser(
     }
   }
 
-  updates.updated_at = new Date().toISOString();
-
   if (Object.keys(updates).length > 0) {
-    try {
-      await updateDoc(doc(db, 'users', canonicalDocId), updates);
-    } catch (e) {
-      console.warn('Update user document warning:', e);
-    }
+    updates.updated_at = new Date().toISOString();
     Object.assign(existingUser, updates);
+    // Non-blocking background sync to Firestore
+    updateDoc(doc(db, 'users', canonicalDocId), updates).catch((e) => {
+      console.warn('Background update user document warning:', e);
+    });
   }
 
   // Load associated Clinic (For clinic_admin, doctor, staff)
   let clinic: Clinic | null = null;
   if (existingUser.role !== 'patient' && existingUser.clinic_id) {
+    try {
+      const cachedClinic = localStorage.getItem(`viitsa_clinic_${canonicalDocId}`) || localStorage.getItem(`viitsa_clinic_${firebaseUser.uid}`);
+      if (cachedClinic) {
+        clinic = JSON.parse(cachedClinic);
+      }
+    } catch {}
+
     try {
       const cSnap = await getDoc(doc(db, 'clinics', existingUser.clinic_id));
       if (cSnap.exists()) {
@@ -579,12 +612,10 @@ async function handleExistingUser(
 
     if (existingUser.clinic_id !== clinic.clinic_id) {
       existingUser.clinic_id = clinic.clinic_id;
-      try {
-        await updateDoc(doc(db, 'users', canonicalDocId), {
-          clinic_id: clinic.clinic_id,
-          updated_at: new Date().toISOString(),
-        });
-      } catch {}
+      updateDoc(doc(db, 'users', canonicalDocId), {
+        clinic_id: clinic.clinic_id,
+        updated_at: new Date().toISOString(),
+      }).catch(() => {});
     }
   }
 

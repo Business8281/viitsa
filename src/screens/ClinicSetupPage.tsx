@@ -13,6 +13,7 @@ import {
   AlertCircle,
   LogOut,
   Lock,
+  IndianRupee,
 } from 'lucide-react';
 import { doc, setDoc, updateDoc } from 'firebase/firestore';
 import { db, auth } from '../lib/firebase';
@@ -55,7 +56,10 @@ export function ClinicSetupPage() {
     if (sessionEmail && (!enteredEmail || !enteredEmail.includes('@'))) {
       setEnteredEmail(sessionEmail);
     }
-  }, [sessionPhone, sessionEmail]);
+    if (clinic?.consultation_fee !== undefined && clinic?.consultation_fee !== null && !consultationFee) {
+      setConsultationFee(String(clinic.consultation_fee));
+    }
+  }, [sessionPhone, sessionEmail, clinic?.consultation_fee]);
 
   // Clinic info
   const [clinicName, setClinicName] = useState(clinic?.name || (user as any)?.clinic_name || '');
@@ -63,6 +67,9 @@ export function ClinicSetupPage() {
   const [city, setCity] = useState(clinic?.city || '');
   const [receptionPhone, setReceptionPhone] = useState((clinic as any)?.reception_phone || '');
   const [speciality, setSpeciality] = useState(clinic?.speciality || '');
+  const [consultationFee, setConsultationFee] = useState<string>(
+    clinic?.consultation_fee !== undefined && clinic?.consultation_fee !== null ? String(clinic.consultation_fee) : ''
+  );
 
   // Owner info
   const [ownerName, setOwnerName] = useState(user?.name || (clinic as any)?.owner_name || '');
@@ -113,6 +120,7 @@ export function ClinicSetupPage() {
 
     const cleanReception = receptionPhone.replace(/\D/g, '');
     const clinicCode = clinic?.clinic_code || clinic?.id_number || generateReadableId('CLN', clinicId);
+    const feeNum = consultationFee ? Number(consultationFee) : null;
 
     const clinicData = sanitizeForFirestore({
       clinic_id: clinicId,
@@ -131,6 +139,7 @@ export function ClinicSetupPage() {
       owner_user_id: authUid || uid,
       admin_user_id: uid || authUid,
       speciality: speciality.trim() || null,
+      consultation_fee: feeNum,
       logo_url: clinic?.logo_url || null,
       clinic_setup_complete: true,
       working_hours: {
@@ -150,6 +159,7 @@ export function ClinicSetupPage() {
         await setDoc(doc(db, 'clinic_settings', clinicId), sanitizeForFirestore({
           clinic_id: clinicId,
           setting_id: clinicId,
+          consultation_fee: feeNum,
           slot_duration_minutes: 20,
           working_hours: {
             open: openTime,
@@ -167,6 +177,7 @@ export function ClinicSetupPage() {
         clinic_setup_complete: true,
         clinic_id: clinicId,
         clinic_name: clinicName.trim(),
+        consultation_fee: feeNum,
         name: ownerName.trim() || user?.name,
         full_name: ownerName.trim() || user?.name,
         phone: finalPhone || user?.phone || null,
@@ -315,6 +326,25 @@ export function ClinicSetupPage() {
                     className="w-full h-11 pl-10 pr-4 bg-white border border-slate-300 rounded-xl text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/20 transition-all"
                   />
                 </div>
+              </div>
+
+              {/* Consultation Fee */}
+              <div className="sm:col-span-2">
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wide mb-1.5">
+                  Standard Consultation Fee (₹) <span className="text-slate-400 font-normal normal-case">(optional · autofills when creating patient bills)</span>
+                </label>
+                <div className="relative">
+                  <IndianRupee className="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5" />
+                  <input
+                    type="number"
+                    min="0"
+                    value={consultationFee}
+                    onChange={e => setConsultationFee(e.target.value)}
+                    placeholder="e.g. 500"
+                    className="w-full h-11 pl-10 pr-4 bg-white border border-slate-300 rounded-xl text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/20 transition-all"
+                  />
+                </div>
+                <p className="text-[11px] text-slate-500 mt-1">Default consultation fee for visits; automatically autofills in the billing screen.</p>
               </div>
 
               {/* Address */}

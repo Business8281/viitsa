@@ -2371,38 +2371,48 @@ export function AdminDashboard() {
               {/* Documents & Certificates */}
               <div>
                 <p className="text-xs font-semibold text-ink-muted uppercase tracking-wide mb-3">Documents & Certificates</p>
-                {(!u.onboarding_documents || u.onboarding_documents.length === 0) && (!u.certificates || u.certificates.length === 0) ? (
-                  <p className="text-sm text-ink-subtle italic">No documents uploaded.</p>
-                ) : (
-                  <div className="flex flex-col gap-2">
-                    {u.onboarding_documents?.map((doc, idx) => (
-                      <a
-                        key={`od-${idx}`}
-                        href={doc.url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="flex items-center gap-2 p-2.5 bg-blue-50 text-blue-700 rounded-lg hover:bg-blue-100 transition-colors border border-blue-100"
-                      >
-                        <FileText size={16} />
-                        <span className="text-sm font-medium flex-1 truncate">{doc.name}</span>
-                        <span className="text-xs uppercase tracking-wide opacity-70">Onboarding</span>
-                      </a>
-                    ))}
-                    {u.certificates?.map((doc, idx) => (
-                      <a
-                        key={`cert-${idx}`}
-                        href={doc.url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="flex items-center gap-2 p-2.5 bg-teal-50 text-teal-700 rounded-lg hover:bg-teal-100 transition-colors border border-teal-100"
-                      >
-                        <FileText size={16} />
-                        <span className="text-sm font-medium flex-1 truncate">{doc.name}</span>
-                        <span className="text-xs uppercase tracking-wide opacity-70">Certificate</span>
-                      </a>
-                    ))}
-                  </div>
-                )}
+                {(() => {
+                  const combinedDocs = [
+                    ...(u.certificates || []).map(d => ({ ...d, label: 'Certificate', isCert: true })),
+                    ...(u.onboarding_documents || []).map(d => ({ ...d, label: 'Onboarding', isCert: false }))
+                  ];
+                  const seen = new Set<string>();
+                  const uniqueDocs: typeof combinedDocs = [];
+                  for (const d of combinedDocs) {
+                    if (!d?.url) continue;
+                    const key = d.url.trim().toLowerCase();
+                    if (!seen.has(key)) {
+                      seen.add(key);
+                      uniqueDocs.push(d);
+                    }
+                  }
+
+                  if (uniqueDocs.length === 0) {
+                    return <p className="text-sm text-ink-subtle italic">No documents uploaded.</p>;
+                  }
+
+                  return (
+                    <div className="flex flex-col gap-2">
+                      {uniqueDocs.map((doc, idx) => (
+                        <a
+                          key={`doc-${idx}`}
+                          href={doc.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className={`flex items-center gap-2 p-2.5 rounded-lg transition-colors border ${
+                            doc.isCert 
+                              ? 'bg-teal-50 text-teal-700 hover:bg-teal-100 border-teal-100'
+                              : 'bg-blue-50 text-blue-700 hover:bg-blue-100 border-blue-100'
+                          }`}
+                        >
+                          <FileText size={16} />
+                          <span className="text-sm font-medium flex-1 truncate">{doc.name}</span>
+                          <span className="text-xs uppercase tracking-wide opacity-70">{doc.label}</span>
+                        </a>
+                      ))}
+                    </div>
+                  );
+                })()}
               </div>
             </div>
           );

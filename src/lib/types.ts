@@ -36,6 +36,7 @@ export interface Clinic {
   departments?: string[];
   speciality?: string | null;
   rating?: number;
+  consultation_fee?: number | null;
   working_hours: { open: string; close: string; days: string[] };
   clinic_setup_complete?: boolean;
   documents_uploaded?: boolean;

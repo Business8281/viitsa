@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { 
   Printer, Share2, Download, Building, User, FileText, Phone, Mail, 
   ShieldCheck, Users, TrendingUp, Pill, FlaskConical, Activity, 
-  ClipboardList, Loader2, X, Send, Check, Bell 
+  ClipboardList, Loader2, X, Send, Check, Bell, QrCode, CheckCircle2 
 } from 'lucide-react';
 import { formatDate, formatRs, parseDateArg } from '../lib/format';
 import type { Invoice, Clinic, Patient, User as Doctor } from '../lib/types';
@@ -18,28 +18,60 @@ import {
 import { sendEmail } from '../lib/emailService';
 import { useToast } from '../lib/toast';
 import { sendWhatsAppPatientInvoiceViaAPI, sendWhatsAppPaymentReminderViaAPI } from '../lib/whatsappClientService';
+import { useAuth } from '../lib/auth';
 
-interface Props {
+export type InvoiceTemplateStyle = 'modern' | 'minimal' | 'classic' | 'executive';
+
+export interface InvoiceCustomizationOptions {
+  templateStyle?: InvoiceTemplateStyle;
+  accentColor?: string;
+  showPlatformBranding?: boolean;
+  showSignatureBox?: boolean;
+  showUpiQr?: boolean;
+  customTerms?: string;
+}
+
+export interface InvoiceViewProps {
   invoice: Invoice;
   clinic?: Clinic | null;
   patient?: Patient | null;
   doctor?: Doctor | null;
   onClose?: () => void;
+  customizationOptions?: InvoiceCustomizationOptions;
 }
 
-const getCategoryIcon = (category: string) => {
+const getCategoryIcon = (category: string, accentColor?: string) => {
   const cat = category.toLowerCase();
-  if (cat.includes('consultation')) return <User size={14} className="text-primary" />;
-  if (cat.includes('medicine') || cat.includes('pharmacy')) return <Pill size={14} className="text-primary" />;
-  if (cat.includes('lab') || cat.includes('test') || cat.includes('diagnostic')) return <FlaskConical size={14} className="text-primary" />;
-  if (cat.includes('procedure') || cat.includes('nursing') || cat.includes('vaccination')) return <Activity size={14} className="text-primary" />;
-  return <ClipboardList size={14} className="text-primary" />;
+  const style = accentColor ? { color: accentColor } : undefined;
+  const cls = accentColor ? '' : 'text-primary';
+  if (cat.includes('consultation')) return <User size={14} className={cls} style={style} />;
+  if (cat.includes('medicine') || cat.includes('pharmacy')) return <Pill size={14} className={cls} style={style} />;
+  if (cat.includes('lab') || cat.includes('test') || cat.includes('diagnostic')) return <FlaskConical size={14} className={cls} style={style} />;
+  if (cat.includes('procedure') || cat.includes('nursing') || cat.includes('vaccination')) return <Activity size={14} className={cls} style={style} />;
+  return <ClipboardList size={14} className={cls} style={style} />;
 };
 
-export function InvoiceView({ invoice, clinic, patient, doctor, onClose }: Props) {
-  const c = clinic ?? (invoice.clinic as Clinic | null);
+export function InvoiceView({ 
+  invoice, 
+  clinic, 
+  patient, 
+  doctor, 
+  onClose,
+  customizationOptions 
+}: InvoiceViewProps) {
+  const { clinic: authClinic } = useAuth();
+  const c = clinic ?? authClinic ?? (invoice.clinic as Clinic | null);
   const p = patient ?? (invoice.patient as Patient | null);
   const d = doctor ?? (invoice.doctor as Doctor | null);
+
+  // Read saved settings or prop customization
+  const clinicSavedOpts = (c as any)?.invoice_settings || (c as any)?.invoice_customization;
+  const optStyle: InvoiceTemplateStyle = customizationOptions?.templateStyle || clinicSavedOpts?.template_style || 'modern';
+  const optColor: string = customizationOptions?.accentColor || clinicSavedOpts?.accent_color || '#059669';
+  const optPlatformBranding: boolean = customizationOptions?.showPlatformBranding ?? clinicSavedOpts?.show_platform_branding ?? true;
+  const optSignature: boolean = customizationOptions?.showSignatureBox ?? clinicSavedOpts?.show_signature_box ?? true;
+  const optUpiQr: boolean = customizationOptions?.showUpiQr ?? clinicSavedOpts?.show_upi_qr ?? true;
+  const optTerms: string = customizationOptions?.customTerms ?? clinicSavedOpts?.custom_terms ?? '';
 
   const clinicName = c?.name || (invoice as any)?.clinic_name || (invoice as any)?.clinic || '—';
   const clinicAddress = c?.address || (invoice as any)?.clinic_address || '—';
@@ -294,165 +326,262 @@ export function InvoiceView({ invoice, clinic, patient, doctor, onClose }: Props
         }}
       >
         
-        {/* HEADER */}
-        <div className="flex justify-between items-start mb-6">
-          <div>
-            <h1 className="text-4xl font-black tracking-tight text-primary leading-none">VIITSA</h1>
-            <p className="text-[11px] font-semibold text-primary tracking-wide mt-1">Clinic-paid Healthcare SaaS</p>
-            <p className="text-[10px] text-ink-subtle mt-0.5 italic">Simplifying Care. Stronger Patients.</p>
-          </div>
-          <div className="text-right flex flex-col items-end">
-            <p className="text-[9px] font-bold tracking-widest text-ink-muted uppercase leading-relaxed text-right">
-              Connected Clinics<br/>Healthier Patients<br/>Brighter Tomorrow
-            </p>
-            <div className="w-10 h-[1.5px] bg-primary mt-2"></div>
-          </div>
-        </div>
+        {/* ======================= TEMPLATE 1: MODERN MEDICAL (DEFAULT) ======================= */}
+        {optStyle === 'modern' && (
+          <>
+            {/* Header */}
+            <div className="flex justify-between items-start mb-5">
+              <div>
+                <h1 className="text-3xl font-black tracking-tight leading-none" style={{ color: optColor }}>VIITSA</h1>
+                <p className="text-[11px] font-semibold tracking-wide mt-1" style={{ color: optColor }}>Clinic-paid Healthcare SaaS</p>
+                <p className="text-[10px] text-ink-subtle mt-0.5 italic">Simplifying Care. Stronger Patients.</p>
+              </div>
+              <div className="text-right flex flex-col items-end">
+                <p className="text-[9px] font-bold tracking-widest text-ink-muted uppercase leading-relaxed text-right">
+                  Connected Clinics<br/>Healthier Patients<br/>Brighter Tomorrow
+                </p>
+                <div className="w-10 h-[2px] mt-2" style={{ backgroundColor: optColor }}></div>
+              </div>
+            </div>
 
-        {/* TITLE */}
-        <div className="mb-4">
-          <h2 className="text-[28px] font-bold text-ink tracking-tight leading-none">Patient Invoice</h2>
-          <p className="text-[10px] font-bold tracking-[0.2em] text-ink-subtle uppercase mt-1">Medical Billing Statement</p>
-        </div>
+            {/* Title */}
+            <div className="mb-4">
+              <h2 className="text-[26px] font-bold text-ink tracking-tight leading-none">Patient Invoice</h2>
+              <p className="text-[10px] font-bold tracking-[0.2em] text-ink-subtle uppercase mt-1">Medical Billing Statement</p>
+            </div>
 
-        {/* TWO CARDS */}
-        <div className="grid grid-cols-[56%_42%] justify-between gap-4 mb-4">
-          
-          {/* Clinic Details */}
-          <div className="bg-secondary rounded-[10px] p-4 flex flex-col justify-between">
-            <div className="flex gap-3">
-              {c?.logo_url ? (
-                <div className="shrink-0 h-[60px] w-[60px] sm:h-[80px] sm:w-[80px] flex items-center justify-center">
-                  <img src={c.logo_url} alt="Clinic Logo" className="max-w-full max-h-full object-contain" />
+            {/* Two Cards: Clinic + Invoice Details */}
+            <div className="grid grid-cols-[56%_42%] justify-between gap-4 mb-4">
+              <div className="bg-slate-50 border border-slate-200/80 rounded-[10px] p-4 flex flex-col justify-between shadow-2xs">
+                <div className="flex gap-3">
+                  {c?.logo_url ? (
+                    <div className="shrink-0 h-[60px] w-[60px] sm:h-[70px] sm:w-[70px] flex items-center justify-center">
+                      <img src={c.logo_url} alt="Clinic Logo" className="max-w-full max-h-full object-contain" />
+                    </div>
+                  ) : (
+                    <div 
+                      className="w-12 h-12 rounded-lg text-white shrink-0 flex items-center justify-center font-bold text-lg tracking-wider"
+                      style={{ backgroundColor: optColor }}
+                    >
+                      {c?.name ? c.name.split(' ').map(w => w[0]).join('').substring(0, 2).toUpperCase() : 'CL'}
+                    </div>
+                  )}
+                  <div className="flex-1">
+                    <h3 className="text-[15px] font-bold text-ink leading-tight">{clinicName}</h3>
+                    <p className="text-[11px] text-ink-muted mt-1 leading-relaxed pr-2">
+                      {clinicAddress}
+                    </p>
+                  </div>
                 </div>
-              ) : (
-                <div className="bg-primary w-12 h-12 rounded-lg text-white shrink-0 flex items-center justify-center font-bold text-lg tracking-wider">
-                  {c?.name ? c.name.split(' ').map(w => w[0]).join('').substring(0, 2).toUpperCase() : 'CL'}
+                
+                <div className="mt-3 pt-2.5 border-t border-slate-200 flex flex-col gap-1 text-[10px] text-ink-muted">
+                  <div className="flex items-center gap-3">
+                    <span className="flex items-center gap-1.5"><Phone size={11} style={{ color: optColor }}/> {clinicPhone}</span>
+                    <span className="w-px h-3 bg-slate-300"></span>
+                    <span className="flex items-center gap-1.5"><Mail size={11} style={{ color: optColor }}/> {clinicEmail}</span>
+                  </div>
+                  <div className="flex items-center gap-3 mt-0.5">
+                    {c?.gstin && <span>GSTIN: <strong className="text-slate-800">{c.gstin}</strong></span>}
+                    {c?.gstin && c?.registration_number && <span className="w-px h-3 bg-slate-300"></span>}
+                    {c?.registration_number && <span>Reg: <strong className="text-slate-800">{c.registration_number}</strong></span>}
+                  </div>
                 </div>
-              )}
-              <div className="flex-1">
-                <h3 className="text-[15px] font-bold text-ink leading-tight">{clinicName}</h3>
-                <p className="text-[11px] text-ink-muted mt-1 leading-relaxed pr-2">
-                  {clinicAddress}
+              </div>
+
+              <div className="bg-slate-50 border border-slate-200/80 rounded-[10px] p-4 shadow-2xs">
+                <div className="grid grid-cols-[80px_1fr] gap-y-2 text-[11px]">
+                  <span className="text-ink-muted">Invoice No.</span>
+                  <span className="font-bold text-ink border-l border-slate-200 pl-3">{idStr}</span>
+                  
+                  <span className="text-ink-muted">Date</span>
+                  <span className="font-bold text-ink border-l border-slate-200 pl-3">{invoiceDateDisplay}</span>
+                  
+                  <span className="text-ink-muted">Time</span>
+                  <span className="font-bold text-ink border-l border-slate-200 pl-3">{invoiceTimeDisplay}</span>
+                  
+                  <span className="text-ink-muted">Receipt No.</span>
+                  <span className="font-bold text-ink border-l border-slate-200 pl-3">{invoice.receipt_number || invoice.id?.slice(0, 8) || '—'}</span>
+                  
+                  <span className="text-ink-muted">Payment Mode</span>
+                  <span className="font-bold text-ink uppercase border-l border-slate-200 pl-3">{invoice.payment_method || 'CASH'}</span>
+
+                  <span className="text-ink-muted">Status</span>
+                  <span className="border-l border-slate-200 pl-3">
+                    <span className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
+                      isPaidStatus ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-900'
+                    }`}>
+                      {isPaidStatus ? 'PAID' : 'PENDING'}
+                    </span>
+                  </span>
+                </div>
+              </div>
+            </div>
+          </>
+        )}
+
+        {/* ======================= TEMPLATE 2: CLEAN MINIMALIST ======================= */}
+        {optStyle === 'minimal' && (
+          <div className="border-b-2 pb-4 mb-4" style={{ borderColor: optColor }}>
+            <div className="flex justify-between items-start">
+              <div className="space-y-1">
+                <h1 className="text-2xl font-black text-slate-900 tracking-tight leading-none">{clinicName}</h1>
+                <p className="text-[11px] text-slate-600 max-w-md">{clinicAddress}</p>
+                <p className="text-[10px] text-slate-500">
+                  Tel: {clinicPhone} · Email: {clinicEmail}
+                  {c?.gstin ? ` · GSTIN: ${c.gstin}` : ''}
                 </p>
               </div>
+
+              <div className="text-right">
+                <span className="text-xs font-mono font-bold uppercase tracking-wider text-slate-400 block">TAX INVOICE</span>
+                <span className="text-xl font-bold font-mono text-slate-900">{idStr}</span>
+                <div className="text-xs text-slate-500 mt-1">
+                  <span>{invoiceDateDisplay}</span> · <span>{invoiceTimeDisplay}</span>
+                </div>
+                <div className="mt-1">
+                  <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded ${
+                    isPaidStatus ? 'bg-slate-900 text-white' : 'bg-amber-100 text-amber-900 border border-amber-300'
+                  }`}>
+                    {isPaidStatus ? 'PAID' : 'PAYMENT DUE'}
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ======================= TEMPLATE 3: CLASSIC HOSPITAL ======================= */}
+        {optStyle === 'classic' && (
+          <div className="border-b border-slate-300 pb-4 mb-4">
+            <div className="text-center pb-3 border-b border-slate-200 mb-3">
+              <h1 className="text-2xl font-bold uppercase tracking-wide text-slate-900">{clinicName}</h1>
+              <p className="text-xs text-slate-600 mt-0.5">{clinicAddress}</p>
+              <p className="text-[10px] text-slate-500 mt-0.5">
+                Contact: {clinicPhone} | E-mail: {clinicEmail}
+                {c?.registration_number ? ` | Reg. No: ${c.registration_number}` : ''}
+                {c?.gstin ? ` | GSTIN: ${c.gstin}` : ''}
+              </p>
             </div>
             
-            <div className="mt-4 pt-3 border-t border-primary/10 flex flex-col gap-1.5 text-[10px] text-ink-muted">
-              <div className="flex items-center gap-4">
-                <span className="flex items-center gap-1.5"><Phone size={12} className="text-primary"/> {clinicPhone}</span>
-                <span className="w-px h-3 bg-primary/20"></span>
-                <span className="flex items-center gap-1.5"><Mail size={12} className="text-primary"/> {clinicEmail}</span>
+            <div className="flex justify-between items-center px-1">
+              <div>
+                <span className="text-xs font-bold text-slate-700 uppercase tracking-wider">OFFICIAL OUTPATIENT BILL OF SUPPLY</span>
               </div>
-              <div className="flex items-center gap-4 mt-1">
-                {c?.gstin && <span>GSTIN: {c.gstin}</span>}
-                {c?.gstin && c?.registration_number && <span className="w-px h-3 bg-primary/20"></span>}
-                {c?.registration_number && <span>Reg. No.: {c.registration_number}</span>}
+              <div className="text-xs font-mono">
+                <span className="text-slate-500">Invoice No: </span>
+                <strong className="text-slate-900">{idStr}</strong>
+                <span className="text-slate-400 mx-2">|</span>
+                <span className="text-slate-500">Date: </span>
+                <strong className="text-slate-900">{invoiceDateDisplay}</strong>
               </div>
             </div>
           </div>
+        )}
 
-          {/* Invoice Details */}
-          <div className="bg-secondary rounded-[10px] p-5">
-            <div className="grid grid-cols-[80px_1fr] gap-y-2.5 text-[11px]">
-              <span className="text-ink-muted">Invoice No.</span>
-              <span className="font-bold text-ink border-l border-primary/20 pl-3">{idStr}</span>
-              
-              <span className="text-ink-muted">Date</span>
-              <span className="font-bold text-ink border-l border-primary/20 pl-3">{invoiceDateDisplay}</span>
-              
-              <span className="text-ink-muted">Time</span>
-              <span className="font-bold text-ink border-l border-primary/20 pl-3">{invoiceTimeDisplay}</span>
-              
-              <span className="text-ink-muted">Receipt No.</span>
-              <span className="font-bold text-ink border-l border-primary/20 pl-3">{invoice.receipt_number || invoice.id?.slice(0, 8) || '—'}</span>
-              
-              <span className="text-ink-muted">Payment Mode</span>
-              <span className="font-bold text-ink uppercase border-l border-primary/20 pl-3">{invoice.payment_method || 'CASH'}</span>
+        {/* ======================= TEMPLATE 4: EXECUTIVE NAVY ======================= */}
+        {optStyle === 'executive' && (
+          <div className="rounded-xl overflow-hidden mb-4 border border-slate-200 shadow-sm">
+            <div className="p-4 text-white flex justify-between items-center" style={{ backgroundColor: optColor }}>
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-lg bg-white/20 backdrop-blur-xs flex items-center justify-center font-bold text-white text-base">
+                  {c?.name ? c.name.substring(0, 2).toUpperCase() : 'VI'}
+                </div>
+                <div>
+                  <h1 className="text-lg font-bold leading-tight">{clinicName}</h1>
+                  <p className="text-xs text-white/80">{clinicAddress}</p>
+                </div>
+              </div>
+              <div className="text-right">
+                <span className="text-[10px] uppercase font-bold tracking-widest text-white/70 block">INVOICE STATEMENT</span>
+                <span className="text-lg font-mono font-bold tracking-tight">{idStr}</span>
+                <p className="text-[10px] text-white/80 mt-0.5">{invoiceDateDisplay}</p>
+              </div>
             </div>
           </div>
-        </div>
+        )}
 
-        {/* PATIENT DETAILS */}
-        <div className="border border-black/5 rounded-[10px] mb-4 overflow-hidden shadow-sm">
-          <div className="bg-secondary px-4 py-2.5 flex items-center gap-2 border-b border-black/5">
-            <User size={14} className="text-primary" />
-            <h3 className="text-xs font-bold text-ink">Patient Details</h3>
+        {/* ======================= PATIENT DETAILS BLOCK ======================= */}
+        <div className="border border-slate-200 rounded-[10px] mb-4 overflow-hidden shadow-2xs">
+          <div className="bg-slate-50 px-4 py-2 flex items-center justify-between border-b border-slate-200">
+            <div className="flex items-center gap-2">
+              <User size={13} style={{ color: optColor }} />
+              <h3 className="text-xs font-bold text-ink">Patient & Doctor Information</h3>
+            </div>
+            <span className="text-[10px] font-mono text-slate-500">UHID: <strong className="text-slate-800">{patientIdDisplay}</strong></span>
           </div>
-          <div className="p-4 bg-white text-[11px]">
+
+          <div className="p-3 bg-white text-[11px]">
             <div className="grid grid-cols-[1fr_auto_1fr] gap-x-6">
-              
-              <div className="grid grid-cols-[110px_10px_1fr] gap-y-2">
-                <span className="text-ink-muted">Patient Name</span><span>:</span><span className="font-medium text-ink">{patientName}</span>
-                <span className="text-ink-muted">UHID / Patient ID</span><span>:</span><span className="font-medium text-ink">{patientIdDisplay}</span>
-                <span className="text-ink-muted">Age</span><span>:</span><span className="font-medium text-ink">{patientAge ? `${patientAge} Years` : '—'}</span>
-                <span className="text-ink-muted">Gender</span><span>:</span><span className="font-medium text-ink">{patientGender}</span>
+              <div className="grid grid-cols-[100px_10px_1fr] gap-y-1.5">
+                <span className="text-ink-muted">Patient Name</span><span>:</span><span className="font-bold text-ink">{patientName}</span>
+                <span className="text-ink-muted">Age / Gender</span><span>:</span><span className="font-medium text-ink">{patientAge ? `${patientAge} Y` : '—'} / {patientGender}</span>
+                <span className="text-ink-muted">Contact Phone</span><span>:</span><span className="font-medium text-ink">{patientPhone}</span>
               </div>
               
-              <div className="w-px bg-black/5"></div>
+              <div className="w-px bg-slate-200"></div>
               
-              <div className="grid grid-cols-[110px_10px_1fr] gap-y-2">
-                <span className="text-ink-muted">Mobile No.</span><span>:</span><span className="font-medium text-ink">{patientPhone}</span>
-                <span className="text-ink-muted">Doctor Name</span><span>:</span><span className="font-medium text-ink">{doctorName}</span>
+              <div className="grid grid-cols-[100px_10px_1fr] gap-y-1.5">
+                <span className="text-ink-muted">Attending Doctor</span><span>:</span><span className="font-bold text-ink">{doctorName}</span>
                 <span className="text-ink-muted">Specialization</span><span>:</span><span className="font-medium text-ink">{doctorSpec}</span>
-                <span className="text-ink-muted">Visit Type</span><span>:</span><span className="font-medium text-ink">{invoice.visit_type === 'new-visit' ? 'New Visit (OPD)' : 'Follow-up (OPD)'}</span>
+                <span className="text-ink-muted">Visit Category</span><span>:</span><span className="font-medium text-ink">{invoice.visit_type === 'new-visit' ? 'First Visit (OPD)' : 'Follow-up (OPD)'}</span>
               </div>
-
             </div>
           </div>
         </div>
 
-        {/* BILLING TABLE */}
-        <div className="border border-black/5 rounded-[10px] mb-4 overflow-hidden shadow-sm">
-          <div className="bg-primary px-4 py-2.5">
-            <h3 className="text-[13px] font-bold text-white">Billing Details</h3>
+        {/* ======================= BILLING TABLE ======================= */}
+        <div className="border border-slate-200 rounded-[10px] mb-4 overflow-hidden shadow-2xs">
+          <div className="px-4 py-2 text-white flex justify-between items-center" style={{ backgroundColor: optColor }}>
+            <h3 className="text-xs font-bold uppercase tracking-wider">Service & Treatment Charges</h3>
+            <span className="text-[10px] font-semibold text-white/90">Cur: INR (₹)</span>
           </div>
+
           <table className="w-full text-[11px] text-left">
-            <thead className="bg-secondary text-ink font-bold border-b border-black/5">
+            <thead className="bg-slate-50 text-slate-800 font-bold border-b border-slate-200">
               <tr>
-                <th className="py-2.5 px-4 w-[5%] text-center">#</th>
-                <th className="py-2.5 px-4 w-[22%]">Category</th>
-                <th className="py-2.5 px-4 w-[30%]">Item / Description</th>
-                <th className="py-2.5 px-4 w-[10%] text-center">Qty</th>
-                <th className="py-2.5 px-4 w-[16%] text-right">Unit Price (₹)</th>
-                <th className="py-2.5 px-4 w-[17%] text-right">Amount (₹)</th>
+                <th className="py-2.5 px-3 w-[6%] text-center">#</th>
+                <th className="py-2.5 px-3 w-[22%]">Category</th>
+                <th className="py-2.5 px-3 w-[36%]">Item Description</th>
+                <th className="py-2.5 px-3 w-[8%] text-center">Qty</th>
+                <th className="py-2.5 px-3 w-[14%] text-right">Unit Price</th>
+                <th className="py-2.5 px-3 w-[14%] text-right">Total Amount</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-black/5">
+            <tbody className="divide-y divide-slate-100">
               {Object.keys(groupedItems).map((category, catIndex) => {
                 const catItems = groupedItems[category];
                 return (
                   <tr key={category} className="align-top hover:bg-slate-50/50">
-                    <td className="py-3 px-4 text-center text-ink-muted">{catIndex + 1}</td>
+                    <td className="py-2.5 px-3 text-center text-slate-400 font-mono text-[10px]">{catIndex + 1}</td>
                     
-                    <td className="py-3 px-4 font-bold text-ink">
-                      <div className="flex items-center gap-2">
-                        {getCategoryIcon(category)}
-                        {category}
+                    <td className="py-2.5 px-3 font-semibold text-slate-800">
+                      <div className="flex items-center gap-1.5">
+                        {getCategoryIcon(category, optColor)}
+                        <span>{category}</span>
                       </div>
                     </td>
                     
-                    <td className="py-3 px-4 text-ink-muted">
+                    <td className="py-2.5 px-3 text-slate-700">
                       {catItems.map((item: any, i: number) => (
-                        <div key={i} className={`font-medium ${i > 0 ? 'mt-1.5' : ''}`}>{item.description || item.name || 'Item'}</div>
+                        <div key={i} className={`font-medium ${i > 0 ? 'mt-1' : ''}`}>{item.description || item.name || 'Service item'}</div>
                       ))}
                     </td>
                     
-                    <td className="py-3 px-4 text-center text-ink-muted">
+                    <td className="py-2.5 px-3 text-center text-slate-600 font-mono">
                       {catItems.map((item: any, i: number) => (
-                        <div key={i} className={i > 0 ? 'mt-1.5' : ''}>{item.quantity || 1}</div>
+                        <div key={i} className={i > 0 ? 'mt-1' : ''}>{item.quantity || 1}</div>
                       ))}
                     </td>
                     
-                    <td className="py-3 px-4 text-right text-ink-muted">
+                    <td className="py-2.5 px-3 text-right text-slate-600 font-mono">
                       {catItems.map((item: any, i: number) => (
-                        <div key={i} className={i > 0 ? 'mt-1.5' : ''}>{fmt(item.amount / (item.quantity || 1))}</div>
+                        <div key={i} className={i > 0 ? 'mt-1' : ''}>₹{fmt(item.amount / (item.quantity || 1))}</div>
                       ))}
                     </td>
                     
-                    <td className="py-3 px-4 text-right font-bold text-ink">
+                    <td className="py-2.5 px-3 text-right font-bold text-slate-900 font-mono">
                       {catItems.map((item: any, i: number) => (
-                        <div key={i} className={i > 0 ? 'mt-1.5' : ''}>{fmt(item.amount)}</div>
+                        <div key={i} className={i > 0 ? 'mt-1' : ''}>₹{fmt(item.amount)}</div>
                       ))}
                     </td>
                   </tr>
@@ -462,87 +591,131 @@ export function InvoiceView({ invoice, clinic, patient, doctor, onClose }: Props
           </table>
         </div>
 
-        {/* BOTTOM SECTION */}
-        <div className="grid grid-cols-[52%_45%] justify-between gap-4 mb-6">
+        {/* ======================= TOTALS & SUMMARY ======================= */}
+        <div className="grid grid-cols-[52%_45%] justify-between gap-4 mb-4">
           
-          {/* Notes */}
-          <div className="border border-black/5 rounded-[10px] overflow-hidden h-fit shadow-sm">
-            <div className="bg-secondary px-4 py-2 flex items-center gap-2 border-b border-black/5">
-              <FileText size={14} className="text-primary" />
-              <h3 className="text-xs font-bold text-ink">Notes / Prescription Reference</h3>
+          {/* Left Column: Notes & Custom Terms & UPI */}
+          <div className="space-y-3">
+            <div className="border border-slate-200 rounded-[10px] overflow-hidden bg-white shadow-2xs">
+              <div className="bg-slate-50 px-3.5 py-1.5 flex items-center gap-1.5 border-b border-slate-200">
+                <FileText size={12} style={{ color: optColor }} />
+                <h4 className="text-[11px] font-bold text-slate-800">Clinical & Billing Notes</h4>
+              </div>
+              <div className="p-3 text-[10px] text-slate-600 space-y-1">
+                <p className="font-mono text-slate-400">REF: {idStr}</p>
+                <p className="italic text-slate-700">{invoice.notes || 'Routine consultation and outpatient services rendered.'}</p>
+              </div>
             </div>
-            <div className="p-4 text-[11px] text-ink-muted space-y-2 bg-white">
-              <p className="font-semibold text-ink-muted"># REF-{idStr.slice(0, 8)}</p>
-              <p>{invoice.notes || ''}</p>
-              <p>For any queries, contact the clinic.</p>
-            </div>
+
+            {/* Custom Terms if set */}
+            {optTerms && (
+              <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-200/80 text-[10px] text-slate-500 leading-relaxed">
+                {optTerms}
+              </div>
+            )}
+
+            {/* UPI QR Code block for pending or instant settlement */}
+            {optUpiQr && (c as any)?.upi_id && (
+              <div className="p-2.5 rounded-lg border border-slate-200 bg-slate-50/70 flex items-center justify-between text-xs">
+                <div>
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block">Instant UPI Payment</span>
+                  <span className="font-mono font-bold text-slate-800 text-[11px]">{(c as any).upi_id}</span>
+                </div>
+                <div className="h-7 w-7 rounded bg-white border border-slate-200 flex items-center justify-center text-teal-800">
+                  <QrCode size={18} />
+                </div>
+              </div>
+            )}
           </div>
 
-          {/* Totals */}
-          <div className="border border-black/5 rounded-[10px] overflow-hidden text-[11px] bg-white shadow-sm flex flex-col">
-            <div className="p-4 space-y-2.5">
-              <div className="flex justify-between text-ink-muted">
+          {/* Right Column: Financial Breakdown */}
+          <div className="border border-slate-200 rounded-[10px] overflow-hidden text-[11px] bg-white shadow-2xs flex flex-col">
+            <div className="p-3.5 space-y-1.5">
+              <div className="flex justify-between text-slate-600">
                 <span>Subtotal</span>
-                <span className="text-ink">{fmt(subtotal)}</span>
+                <span className="font-mono font-semibold text-slate-800">₹{fmt(subtotal)}</span>
               </div>
-              <div className="flex justify-between text-ink-muted">
-                <span>Discount</span>
-                <span className="text-ink">{fmt(discount)}</span>
-              </div>
-              <div className="flex justify-between text-ink-muted">
-                <span>Tax (GST 0%)</span>
-                <span className="text-ink">{fmt(tax)}</span>
+              {discount > 0 && (
+                <div className="flex justify-between text-emerald-700">
+                  <span>Discount</span>
+                  <span className="font-mono font-semibold">- ₹{fmt(discount)}</span>
+                </div>
+              )}
+              <div className="flex justify-between text-slate-600">
+                <span>GST (0% Healthcare Exemption)</span>
+                <span className="font-mono text-slate-700">₹{fmt(tax)}</span>
               </div>
             </div>
-            <div className="bg-secondary border-y border-black/5 px-4 py-2.5 flex justify-between items-center">
-              <span className="font-bold text-ink text-xs">Grand Total (₹)</span>
-              <span className="font-black text-primary text-base">{fmt(grandTotal)}</span>
+
+            <div className="px-3.5 py-2 flex justify-between items-center text-white" style={{ backgroundColor: optColor }}>
+              <span className="font-bold text-xs uppercase tracking-wide">Grand Total</span>
+              <span className="font-mono font-black text-base">₹{fmt(grandTotal)}</span>
             </div>
-            <div className="p-4 space-y-2.5">
-              <div className="flex justify-between text-ink-muted">
-                <span>Amount Paid (₹)</span>
-                <span className="text-ink">{fmt(amountPaid)}</span>
+
+            <div className="p-3.5 space-y-1.5 bg-slate-50/50">
+              <div className="flex justify-between text-slate-700">
+                <span>Amount Paid</span>
+                <span className="font-mono font-bold text-slate-900">₹{fmt(amountPaid)}</span>
               </div>
-              <div className="flex justify-between font-bold text-ink">
-                <span>Balance Due (₹)</span>
-                <span className={balanceDue > 0 ? 'text-danger' : 'text-ink'}>{fmt(balanceDue)}</span>
+              <div className="flex justify-between font-bold pt-1 border-t border-slate-200">
+                <span>Balance Due</span>
+                <span className={`font-mono ${balanceDue > 0 ? 'text-rose-600 font-extrabold' : 'text-emerald-700'}`}>
+                  ₹{fmt(balanceDue)}
+                </span>
               </div>
             </div>
           </div>
         </div>
 
-        {/* FOOTER */}
-        <div className="pt-4 border-t border-black/10 flex items-center justify-between mt-auto">
-          <div>
-            <p className="text-[10px] text-primary font-semibold mb-0.5">Thank you for choosing</p>
-            <h2 className="text-[26px] font-black text-primary leading-none">VIITSA</h2>
-            <p className="text-[7.5px] font-bold tracking-widest text-ink-subtle mt-1 uppercase">Better Care Together</p>
-          </div>
-          
-          <div className="flex items-center gap-5">
-            <div className="flex flex-col items-center text-primary border-r border-black/10 pr-5">
-              <ShieldCheck size={16} className="mb-1" />
-              <span className="text-[8px] font-bold text-center leading-tight">Secure<br/>Patient Records</span>
+        {/* ======================= SIGNATURE / STAMP SECTION ======================= */}
+        {optSignature && (
+          <div className="flex justify-between items-end mt-4 pt-4 border-t border-slate-100 text-[10px] text-slate-500">
+            <div>
+              <p className="font-semibold text-slate-700">{clinicName}</p>
+              <p className="text-[9px]">Authorised Medical Facility</p>
             </div>
-            <div className="flex flex-col items-center text-primary border-r border-black/10 pr-5">
-              <Users size={16} className="mb-1" />
-              <span className="text-[8px] font-bold text-center leading-tight">Seamless<br/>Clinic Experience</span>
-            </div>
-            <div className="flex flex-col items-center text-primary">
-              <TrendingUp size={16} className="mb-1" />
-              <span className="text-[8px] font-bold text-center leading-tight">Better<br/>Health Outcomes</span>
+            <div className="text-right">
+              <div className="w-40 border-b border-slate-400 mb-1"></div>
+              <span className="font-semibold text-slate-700 block">Authorised Signatory</span>
+              <span className="text-[9px] text-slate-400">Doctor / Billing Executive</span>
             </div>
           </div>
+        )}
 
-          <div className="text-right">
-            <p className="text-[9px] text-ink-muted mb-0.5">Generated via <span className="font-bold text-ink">VIITSA</span></p>
-            <p className="text-[8px] text-ink-subtle mb-0.5">Clinic Management & Patient Engagement Platform</p>
-            <a href="https://www.viitsa.com" className="text-[8px] text-primary hover:underline">www.viitsa.com</a>
+        {/* ======================= PLATFORM FOOTER BADGES ======================= */}
+        {optPlatformBranding && (
+          <div className="pt-4 border-t border-slate-200 flex items-center justify-between mt-auto">
+            <div>
+              <p className="text-[9px] font-semibold text-slate-400 mb-0.5">Connected Clinic</p>
+              <h2 className="text-[20px] font-black leading-none" style={{ color: optColor }}>VIITSA</h2>
+              <p className="text-[7.5px] font-bold tracking-widest text-slate-400 mt-1 uppercase">Better Care Together</p>
+            </div>
+            
+            <div className="flex items-center gap-4 text-slate-700">
+              <div className="flex flex-col items-center pr-4 border-r border-slate-200">
+                <ShieldCheck size={14} style={{ color: optColor }} className="mb-0.5" />
+                <span className="text-[8px] font-bold text-center leading-tight">Secure<br/>Patient Records</span>
+              </div>
+              <div className="flex flex-col items-center pr-4 border-r border-slate-200">
+                <Users size={14} style={{ color: optColor }} className="mb-0.5" />
+                <span className="text-[8px] font-bold text-center leading-tight">Seamless<br/>Clinic Experience</span>
+              </div>
+              <div className="flex flex-col items-center">
+                <TrendingUp size={14} style={{ color: optColor }} className="mb-0.5" />
+                <span className="text-[8px] font-bold text-center leading-tight">Better<br/>Health Outcomes</span>
+              </div>
+            </div>
+
+            <div className="text-right">
+              <p className="text-[9px] text-slate-500 mb-0.5">Official Invoice via <span className="font-bold text-slate-800">VIITSA</span></p>
+              <a href="https://www.viitsa.com" className="text-[8px] font-medium hover:underline" style={{ color: optColor }}>www.viitsa.com</a>
+            </div>
           </div>
-        </div>
+        )}
+
       </div>
 
-      {/* Actions */}
+      {/* ======================= ACTION BUTTONS ======================= */}
       <div id="invoice-actions" className="flex items-center justify-center gap-2 sm:gap-3 flex-wrap print:hidden max-w-[210mm] w-full mx-auto mt-4 pb-10 px-2">
         <button 
           onClick={shareViaWhatsAppText} 

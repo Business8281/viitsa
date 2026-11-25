@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
-import { CalendarDays, Plus, Zap, MessageCircle, X, Clock, User as UserIcon, Stethoscope, Sparkles, CheckCircle, History, Search, ChevronLeft, ChevronRight, FolderHeart, RotateCcw, CheckCircle2, Phone, Mail, Users, Layers, AlertCircle, Info, ChevronDown, ChevronUp } from 'lucide-react';
+import { useEffect, useMemo, useState, useRef } from 'react';
+import { Calendar, CalendarDays, LayoutGrid, Plus, Zap, MessageCircle, X, Clock, User as UserIcon, Stethoscope, Sparkles, CheckCircle, History, Search, ChevronLeft, ChevronRight, FolderHeart, RotateCcw, CheckCircle2, Phone, Mail, Users, Layers, AlertCircle, Info, ChevronDown, ChevronUp } from 'lucide-react';
 import { db } from '../lib/firebase';
 import { collection, query, where, getDocs, getDoc, doc, addDoc, updateDoc, orderBy, limit, setDoc, onSnapshot, serverTimestamp } from 'firebase/firestore';
 import { useAuth } from '../lib/auth';
@@ -11,7 +11,8 @@ import { AISummaryPanel } from '../components/AISummaryPanel';
 import { EmptyState, Loading, SectionHeader } from '../components/ui';
 import { DateRangeFilter } from '../components/DateRangeFilter';
 import { PatientDetailModal } from '../components/PatientDetailModal';
-import { formatDate, formatTime, statusBadgeClass, whatsappReminderLink, todayISO, localDateISO, matchesDateRange, type DateRangePreset, calculateAge, formatDobForInput } from '../lib/format';
+import { WritePrescriptionModal } from '../components/WritePrescriptionModal';
+import { formatDate, formatTime, statusBadgeClass, whatsappReminderLink, todayISO, localDateISO, matchesDateRange, type DateRangePreset, calculateAge, formatDobForInput, isSameDay } from '../lib/format';
 import { sendWhatsAppAppointmentReminderViaAPI } from '../lib/whatsappClientService';
 import type { Appointment, Patient, User as U } from '../lib/types';
 import type { TriageSummary } from '../lib/aiService';
@@ -43,7 +44,6 @@ function generateSlots(openTime: string, closeTime: string, durationMin: number)
 }
 
 const SLOT_CACHE: Record<string, string[]> = {};
-const EMPTY_APPTS: Appointment[] = [];
 
 function getApptTypeLabel(a?: Appointment): string {
   if (!a) return 'Clinic';
@@ -75,7 +75,7 @@ async function fetchClinicHours(clinicId: string): Promise<{ open: string; close
 
 export function AppointmentsScreen() {
   const { clinic, user } = useAuth();
-  const { appointments, patients, loading, refresh, urgentQueue } = useClinicData();
+  const { appointments, bills, patients, loading, refresh, urgentQueue } = useClinicData();
   const { toast } = useToast();
 
   const [viewMode, setViewMode] = useState<'schedule' | 'history'>('schedule');
@@ -97,12 +97,63 @@ export function AppointmentsScreen() {
     d.setHours(0, 0, 0, 0);
     return d;
   });
+  const [calendarMode, setCalendarMode] = useState<'strip' | 'month'>('strip');
+  const [calendarMonth, setCalendarMonth] = useState<Date>(() => {
+    const d = new Date();
+    d.setDate(1);
+    d.setHours(0, 0, 0, 0);
+    return d;
+  });
+  const [showMonthCalendar, setShowMonthCalendar] = useState(false);
+  const [showDatePickerPopover, setShowDatePickerPopover] = useState(false);
+  const datePickerRef = useRef<HTMLDivElement>(null);
+  const nativeInputRef = useRef<HTMLInputElement>(null);
+  const [pickerMonth, setPickerMonth] = useState<Date>(() => new Date());
+
+  useEffect(() => {
+    if (!showDatePickerPopover) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      if (datePickerRef.current && !datePickerRef.current.contains(e.target as Node)) {
+        setShowDatePickerPopover(false);
+      }
+    };
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setShowDatePickerPopover(false);
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [showDatePickerPopover]);
+
+  const handleSelectDate = (d: Date | string) => {
+    let cleanDate: Date;
+    if (typeof d === 'string') {
+      const parts = d.split('-');
+      cleanDate = new Date(parseInt(parts[0], 10), parseInt(parts[1], 10) - 1, parseInt(parts[2], 10));
+    } else {
+      cleanDate = new Date(d);
+    }
+    cleanDate.setHours(0, 0, 0, 0);
+    setSelectedDate(cleanDate);
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const diffDays = Math.round((cleanDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+    const block = Math.floor(diffDays / 7) * 7;
+    setDayOffset(block);
+    setCalendarMonth(new Date(cleanDate.getFullYear(), cleanDate.getMonth(), 1));
+    setPickerMonth(new Date(cleanDate.getFullYear(), cleanDate.getMonth(), 1));
+  };
   const [hours, setHours] = useState<{ open: string; close: string; slot: number; holidays: string[] }>({ open: '09:00', close: '19:00', slot: 20, holidays: [] });
   const [bookOpen, setBookOpen] = useState(false);
   const [walkinOpen, setWalkinOpen] = useState(false);
   const [doctors, setDoctors] = useState<U[]>([]);
   const [summaryAppt, setSummaryAppt] = useState<Appointment | null>(null);
   const [selectedPatientForModal, setSelectedPatientForModal] = useState<any | null>(null);
+  const [prescriptionData, setPrescriptionData] = useState<{ appointment?: any; patient?: any } | null>(null);
 
   useEffect(() => {
     if (!clinic) return;
@@ -173,7 +224,7 @@ export function AppointmentsScreen() {
     }
   }, [appointments]);
 
-  const dates = useMemo(() => generateDates(8, dayOffset), [dayOffset]);
+  const dates = useMemo(() => generateDates(7, dayOffset), [dayOffset]);
   const slotKey = `${hours.open}-${hours.close}-${hours.slot}`;
   if (!SLOT_CACHE[slotKey]) SLOT_CACHE[slotKey] = generateSlots(hours.open, hours.close, hours.slot);
   const slots = SLOT_CACHE[slotKey];
@@ -190,10 +241,106 @@ export function AppointmentsScreen() {
     return map;
   }, [appointments]);
 
+  // Month grid for month calendar view
+  const monthGridDays = useMemo(() => {
+    const year = calendarMonth.getFullYear();
+    const month = calendarMonth.getMonth();
+    const firstDay = new Date(year, month, 1);
+    const startDay = firstDay.getDay(); // 0 is Sun, 1 is Mon...
+    const daysInPrevMonth = new Date(year, month, 0).getDate();
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+
+    const days: { date: Date; isCurrentMonth: boolean; iso: string }[] = [];
+
+    // Prev month padding
+    for (let i = startDay - 1; i >= 0; i--) {
+      const d = new Date(year, month - 1, daysInPrevMonth - i);
+      d.setHours(0, 0, 0, 0);
+      days.push({ date: d, isCurrentMonth: false, iso: localDateISO(d) });
+    }
+
+    // Current month
+    for (let i = 1; i <= daysInMonth; i++) {
+      const d = new Date(year, month, i);
+      d.setHours(0, 0, 0, 0);
+      days.push({ date: d, isCurrentMonth: true, iso: localDateISO(d) });
+    }
+
+    // Next month padding to complete grid
+    const totalCells = Math.ceil(days.length / 7) * 7;
+    const remaining = totalCells - days.length;
+    for (let i = 1; i <= remaining; i++) {
+      const d = new Date(year, month + 1, i);
+      d.setHours(0, 0, 0, 0);
+      days.push({ date: d, isCurrentMonth: false, iso: localDateISO(d) });
+    }
+
+    return days;
+  }, [calendarMonth]);
+
+  // Month grid for the Pick Date Popover
+  const pickerMonthDays = useMemo(() => {
+    const year = pickerMonth.getFullYear();
+    const month = pickerMonth.getMonth();
+    const firstDay = new Date(year, month, 1);
+    const startDay = firstDay.getDay(); // 0 is Sun
+    const daysInPrevMonth = new Date(year, month, 0).getDate();
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+
+    const days: { date: Date; isCurrentMonth: boolean; iso: string }[] = [];
+
+    // Prev month padding
+    for (let i = startDay - 1; i >= 0; i--) {
+      const d = new Date(year, month - 1, daysInPrevMonth - i);
+      d.setHours(0, 0, 0, 0);
+      days.push({ date: d, isCurrentMonth: false, iso: localDateISO(d) });
+    }
+
+    // Current month
+    for (let i = 1; i <= daysInMonth; i++) {
+      const d = new Date(year, month, i);
+      d.setHours(0, 0, 0, 0);
+      days.push({ date: d, isCurrentMonth: true, iso: localDateISO(d) });
+    }
+
+    // Next month padding to fill grid
+    const totalCells = Math.ceil(days.length / 7) * 7;
+    const remaining = totalCells - days.length;
+    for (let i = 1; i <= remaining; i++) {
+      const d = new Date(year, month + 1, i);
+      d.setHours(0, 0, 0, 0);
+      days.push({ date: d, isCurrentMonth: false, iso: localDateISO(d) });
+    }
+
+    return days;
+  }, [pickerMonth]);
+
+  // Dynamic header month & year string
+  const visibleMonthYear = useMemo(() => {
+    if (calendarMode === 'month') {
+      return calendarMonth.toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
+    }
+    if (!dates || dates.length === 0) return '';
+    const first = dates[0];
+    const last = dates[dates.length - 1];
+    if (first.getMonth() === last.getMonth()) {
+      return first.toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
+    }
+    return `${first.toLocaleDateString('en-IN', { month: 'short' })} – ${last.toLocaleDateString('en-IN', { month: 'short', year: 'numeric' })}`;
+  }, [calendarMode, calendarMonth, dates]);
+
+  // Total visible appointments in the current calendar range
+  const visibleApptCount = useMemo(() => {
+    if (calendarMode === 'month') {
+      return monthGridDays
+        .filter((x) => x.isCurrentMonth)
+        .reduce((sum, x) => sum + (appointmentsByDate[x.iso]?.length || 0), 0);
+    }
+    return dates.reduce((sum, d) => sum + (appointmentsByDate[localDateISO(d)]?.length || 0), 0);
+  }, [calendarMode, monthGridDays, dates, appointmentsByDate]);
+
   const selectedISO = localDateISO(selectedDate);
-  const selectedAppts = useMemo(() => {
-    return appointmentsByDate[selectedISO] || EMPTY_APPTS;
-  }, [appointmentsByDate, selectedISO]);
+  const selectedAppts = appointmentsByDate[selectedISO] ?? [];
 
   // Statistics for selected day
   const dayStats = useMemo(() => {
@@ -214,6 +361,28 @@ export function AppointmentsScreen() {
       uniquePatients,
     };
   }, [selectedAppts]);
+
+  // Current clock time in HH:MM
+  const currentHHMM = useMemo(() => {
+    const now = new Date();
+    return `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+  }, []);
+
+  const isSelectedDateToday = isSameDay(selectedDate, new Date());
+  const isSelectedDatePast = !isSelectedDateToday && selectedDate.getTime() < new Date().setHours(0, 0, 0, 0);
+  const isSelectedDateFuture = !isSelectedDateToday && selectedDate.getTime() > new Date().setHours(23, 59, 59, 999);
+
+  // Count appointments per slot on selected day
+  const apptsCountBySlot = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const a of selectedAppts) {
+      if (a.time_slot) {
+        counts[a.time_slot] = (counts[a.time_slot] || 0) + 1;
+      }
+    }
+    return counts;
+  }, [selectedAppts]);
+
 
   // Helper to get a stable unique patient key across bookings
   const getPatientKey = (a: Appointment) => {
@@ -435,6 +604,85 @@ export function AppointmentsScreen() {
     }
   };
 
+  // Payment / Consultation Fee status helper
+  const getApptPaymentStatus = (appt?: Appointment | null): 'paid' | 'pending' => {
+    if (!appt) return 'pending';
+    // 1. Direct field on appointment
+    const direct = String((appt as any).payment_status || (appt as any).fee_status || '').toLowerCase().trim();
+    if (direct === 'paid') return 'paid';
+    if (direct === 'pending') return 'pending';
+
+    // 2. Matching bill by appointment_id / appt_id
+    const apptId = appt.appointment_id || appt.appt_id;
+    if (apptId) {
+      const match = bills.find(b =>
+        b.appointment_id === apptId ||
+        b.appt_id === apptId ||
+        (b as any).apptId === apptId
+      );
+      if (match) {
+        const bStatus = String(match.payment_status || '').toLowerCase().trim();
+        return bStatus === 'paid' ? 'paid' : 'pending';
+      }
+    }
+
+    // 3. Matching bill by patient_id & date
+    if (appt.patient_id && appt.date) {
+      const patBill = bills.find(b =>
+        b.patient_id === appt.patient_id &&
+        (isSameDay(b.created_at, appt.date) || isSameDay((b as any).date, appt.date))
+      );
+      if (patBill) {
+        const pbStatus = String(patBill.payment_status || '').toLowerCase().trim();
+        return pbStatus === 'paid' ? 'paid' : 'pending';
+      }
+    }
+
+    return 'pending';
+  };
+
+  // Quick toggle fee status between paid and pending
+  const togglePaymentStatus = async (appt: Appointment, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    const apptId = appt.appointment_id || appt.appt_id;
+    if (!apptId) return;
+
+    const currentStatus = getApptPaymentStatus(appt);
+    const newStatus: 'paid' | 'pending' = currentStatus === 'paid' ? 'pending' : 'paid';
+
+    try {
+      // 1. Update appointment record in Firestore
+      await updateDoc(doc(db, 'appointments', apptId), {
+        payment_status: newStatus,
+        fee_status: newStatus,
+        updated_at: serverTimestamp(),
+      });
+
+      // 2. If matching bill exists, sync status
+      const matchingBills = bills.filter(b =>
+        b.appointment_id === apptId ||
+        b.appt_id === apptId ||
+        (b as any).apptId === apptId ||
+        (b.patient_id === appt.patient_id && isSameDay(b.created_at, appt.date))
+      );
+
+      for (const b of matchingBills) {
+        if (b.bill_id) {
+          await updateDoc(doc(db, 'billing', b.bill_id), {
+            payment_status: newStatus,
+            updated_at: serverTimestamp(),
+          });
+        }
+      }
+
+      toast(`Fee marked as ${newStatus === 'paid' ? 'Paid' : 'Pending'}.`, 'success');
+      void refresh();
+    } catch (err) {
+      console.error('Failed to update fee status:', err);
+      toast('Failed to update fee status. Please try again.', 'error');
+    }
+  };
+
   const onRemind = async (appt: Appointment, patient?: Patient) => {
     if (!clinic) return;
     const phone = patient?.phone || (appt as any).patient_phone || (appt as any).phone;
@@ -580,66 +828,328 @@ export function AppointmentsScreen() {
 
       {viewMode === 'schedule' ? (
         <>
-          {/* Calendar strip with previous/next controls */}
-          <div className="card">
-            <div className="flex items-center justify-between mb-3">
-              <SectionHeader title="Select day" subtitle="Tap a date to view its appointments" />
-              <div className="flex items-center gap-1">
+          {/* Calendar & Time Selection Card */}
+          <div className="card space-y-4">
+            {/* Row 1: Calendar Date Picker & Quick Actions */}
+            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 pb-3 border-b border-slate-100">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 rounded-xl bg-teal-50 text-teal-700 border border-teal-100 shadow-2xs">
+                  <Calendar size={20} />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h2 className="text-base font-extrabold text-slate-900 tracking-tight">
+                      {formatLongDateShort(selectedDate)}
+                    </h2>
+                    {isSelectedDateToday ? (
+                      <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-teal-600 text-white shadow-2xs">
+                        Today
+                      </span>
+                    ) : isSelectedDatePast ? (
+                      <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 border border-slate-200">
+                        Previous Date
+                      </span>
+                    ) : (
+                      <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200">
+                        Upcoming Date
+                      </span>
+                    )}
+                    <span className="text-xs font-bold px-2.5 py-0.5 rounded-full bg-teal-50 text-teal-800 border border-teal-200/60">
+                      {selectedAppts.length} {selectedAppts.length === 1 ? 'booking' : 'bookings'}
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-500 font-medium mt-0.5">
+                    Pick a date from the calendar and select a time slot to see previous, active, and upcoming appointments.
+                  </p>
+                </div>
+              </div>
+
+              {/* Date Controls: Prev, Today, Next + Interactive Calendar Picker */}
+              <div className="flex items-center gap-2 flex-wrap">
+                {/* Quick Date Presets */}
+                <div className="inline-flex p-1 bg-slate-100 rounded-xl border border-slate-200/60 shadow-2xs">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const y = new Date();
+                      y.setDate(y.getDate() - 1);
+                      handleSelectDate(y);
+                    }}
+                    className={`px-2.5 py-1 text-xs font-semibold rounded-lg transition cursor-pointer ${
+                      selectedISO === localDateISO(new Date(Date.now() - 86400000))
+                        ? 'bg-white text-slate-900 shadow-xs font-bold'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    Yesterday
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleSelectDate(new Date())}
+                    className={`px-2.5 py-1 text-xs font-semibold rounded-lg transition cursor-pointer ${
+                      isSelectedDateToday
+                        ? 'bg-white text-teal-800 shadow-xs font-bold'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    Today
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const tm = new Date();
+                      tm.setDate(tm.getDate() + 1);
+                      handleSelectDate(tm);
+                    }}
+                    className={`px-2.5 py-1 text-xs font-semibold rounded-lg transition cursor-pointer ${
+                      selectedISO === localDateISO(new Date(Date.now() + 86400000))
+                        ? 'bg-white text-slate-900 shadow-xs font-bold'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    Tomorrow
+                  </button>
+                </div>
+
+                {/* Direct Calendar Picker Button & Popover */}
+                <div className="relative" ref={datePickerRef}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPickerMonth(new Date(selectedDate));
+                      setShowDatePickerPopover(!showDatePickerPopover);
+                    }}
+                    className={`btn-outline text-xs px-3 py-1.5 flex items-center gap-1.5 font-bold cursor-pointer transition shadow-2xs ${
+                      showDatePickerPopover
+                        ? 'border-teal-600 bg-teal-50 text-teal-800'
+                        : 'bg-white hover:border-teal-500'
+                    }`}
+                    title="Open calendar to pick any date"
+                  >
+                    <Calendar size={14} className="text-teal-700" />
+                    <span>Pick Date</span>
+                    <ChevronDown size={12} className={`transition-transform duration-200 ${showDatePickerPopover ? 'rotate-180 text-teal-700' : 'text-slate-400'}`} />
+                  </button>
+
+                  {showDatePickerPopover && (
+                    <div className="absolute right-0 sm:right-auto sm:left-0 top-full mt-2 w-72 bg-white rounded-2xl shadow-xl border border-slate-200/90 p-3 z-50 animate-in fade-in zoom-in-95 duration-150">
+                      {/* Month Navigation */}
+                      <div className="flex items-center justify-between pb-2 mb-2 border-b border-slate-100">
+                        <button
+                          type="button"
+                          onClick={() => setPickerMonth(new Date(pickerMonth.getFullYear(), pickerMonth.getMonth() - 1, 1))}
+                          className="p-1 rounded-lg text-slate-500 hover:text-slate-800 hover:bg-slate-100 transition cursor-pointer"
+                          title="Previous Month"
+                        >
+                          <ChevronLeft size={16} />
+                        </button>
+                        <span className="text-xs font-bold text-slate-900">
+                          {pickerMonth.toLocaleDateString('en-IN', { month: 'long', year: 'numeric' })}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => setPickerMonth(new Date(pickerMonth.getFullYear(), pickerMonth.getMonth() + 1, 1))}
+                          className="p-1 rounded-lg text-slate-500 hover:text-slate-800 hover:bg-slate-100 transition cursor-pointer"
+                          title="Next Month"
+                        >
+                          <ChevronRight size={16} />
+                        </button>
+                      </div>
+
+                      {/* Day of Week Headers */}
+                      <div className="grid grid-cols-7 gap-1 text-center mb-1">
+                        {['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'].map((d) => (
+                          <span key={d} className="text-[10px] font-bold text-slate-400 uppercase py-0.5">
+                            {d}
+                          </span>
+                        ))}
+                      </div>
+
+                      {/* Calendar Day Grid */}
+                      <div className="grid grid-cols-7 gap-1">
+                        {pickerMonthDays.map(({ date: d, isCurrentMonth, iso }) => {
+                          const isSelected = iso === selectedISO;
+                          const isToday = iso === todayISO();
+                          const apptsCount = appointmentsByDate[iso]?.length || 0;
+
+                          return (
+                            <button
+                              key={iso}
+                              type="button"
+                              onClick={() => {
+                                handleSelectDate(d);
+                                setShowDatePickerPopover(false);
+                              }}
+                              className={`h-8 rounded-lg flex flex-col items-center justify-center text-xs font-semibold transition cursor-pointer relative ${
+                                isSelected
+                                  ? 'bg-teal-700 text-white font-bold shadow-xs'
+                                  : isToday
+                                  ? 'bg-teal-50 text-teal-800 border border-teal-300 font-bold'
+                                  : isCurrentMonth
+                                  ? 'text-slate-800 hover:bg-slate-100'
+                                  : 'text-slate-300 hover:text-slate-600'
+                              }`}
+                            >
+                              <span>{d.getDate()}</span>
+                              {apptsCount > 0 && (
+                                <span
+                                  className={`h-1 w-1 rounded-full ${isSelected ? 'bg-white' : 'bg-teal-600'}`}
+                                  title={`${apptsCount} bookings`}
+                                />
+                              )}
+                            </button>
+                          );
+                        })}
+                      </div>
+
+                      {/* Bottom Quick Select & Native Input */}
+                      <div className="mt-2.5 pt-2 border-t border-slate-100 flex items-center justify-between gap-1 text-[11px]">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            handleSelectDate(new Date());
+                            setShowDatePickerPopover(false);
+                          }}
+                          className="px-2 py-1 font-bold text-teal-700 hover:bg-teal-50 rounded-md transition cursor-pointer"
+                        >
+                          Today
+                        </button>
+
+                        <div className="relative">
+                          <input
+                            ref={nativeInputRef}
+                            type="date"
+                            value={selectedISO}
+                            onClick={(e) => {
+                              try {
+                                (e.currentTarget as any).showPicker?.();
+                              } catch {}
+                            }}
+                            onChange={(e) => {
+                              if (e.target.value) {
+                                handleSelectDate(e.target.value);
+                                setShowDatePickerPopover(false);
+                              }
+                            }}
+                            className="text-[11px] font-medium text-slate-700 bg-slate-50 border border-slate-200 rounded-md px-1.5 py-0.5 cursor-pointer hover:border-teal-500"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Day Navigation */}
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const d = new Date(selectedDate);
+                      d.setDate(d.getDate() - 1);
+                      handleSelectDate(d);
+                    }}
+                    className="btn-outline p-1.5 text-xs rounded-lg hover:border-slate-300 shadow-2xs cursor-pointer"
+                    title="Previous day"
+                  >
+                    <ChevronLeft size={14} />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const d = new Date(selectedDate);
+                      d.setDate(d.getDate() + 1);
+                      handleSelectDate(d);
+                    }}
+                    className="btn-outline p-1.5 text-xs rounded-lg hover:border-slate-300 shadow-2xs cursor-pointer"
+                    title="Next day"
+                  >
+                    <ChevronRight size={14} />
+                  </button>
+                </div>
+
+                {/* Toggle Month Calendar View */}
                 <button
-                  onClick={() => setDayOffset((prev) => prev - 7)}
-                  className="btn-outline p-1.5 text-xs"
-                  title="Previous 7 days"
+                  type="button"
+                  onClick={() => setShowMonthCalendar(!showMonthCalendar)}
+                  className={`btn-outline text-xs py-1.5 px-2.5 flex items-center gap-1.5 font-semibold cursor-pointer ${
+                    showMonthCalendar ? 'bg-teal-50 text-teal-800 border-teal-300' : ''
+                  }`}
+                  title="Toggle full month calendar"
                 >
-                  <ChevronLeft size={14} />
-                </button>
-                <button
-                  onClick={() => {
-                    setDayOffset(0);
-                    setSelectedDate(new Date());
-                  }}
-                  className="btn-outline px-2.5 py-1 text-xs"
-                >
-                  Today
-                </button>
-                <button
-                  onClick={() => setDayOffset((prev) => prev + 7)}
-                  className="btn-outline p-1.5 text-xs"
-                  title="Next 7 days"
-                >
-                  <ChevronRight size={14} />
+                  <LayoutGrid size={13} className="text-teal-700" />
+                  <span>{showMonthCalendar ? 'Hide Calendar' : 'Month View'}</span>
                 </button>
               </div>
             </div>
-            <div className="flex items-center gap-1 overflow-x-auto no-scrollbar pb-1 -mx-1 px-1">
-              {dates.map((d) => {
-                const iso = localDateISO(d);
-                const appts = appointmentsByDate[iso] ?? [];
-                const active = d.toDateString() === selectedDate.toDateString();
-                const isToday = d.toDateString() === new Date().toDateString();
-                return (
-                  <button
-                    key={iso}
-                    onClick={() => setSelectedDate(d)}
-                    className={`flex flex-col items-center justify-center min-w-[68px] py-3 px-2 rounded-lg border transition ${
-                      active ? 'bg-primary border-primary text-white' : 'border-black/5 text-ink hover:border-primary/30'
-                    }`}
-                  >
-                    <span className={`text-[10px] uppercase tracking-wide ${active ? 'text-white/80' : 'text-ink-subtle'}`}>
-                      {!isNaN(d.getTime()) ? d.toLocaleDateString('en-IN', { weekday: 'short' }) : '—'}
-                    </span>
-                    <span className="text-lg font-bold leading-tight">{!isNaN(d.getTime()) ? d.getDate() : '—'}</span>
-                    <span className={`text-[10px] ${active ? 'text-white/80' : 'text-ink-subtle'}`}>
-                      {isToday ? 'Today' : (!isNaN(d.getTime()) ? d.toLocaleDateString('en-IN', { month: 'short' }) : '—')}
-                    </span>
-                    {appts.length > 0 && (
-                      <span className={`mt-1 inline-flex items-center justify-center h-4 min-w-[16px] px-1 rounded-full text-[9px] font-bold ${active ? 'bg-white/25 text-white' : 'bg-primary-50 text-primary'}`}>
-                        {appts.length}
-                      </span>
-                    )}
-                  </button>
-                );
-              })}
-            </div>
+
+            {/* Collapsible Month Calendar Grid */}
+            {showMonthCalendar && (
+              <div className="p-3 bg-slate-50/70 rounded-2xl border border-slate-200/90 space-y-2">
+                <div className="flex items-center justify-between px-1">
+                  <h3 className="text-sm font-bold text-slate-900">
+                    {calendarMonth.toLocaleDateString('en-IN', { month: 'long', year: 'numeric' })}
+                  </h3>
+                  <div className="flex items-center gap-1">
+                    <button
+                      type="button"
+                      onClick={() => setCalendarMonth(new Date(calendarMonth.getFullYear(), calendarMonth.getMonth() - 1, 1))}
+                      className="btn-outline p-1 text-xs rounded-lg bg-white cursor-pointer"
+                      title="Previous Month"
+                    >
+                      <ChevronLeft size={13} />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setCalendarMonth(new Date(calendarMonth.getFullYear(), calendarMonth.getMonth() + 1, 1))}
+                      className="btn-outline p-1 text-xs rounded-lg bg-white cursor-pointer"
+                      title="Next Month"
+                    >
+                      <ChevronRight size={13} />
+                    </button>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-7 gap-1 text-center">
+                  {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(d => (
+                    <div key={d} className="text-[10px] font-bold text-slate-500 uppercase tracking-wider py-0.5">
+                      {d}
+                    </div>
+                  ))}
+                  {monthGridDays.map(({ date: d, isCurrentMonth, iso }) => {
+                    const isSelected = iso === selectedISO;
+                    const isToday = iso === todayISO();
+                    const apptCount = appointmentsByDate[iso]?.length || 0;
+
+                    return (
+                      <button
+                        key={iso}
+                        type="button"
+                        onClick={() => {
+                          handleSelectDate(d);
+                          setShowMonthCalendar(false);
+                        }}
+                        className={`h-9 rounded-lg flex flex-col items-center justify-center text-xs font-semibold transition cursor-pointer relative ${
+                          isSelected
+                            ? 'bg-teal-700 text-white font-bold shadow-xs'
+                            : isToday
+                            ? 'bg-teal-100/70 text-teal-900 font-bold border border-teal-300'
+                            : isCurrentMonth
+                            ? 'bg-white text-slate-800 hover:bg-slate-100 border border-slate-200/60'
+                            : 'text-slate-400 opacity-40 hover:opacity-100'
+                        }`}
+                      >
+                        <span>{d.getDate()}</span>
+                        {apptCount > 0 && (
+                          <span
+                            className={`h-1 w-1 rounded-full ${isSelected ? 'bg-white' : 'bg-teal-600'}`}
+                          />
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Appointment list for selected day */}
@@ -713,7 +1223,7 @@ export function AppointmentsScreen() {
                 <button
                   type="button"
                   onClick={() => setDayStatusFilter('all')}
-                  className={`pb-1.5 font-bold whitespace-nowrap transition ${
+                  className={`pb-1.5 font-bold whitespace-nowrap transition cursor-pointer ${
                     dayStatusFilter === 'all'
                       ? 'border-b-2 border-slate-900 text-slate-900'
                       : 'text-slate-500 hover:text-slate-800'
@@ -724,7 +1234,7 @@ export function AppointmentsScreen() {
                 <button
                   type="button"
                   onClick={() => setDayStatusFilter('waiting')}
-                  className={`pb-1.5 font-bold whitespace-nowrap transition flex items-center gap-1.5 ${
+                  className={`pb-1.5 font-bold whitespace-nowrap transition flex items-center gap-1.5 cursor-pointer ${
                     dayStatusFilter === 'waiting'
                       ? 'border-b-2 border-amber-600 text-amber-800'
                       : 'text-slate-500 hover:text-slate-800'
@@ -736,7 +1246,7 @@ export function AppointmentsScreen() {
                 <button
                   type="button"
                   onClick={() => setDayStatusFilter('done')}
-                  className={`pb-1.5 font-bold whitespace-nowrap transition flex items-center gap-1.5 ${
+                  className={`pb-1.5 font-bold whitespace-nowrap transition flex items-center gap-1.5 cursor-pointer ${
                     dayStatusFilter === 'done'
                       ? 'border-b-2 border-emerald-600 text-emerald-800'
                       : 'text-slate-500 hover:text-slate-800'
@@ -748,7 +1258,7 @@ export function AppointmentsScreen() {
                 <button
                   type="button"
                   onClick={() => setDayStatusFilter('cancelled')}
-                  className={`pb-1.5 font-bold whitespace-nowrap transition flex items-center gap-1.5 ${
+                  className={`pb-1.5 font-bold whitespace-nowrap transition flex items-center gap-1.5 cursor-pointer ${
                     dayStatusFilter === 'cancelled'
                       ? 'border-b-2 border-slate-600 text-slate-800'
                       : 'text-slate-500 hover:text-slate-800'
@@ -783,9 +1293,10 @@ export function AppointmentsScreen() {
                   <div className="hidden md:grid grid-cols-12 gap-3 px-4 py-3 bg-slate-100/90 text-[11px] font-bold text-slate-600 uppercase tracking-wider border-b border-slate-200">
                     <div className="col-span-1">Token</div>
                     <div className="col-span-2">Time & Type</div>
-                    <div className="col-span-3">Patient</div>
+                    <div className="col-span-2">Patient</div>
                     <div className="col-span-2">Doctor</div>
                     <div className="col-span-2">Status</div>
+                    <div className="col-span-1">Fee</div>
                     <div className="col-span-2 text-right">Actions</div>
                   </div>
 
@@ -799,6 +1310,7 @@ export function AppointmentsScreen() {
                       const isCancelled = upcoming.status === 'cancelled';
                       const isCompleting = completingId === upcomingId;
                       const isExpanded = expandedPatientKey === group.key;
+                      const paymentStatus = getApptPaymentStatus(upcoming);
 
                       const docDisplay = (upcoming.doctor as any)?.name ?? (upcoming as any).doctor_name ?? doctors.find(d => d.id === upcoming.doctor_id)?.name ?? 'Doctor';
 
@@ -832,7 +1344,7 @@ export function AppointmentsScreen() {
                             </div>
 
                             {/* Patient & Booking Summary */}
-                            <div className="col-span-5 md:col-span-3 min-w-0">
+                            <div className="col-span-5 md:col-span-2 min-w-0">
                               <div className="flex items-center gap-1.5 flex-wrap">
                                 <span className="text-sm font-bold text-slate-900 hover:text-teal-700 transition truncate">
                                   {group.patientName}
@@ -856,7 +1368,7 @@ export function AppointmentsScreen() {
                             </div>
 
                             {/* Status */}
-                            <div className="col-span-6 md:col-span-2">
+                            <div className="col-span-4 md:col-span-2">
                               {isWaiting ? (
                                 <span className="text-xs font-bold text-amber-800 flex items-center gap-1.5">
                                   <span className="relative flex h-2 w-2">
@@ -878,9 +1390,23 @@ export function AppointmentsScreen() {
                               )}
                             </div>
 
+                            {/* Fee Status (just in front of actions) */}
+                            <div className="col-span-3 md:col-span-1 flex items-center" onClick={(e) => e.stopPropagation()}>
+                              <button
+                                type="button"
+                                onClick={(e) => togglePaymentStatus(upcoming, e)}
+                                className={`text-xs font-bold transition hover:underline cursor-pointer ${
+                                  paymentStatus === 'paid' ? 'text-emerald-700' : 'text-amber-700'
+                                }`}
+                                title={`Fee: ${paymentStatus === 'paid' ? 'Paid' : 'Pending'} (Click to toggle)`}
+                              >
+                                <span className="capitalize">{paymentStatus}</span>
+                              </button>
+                            </div>
+
                             {/* Actions: Info button + Complete button */}
                             <div
-                              className="col-span-6 md:col-span-2 flex items-center justify-end gap-2"
+                              className="col-span-5 md:col-span-2 flex items-center justify-end gap-2"
                               onClick={(e) => e.stopPropagation()}
                             >
                               {isWaiting && (
@@ -937,8 +1463,20 @@ export function AppointmentsScreen() {
                                 </div>
 
                                 <div>
-                                  <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block">Upcoming Visit Reason</span>
-                                  <p className="font-bold text-slate-900 text-xs mt-1">{upcoming.reason || 'General consultation'}</p>
+                                  <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block">Upcoming Visit & Fee</span>
+                                  <div className="flex items-center gap-2 mt-1">
+                                    <button
+                                      type="button"
+                                      onClick={() => togglePaymentStatus(upcoming)}
+                                      className={`text-xs font-bold transition hover:underline cursor-pointer ${
+                                        paymentStatus === 'paid' ? 'text-emerald-700' : 'text-amber-700'
+                                      }`}
+                                      title="Click to toggle fee status"
+                                    >
+                                      Fee: <span className="capitalize">{paymentStatus}</span>
+                                    </button>
+                                  </div>
+                                  <p className="font-semibold text-slate-900 text-xs mt-1 truncate">{upcoming.reason || 'General consultation'}</p>
                                   {isCancelled && ((upcoming as any).cancellation_reason || (upcoming as any).cancelled_reason) && (
                                     <p className="text-rose-700 text-xs font-medium mt-0.5">Cancellation reason: {(upcoming as any).cancellation_reason || (upcoming as any).cancelled_reason}</p>
                                   )}
@@ -980,7 +1518,17 @@ export function AppointmentsScreen() {
                                               <span className="text-xs text-slate-500">• Slot {idx + 1} of {group.allAppts.length}</span>
                                             </div>
 
-                                            <div>
+                                            <div className="flex items-center gap-2 flex-wrap">
+                                              <button
+                                                type="button"
+                                                onClick={() => togglePaymentStatus(appt)}
+                                                className={`text-[11px] font-bold transition hover:underline cursor-pointer ${
+                                                  getApptPaymentStatus(appt) === 'paid' ? 'text-emerald-700' : 'text-amber-700'
+                                                }`}
+                                                title={`Fee: ${getApptPaymentStatus(appt) === 'paid' ? 'Paid' : 'Pending'} (Click to toggle)`}
+                                              >
+                                                Fee: <span className="capitalize">{getApptPaymentStatus(appt)}</span>
+                                              </button>
                                               {isApptDone ? (
                                                 <span className="text-xs font-bold text-emerald-800 flex items-center gap-1">
                                                   <CheckCircle2 size={13} className="text-emerald-600" /> Completed
@@ -1052,10 +1600,14 @@ export function AppointmentsScreen() {
                               <div className="pt-3 flex items-center gap-2 flex-wrap border-t border-slate-200">
                                 <button
                                   type="button"
-                                  onClick={() => setSelectedPatientForModal(group.patient || { patient_id: group.patientId, name: group.patientName, phone: group.patientPhone })}
-                                  className="btn-outline text-xs py-1.5 px-3 flex items-center gap-1.5 font-semibold"
+                                  onClick={() => setPrescriptionData({
+                                    appointment: upcoming,
+                                    patient: group.patient || { patient_id: group.patientId, name: group.patientName, phone: group.patientPhone }
+                                  })}
+                                  className="btn-outline text-xs py-1.5 px-3 flex items-center gap-1.5 font-semibold text-teal-700 hover:text-teal-800"
+                                  title="Write prescription for this patient"
                                 >
-                                  <FolderHeart size={13} className="text-teal-700" /> Medical Records
+                                  <Plus size={13} className="text-teal-700" /> Prescription
                                 </button>
 
                                 <button
@@ -1114,9 +1666,10 @@ export function AppointmentsScreen() {
                   <div className="hidden md:grid grid-cols-12 gap-3 px-4 py-3 bg-slate-100/90 text-[11px] font-bold text-slate-600 uppercase tracking-wider border-b border-slate-200">
                     <div className="col-span-1">Token</div>
                     <div className="col-span-2">Time & Type</div>
-                    <div className="col-span-3">Patient</div>
+                    <div className="col-span-2">Patient</div>
                     <div className="col-span-2">Doctor</div>
                     <div className="col-span-2">Status</div>
+                    <div className="col-span-1">Fee</div>
                     <div className="col-span-2 text-right">Actions</div>
                   </div>
 
@@ -1136,6 +1689,7 @@ export function AppointmentsScreen() {
                       const isCancelled = a.status === 'cancelled';
                       const isCompleting = completingId === apptId;
                       const isExpanded = expandedApptId === apptId;
+                      const feeStatus = getApptPaymentStatus(a);
 
                       const docDisplay = (a.doctor as any)?.name ?? (a as any).doctor_name ?? doctors.find(d => d.id === a.doctor_id)?.name ?? 'Doctor';
 
@@ -1168,7 +1722,7 @@ export function AppointmentsScreen() {
                             </div>
 
                             {/* Patient */}
-                            <div className="col-span-5 md:col-span-3 min-w-0">
+                            <div className="col-span-5 md:col-span-2 min-w-0">
                               <span className="text-sm font-bold text-slate-900 hover:text-teal-700 transition truncate block">
                                 {patientName}
                               </span>
@@ -1185,7 +1739,7 @@ export function AppointmentsScreen() {
                             </div>
 
                             {/* Status */}
-                            <div className="col-span-6 md:col-span-2">
+                            <div className="col-span-4 md:col-span-2">
                               {isWaiting ? (
                                 <span className="text-xs font-bold text-amber-800 flex items-center gap-1.5">
                                   <span className="relative flex h-2 w-2">
@@ -1207,9 +1761,23 @@ export function AppointmentsScreen() {
                               )}
                             </div>
 
+                            {/* Fee Status (just in front of actions) */}
+                            <div className="col-span-3 md:col-span-1 flex items-center" onClick={(e) => e.stopPropagation()}>
+                              <button
+                                type="button"
+                                onClick={(e) => togglePaymentStatus(a, e)}
+                                className={`text-xs font-bold transition hover:underline cursor-pointer ${
+                                  feeStatus === 'paid' ? 'text-emerald-700' : 'text-amber-700'
+                                }`}
+                                title={`Fee: ${feeStatus === 'paid' ? 'Paid' : 'Pending'} (Click to toggle)`}
+                              >
+                                <span className="capitalize">{feeStatus}</span>
+                              </button>
+                            </div>
+
                             {/* Actions */}
                             <div
-                              className="col-span-6 md:col-span-2 flex items-center justify-end gap-2"
+                              className="col-span-5 md:col-span-2 flex items-center justify-end gap-2"
                               onClick={(e) => e.stopPropagation()}
                             >
                               {isWaiting && (
@@ -1264,8 +1832,20 @@ export function AppointmentsScreen() {
                                 </div>
 
                                 <div>
-                                  <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block">Visit Reason</span>
-                                  <p className="font-bold text-slate-900 text-xs mt-1">{a.reason || 'General consultation'}</p>
+                                  <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block">Visit Reason & Fee</span>
+                                  <div className="flex items-center gap-2 mt-1">
+                                    <button
+                                      type="button"
+                                      onClick={() => togglePaymentStatus(a)}
+                                      className={`text-xs font-bold transition hover:underline cursor-pointer ${
+                                        feeStatus === 'paid' ? 'text-emerald-700' : 'text-amber-700'
+                                      }`}
+                                      title="Click to toggle fee status"
+                                    >
+                                      Fee: <span className="capitalize">{feeStatus}</span>
+                                    </button>
+                                  </div>
+                                  <p className="font-semibold text-slate-900 text-xs mt-1 truncate">{a.reason || 'General consultation'}</p>
                                   {isCancelled && ((a as any).cancellation_reason || (a as any).cancelled_reason) && (
                                     <p className="text-rose-700 text-xs font-medium mt-0.5">Cancellation reason: {(a as any).cancellation_reason || (a as any).cancelled_reason}</p>
                                   )}
@@ -1275,10 +1855,14 @@ export function AppointmentsScreen() {
                               <div className="pt-3 flex items-center gap-2 flex-wrap border-t border-slate-200">
                                 <button
                                   type="button"
-                                  onClick={() => setSelectedPatientForModal(patient || { patient_id: a.patient_id, name: patientName, phone: patientPhone })}
-                                  className="btn-outline text-xs py-1.5 px-3 flex items-center gap-1.5 font-semibold"
+                                  onClick={() => setPrescriptionData({
+                                    appointment: a,
+                                    patient: patient || { patient_id: a.patient_id, name: patientName, phone: patientPhone }
+                                  })}
+                                  className="btn-outline text-xs py-1.5 px-3 flex items-center gap-1.5 font-semibold text-teal-700 hover:text-teal-800"
+                                  title="Write prescription for this patient"
                                 >
-                                  <FolderHeart size={13} className="text-teal-700" /> Medical Records
+                                  <Plus size={13} className="text-teal-700" /> Prescription
                                 </button>
 
                                 <button
@@ -1406,6 +1990,21 @@ export function AppointmentsScreen() {
                           </button>
                           {a.display_token && <span className="badge bg-primary/10 text-primary font-bold text-[10px]">{formatDisplayToken(a.display_token, a.token_number)}</span>}
                           <span className={`badge ${statusBadgeClass(a.status)} text-[10px] capitalize`}>{a.status}</span>
+                          {(() => {
+                            const hFee = getApptPaymentStatus(a);
+                            return (
+                              <button
+                                type="button"
+                                onClick={() => togglePaymentStatus(a)}
+                                className={`text-[11px] font-bold transition hover:underline cursor-pointer ${
+                                  hFee === 'paid' ? 'text-emerald-700' : 'text-amber-700'
+                                }`}
+                                title={`Fee: ${hFee === 'paid' ? 'Paid' : 'Pending'} (Click to toggle)`}
+                              >
+                                Fee: <span className="capitalize">{hFee}</span>
+                              </button>
+                            );
+                          })()}
                         </div>
                         <p className="text-xs text-ink-muted truncate mt-0.5">
                           <span className="font-medium text-ink">{(a.doctor as any)?.name ?? doctors.find(d => d.id === a.doctor_id)?.name ?? 'Doctor'}</span>
@@ -1423,11 +2022,14 @@ export function AppointmentsScreen() {
                       <div className="flex items-center gap-1.5">
                         <button
                           type="button"
-                          onClick={() => setSelectedPatientForModal(patient || { patient_id: a.patient_id, name: (a as any).patient_name, phone: (a as any).patient_phone })}
-                          className="btn-ghost text-xs py-1 px-2 text-slate-700 hover:text-primary flex items-center gap-1"
-                          title="View complete patient medical records"
+                          onClick={() => setPrescriptionData({
+                            appointment: a,
+                            patient: patient || { patient_id: a.patient_id, name: (a as any).patient_name, phone: (a as any).patient_phone }
+                          })}
+                          className="btn-ghost text-xs py-1 px-2 text-teal-700 hover:text-teal-800 flex items-center gap-1 font-semibold"
+                          title="Add prescription directly for this patient"
                         >
-                          <FolderHeart size={12} className="text-primary" /> Medical Records
+                          <Plus size={12} className="text-teal-700" /> Prescription
                         </button>
 
                         {a.status !== 'done' && a.status !== 'cancelled' ? (
@@ -1508,6 +2110,25 @@ export function AppointmentsScreen() {
         patient={selectedPatientForModal}
         onClose={() => setSelectedPatientForModal(null)}
       />
+
+      {prescriptionData && (
+        <WritePrescriptionModal
+          open={Boolean(prescriptionData)}
+          appointment={prescriptionData.appointment}
+          patient={prescriptionData.patient}
+          doctor={
+            prescriptionData.appointment?.doctor ||
+            doctors.find(d => d.id === prescriptionData.appointment?.doctor_id) ||
+            user
+          }
+          clinic={clinic}
+          onClose={() => setPrescriptionData(null)}
+          onSaved={() => {
+            refresh();
+            setPrescriptionData(null);
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -2053,7 +2674,7 @@ function BookingModal({ open, onClose, onSaved, patients, doctors, clinicId, def
   const [saving, setSaving] = useState(false);
 
   const availableDoctors = useMemo(() => {
-    const list = [...doctors];
+    let list = [...doctors];
     if (currentUser?.name) {
       const exists = list.some(d => 
         (d.id && currentUser.id && d.id === currentUser.id) ||
@@ -2360,7 +2981,7 @@ function WalkInModal({ open, onClose, onSaved, patients, clinicId, doctors, curr
   };
 
   const availableDoctors = useMemo(() => {
-    const list = [...doctors];
+    let list = [...doctors];
     if (currentUser?.name) {
       const exists = list.some(d => 
         (d.id && currentUser.id && d.id === currentUser.id) ||

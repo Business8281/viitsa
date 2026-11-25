@@ -156,8 +156,8 @@ export const sendVerificationEmail = onCall({
     const buttonText = isClinic ? "Verify My Clinic Account" : "Verify My Email Address";
     const subject = isClinic ? "Verify your Viitsa Clinic Account" : "Verify your Viitsa Healthcare Account";
 
-    const headerGradient = isClinic ? "linear-gradient(135deg, #063229 0%, #0F6E56 50%, #128064 100%)" : "linear-gradient(135deg, #0c4a6e 0%, #0284c7 50%, #0369a1 100%)";
-    const buttonBg = isClinic ? "#0F6E56" : "#0284c7";
+    const headerGradient = "linear-gradient(135deg, #047857 0%, #059669 50%, #10b981 100%)";
+    const buttonBg = "#059669";
     const currentYear = new Date().getFullYear();
 
     const htmlContent = `
@@ -177,7 +177,7 @@ export const sendVerificationEmail = onCall({
           <tr>
             <td style="background: ${headerGradient}; padding: 30px 24px; text-align: center;">
               <div style="font-size: 22px; font-weight: 800; letter-spacing: 2.5px; color: #ffffff; text-transform: uppercase; margin: 0 0 6px 0;">VIITSA</div>
-              <div style="font-size: 11px; font-weight: 600; color: #e0f2fe; letter-spacing: 1.2px; text-transform: uppercase;">${portalTitle}</div>
+              <div style="font-size: 11px; font-weight: 600; color: #ecfdf5; letter-spacing: 1.2px; text-transform: uppercase;">${portalTitle}</div>
             </td>
           </tr>
 
@@ -186,7 +186,7 @@ export const sendVerificationEmail = onCall({
             <td style="padding: 36px 32px 28px 32px;">
               <div style="text-align: center; margin-bottom: 22px;">
                 <div style="display: inline-flex; align-items: center; justify-content: center; width: 60px; height: 60px; border-radius: 50%; background-color: #ecfdf5; border: 1px solid #a7f3d0; margin-bottom: 12px;">
-                  <span style="font-size: 26px; line-height: 1; color: #0F6E56;">✓</span>
+                  <span style="font-size: 26px; line-height: 1; color: #059669;">✓</span>
                 </div>
                 <h2 style="font-size: 20px; font-weight: 800; color: #0f172a; margin: 0 0 6px 0;">Verify Your Email Address</h2>
                 <p style="font-size: 14px; color: #64748b; margin: 0;">Account Activation</p>
@@ -198,7 +198,7 @@ export const sendVerificationEmail = onCall({
               </p>
 
               <div style="text-align: center; margin: 30px 0;">
-                <a href="${link}" target="_blank" style="display: inline-block; background-color: ${buttonBg}; color: #ffffff; padding: 14px 34px; font-size: 14px; font-weight: 700; text-decoration: none; border-radius: 10px; box-shadow: 0 4px 12px rgba(15, 110, 86, 0.25);">
+                <a href="${link}" target="_blank" style="display: inline-block; background-color: ${buttonBg}; color: #ffffff; padding: 14px 34px; font-size: 14px; font-weight: 700; text-decoration: none; border-radius: 10px; box-shadow: 0 4px 12px rgba(5, 150, 105, 0.25);">
                   ${buttonText}
                 </a>
               </div>
@@ -219,7 +219,7 @@ export const sendVerificationEmail = onCall({
             <td style="padding: 24px 28px 28px 28px; background-color: #f8fafc; border-top: 1px solid #e2e8f0; text-align: center;">
               <p style="margin: 0 0 8px 0; font-size: 12px; color: #64748b; line-height: 1.5;">
                 This is an official automated notification from <strong>Viitsa Healthcare</strong>.<br/>
-                For support, reach out to us at <a href="mailto:support@viitsa.com" style="color: #0F6E56; font-weight: 600; text-decoration: none;">support@viitsa.com</a>
+                For support, reach out to us at <a href="mailto:support@viitsa.com" style="color: #059669; font-weight: 600; text-decoration: none;">support@viitsa.com</a>
               </p>
               <p style="margin: 10px 0 0 0; font-size: 11px; color: #94a3b8;">
                 © ${currentYear} Viitsa Healthcare Technologies. All rights reserved.
@@ -360,10 +360,8 @@ export const sendPasswordResetEmail = onCall({
     const portalTitle = isAdmin ? "Administrator Portal" : (isClinic ? "Clinic Administration Portal" : "Patient Portal");
     const subject = isAdmin ? "Viitsa Admin — Password Reset Request" : (isClinic ? "Viitsa Clinic — Password Reset Request" : "Viitsa Healthcare — Password Reset Request");
 
-    const headerGradient = isAdmin 
-      ? "linear-gradient(135deg, #1e1b4b 0%, #312e81 50%, #4338ca 100%)" 
-      : (isClinic ? "linear-gradient(135deg, #063229 0%, #0F6E56 50%, #128064 100%)" : "linear-gradient(135deg, #0c4a6e 0%, #0284c7 50%, #0369a1 100%)");
-    const buttonBg = isAdmin ? "#4f46e5" : (isClinic ? "#0F6E56" : "#0284c7");
+    const headerGradient = "linear-gradient(135deg, #047857 0%, #059669 50%, #10b981 100%)";
+    const buttonBg = "#059669";
     const currentYear = new Date().getFullYear();
 
     const htmlContent = `
@@ -383,7 +381,7 @@ export const sendPasswordResetEmail = onCall({
           <tr>
             <td style="background: ${headerGradient}; padding: 30px 24px; text-align: center;">
               <div style="font-size: 22px; font-weight: 800; letter-spacing: 2.5px; color: #ffffff; text-transform: uppercase; margin: 0 0 6px 0;">VIITSA</div>
-              <div style="font-size: 11px; font-weight: 600; color: #e0f2fe; letter-spacing: 1.2px; text-transform: uppercase;">${portalTitle} - Security</div>
+              <div style="font-size: 11px; font-weight: 600; color: #ecfdf5; letter-spacing: 1.2px; text-transform: uppercase;">${portalTitle} - Security</div>
             </td>
           </tr>
 
@@ -391,7 +389,7 @@ export const sendPasswordResetEmail = onCall({
           <tr>
             <td style="padding: 36px 32px 28px 32px;">
               <div style="text-align: center; margin-bottom: 22px;">
-                <div style="display: inline-flex; align-items: center; justify-content: center; width: 60px; height: 60px; border-radius: 50%; background-color: #eff6ff; border: 1px solid #bfdbfe; margin-bottom: 12px;">
+                <div style="display: inline-flex; align-items: center; justify-content: center; width: 60px; height: 60px; border-radius: 50%; background-color: #ecfdf5; border: 1px solid #a7f3d0; margin-bottom: 12px;">
                   <span style="font-size: 26px; line-height: 1;">🔐</span>
                 </div>
                 <h2 style="font-size: 20px; font-weight: 800; color: #0f172a; margin: 0 0 6px 0;">Password Reset Request</h2>
@@ -404,7 +402,7 @@ export const sendPasswordResetEmail = onCall({
               </p>
 
               <div style="text-align: center; margin: 30px 0;">
-                <a href="${resetLink}" target="_blank" style="display: inline-block; background-color: ${buttonBg}; color: #ffffff; padding: 14px 34px; font-size: 14px; font-weight: 700; text-decoration: none; border-radius: 10px; box-shadow: 0 4px 12px rgba(15, 110, 86, 0.25);">
+                <a href="${resetLink}" target="_blank" style="display: inline-block; background-color: ${buttonBg}; color: #ffffff; padding: 14px 34px; font-size: 14px; font-weight: 700; text-decoration: none; border-radius: 10px; box-shadow: 0 4px 12px rgba(5, 150, 105, 0.25);">
                   Reset My Password
                 </a>
               </div>
@@ -425,7 +423,7 @@ export const sendPasswordResetEmail = onCall({
             <td style="padding: 24px 28px 28px 28px; background-color: #f8fafc; border-top: 1px solid #e2e8f0; text-align: center;">
               <p style="margin: 0 0 8px 0; font-size: 12px; color: #64748b; line-height: 1.5;">
                 This is an official automated security notification from <strong>Viitsa Healthcare</strong>.<br/>
-                For support, reach out to us at <a href="mailto:support@viitsa.com" style="color: #0F6E56; font-weight: 600; text-decoration: none;">support@viitsa.com</a>
+                For support, reach out to us at <a href="mailto:support@viitsa.com" style="color: #059669; font-weight: 600; text-decoration: none;">support@viitsa.com</a>
               </p>
               <p style="margin: 10px 0 0 0; font-size: 11px; color: #94a3b8;">
                 © ${currentYear} Viitsa Healthcare Technologies. All rights reserved.

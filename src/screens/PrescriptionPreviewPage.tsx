@@ -104,7 +104,7 @@ export function PrescriptionPreviewPage() {
   if (loading) {
     return (
       <div className="min-h-screen bg-slate-100 flex flex-col items-center justify-center p-6 text-slate-600">
-        <Loader2 className="w-8 h-8 animate-spin text-[#0F6E56] mb-3" />
+        <Loader2 className="w-8 h-8 animate-spin text-[#059669] mb-3" />
         <p className="text-sm font-semibold">Loading Doctor Prescription...</p>
       </div>
     );

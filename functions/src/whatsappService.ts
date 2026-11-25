@@ -1074,10 +1074,52 @@ export async function sendPatientInvoice(data: PatientInvoiceData): Promise<What
     }
   }
 
+  // Resolve valid signed/public storage URL for document attachment
+  let docUrl = finalPdfUrl;
+  if (!docUrl || docUrl.includes('api/invoice') || docUrl.includes('dummy') || docUrl.includes('example.com')) {
+    if (data.invoiceNumber) {
+      try {
+        const invDoc = await admin.firestore().collection("invoices").doc(data.invoiceNumber).get();
+        if (invDoc.exists && invDoc.data()?.pdf_url) {
+          docUrl = invDoc.data()?.pdf_url;
+        }
+      } catch (_e) {
+        // ignore
+      }
+    }
+  }
+
+  if (!docUrl || docUrl.includes('api/invoice')) {
+    const bucketName = process.env.STORAGE_BUCKET_NAME || process.env.FIREBASE_STORAGE_BUCKET || "viitsadb.firebasestorage.app";
+    try {
+      const bucket = admin.storage().bucket(bucketName);
+      const cleanInv = String(data.invoiceNumber || 'bill').replace(/[^\w-]/g, '_');
+      const fallbackFile = bucket.file(`invoices/${data.clinicId || 'general'}/Invoice_${cleanInv}.pdf`);
+      const [exists] = await fallbackFile.exists().catch(() => [false]);
+      if (exists) {
+        const [signed] = await fallbackFile.getSignedUrl({
+          action: 'read',
+          expires: Date.now() + 7 * 24 * 60 * 60 * 1000,
+        });
+        docUrl = signed;
+      }
+    } catch (_storageErr) {
+      console.warn('[sendPatientInvoice] Notice checking storage fallback:', _storageErr);
+    }
+  }
+
+  // Graceful fallback: If no authentic storage URL can be generated, fail cleanly to prevent Meta Cloud API 404 rejection
+  if (!docUrl || docUrl.includes('api/invoice')) {
+    console.warn(`[sendPatientInvoice] Skipped dispatch to ${data.to}: No valid storage URL for invoice PDF attachment.`);
+    return {
+      success: false,
+      error: 'Cannot dispatch WhatsApp invoice: No valid signed storage URL available for PDF attachment.',
+    };
+  }
+
   const components: any[] = [];
 
   // Header document attachment (PDF) - Meta requires DOCUMENT header for viitsa_patient_invoice
-  const docUrl = finalPdfUrl || `https://viitsa.com/api/invoice/${data.invoiceNumber || 'bill'}.pdf`;
   components.push({
     type: 'header',
     parameters: [
@@ -1631,6 +1673,13 @@ export async function sendClinicSubInvoice(data: {
   pdfUrl?: string;
   supportPhone?: string;
   clinicId?: string;
+  customerEmail?: string;
+  customerPhone?: string;
+  clinicAddress?: string;
+  cycle?: string;
+  tier?: string;
+  paymentMethod?: string;
+  isTrial?: boolean;
 }): Promise<WhatsAppSendResult> {
   const cleanPhone = normalizePhoneNumber(data.to);
   const cleanInv = String(data.invoiceNo || 'INV').replace(/[^\w-]/g, '_');
@@ -1688,21 +1737,68 @@ export async function sendClinicSubInvoice(data: {
       pdfLink = await ensureSubscriptionInvoicePdfUrl({
         invoiceNumber: data.invoiceNo || 'INV-001',
         invoiceDate: data.invoiceDate || new Date().toLocaleDateString('en-IN'),
-        status: 'PAID',
+        status: data.isTrial ? 'TRIAL ACTIVE' : 'PAID',
         clinicName: data.clinicName || 'Clinic Partner',
-        customerEmail: '',
+        customerEmail: data.customerEmail || '',
+        customerPhone: data.customerPhone || cleanPhone,
+        clinicAddress: data.clinicAddress || '',
         planName: data.planName || 'Clinic Plan',
-        tier: (data.planName || '').toLowerCase().includes('solo') ? 'solo' : (data.planName || '').toLowerCase().includes('multi') ? 'multispecialty' : (data.planName || '').toLowerCase().includes('test') ? 'test' : 'clinic',
-        cycle: 'monthly',
+        tier: data.tier || ((data.planName || '').toLowerCase().includes('solo') ? 'solo' : (data.planName || '').toLowerCase().includes('multi') ? 'multispecialty' : (data.planName || '').toLowerCase().includes('test') ? 'test' : 'clinic'),
+        cycle: data.cycle || 'monthly',
         amount: numAmt,
+        paymentId: data.invoiceNo,
+        paymentMethod: data.paymentMethod || 'Online (UPI / Card)',
+        isTrial: data.isTrial,
       }, data.clinicId);
     } catch (pdfErr) {
       console.warn('[sendClinicSubInvoice] Notice generating PDF attachment:', pdfErr);
     }
   }
 
+  // Resolve valid signed/public storage URL for subscription invoice document attachment
+  let finalPdfUrl = pdfLink;
+  if (!finalPdfUrl || finalPdfUrl.includes('api/invoice') || finalPdfUrl.includes('dummy') || finalPdfUrl.includes('example.com')) {
+    if (data.invoiceNo) {
+      try {
+        const invDoc = await admin.firestore().collection("invoices").doc(data.invoiceNo).get();
+        if (invDoc.exists && invDoc.data()?.pdf_url) {
+          finalPdfUrl = invDoc.data()?.pdf_url;
+        }
+      } catch (_e) {
+        // ignore
+      }
+    }
+  }
+
+  if (!finalPdfUrl || finalPdfUrl.includes('api/invoice')) {
+    const bucketName = process.env.STORAGE_BUCKET_NAME || process.env.FIREBASE_STORAGE_BUCKET || "viitsadb.firebasestorage.app";
+    try {
+      const bucket = admin.storage().bucket(bucketName);
+      const cleanInv = String(data.invoiceNo || 'INV').replace(/[^\w-]/g, '_');
+      const fallbackFile = bucket.file(`invoices/${data.clinicId || 'subscriptions'}/Sub_Invoice_${cleanInv}.pdf`);
+      const [exists] = await fallbackFile.exists().catch(() => [false]);
+      if (exists) {
+        const [signed] = await fallbackFile.getSignedUrl({
+          action: 'read',
+          expires: Date.now() + 7 * 24 * 60 * 60 * 1000,
+        });
+        finalPdfUrl = signed;
+      }
+    } catch (_storageErr) {
+      console.warn('[sendClinicSubInvoice] Notice checking storage fallback:', _storageErr);
+    }
+  }
+
+  // Graceful fallback: Never send dead /api/invoice URL that causes Meta Cloud API 404 rejection
+  if (!finalPdfUrl || finalPdfUrl.includes('api/invoice')) {
+    console.warn(`[sendClinicSubInvoice] Skipped dispatch to ${data.to}: No valid signed storage URL for subscription invoice PDF.`);
+    return {
+      success: false,
+      error: 'Cannot dispatch WhatsApp invoice: No valid signed storage URL available for PDF attachment.',
+    };
+  }
+
   const components: any[] = [];
-  const finalPdfUrl = pdfLink || `https://viitsa.com/api/invoice/${data.invoiceNo || 'INV'}.pdf`;
   const cleanInvFile = String(data.invoiceNo || 'INV').replace(/[^\w-]/g, '_');
   components.push({
     type: 'header',

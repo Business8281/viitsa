@@ -357,6 +357,13 @@ export async function sendWhatsAppClinicSubInvoice(params: {
   invoiceDate: string;
   pdfUrl?: string;
   supportPhone?: string;
+  customerEmail?: string;
+  customerPhone?: string;
+  clinicAddress?: string;
+  cycle?: string;
+  tier?: string;
+  paymentMethod?: string;
+  isTrial?: boolean;
 }): Promise<WhatsAppResponse> {
   return sendWhatsAppNotificationViaAPI({
     action: 'clinic_sub_invoice',
